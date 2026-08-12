@@ -1383,7 +1383,7 @@ setTimeout(boot,0);
 const LOW_POWER=(function(){try{return matchMedia('(pointer:coarse)').matches||innerWidth<760}catch(e){return innerWidth<760}})();
 const MIN_R=12,MAX_R=92,FIELD_SCALE=.35,FIELD_INTERVAL=1000/24,HIT_BATCH_MS=10,ORB_REFRACTORY_MS=20;
 const MOTION_HZ=30,MOTION_SAMPLE_MS=1000/MOTION_HZ,MOTION_SEAM_RATIO=.12;
-const SIM_MIN_FRAME_MS=12,STAT_INTERVAL_MS=250,MAX_SYMPATHETIC_TARGETS=3;
+const STAT_INTERVAL_MS=250,MAX_SYMPATHETIC_TARGETS=3;   // no minimum-frame gate: render every rAF tick
 let W=1,H=1,DPR=1,FW=1,FH=1,last=performance.now(),lastSimFrame=0,lastField=0,lastStat=0,fieldDirty=true,paletteTarget='orb',selected=null,background='#221202';
 let dragValue=.06,windValue=.36,fieldAtmo=3.4,fieldStrength=.84,fieldHaze=.25,fieldMix='screen',fieldBlurPx=10.5;
 const orbs=[],pendingHits=new Map(),pointer={id:null,down:false,orb:null,spawn:null,gx:0,gy:0};
@@ -1490,7 +1490,7 @@ function randomColour(){return PALETTE[Math.floor(Math.random()*PALETTE.length)]
 
 const names=['C','C♯','D','E♭','E','F','F♯','G','A♭','A','B♭','B'],noteName=m=>names[m%12]+(Math.floor(m/12)-1);
 for(let m=24;m<=84;m++){const o=document.createElement('option');o.value=m;o.textContent=noteName(m);$('#note').append(o)}
-function selectOrb(o){selected=o;if(o){$('#selection').textContent=noteName(o.note)+' · '+modeLabel(o);$('#note').value=o.note;$('#orbColor').value=o.color;$('#orbHex').textContent=o.color}else{$('#selection').textContent='E B F♯ G D A';$('#orbHex').textContent='—'}}
+function selectOrb(o){selected=o;if(!devVisible())return;if(o){$('#selection').textContent=noteName(o.note)+' · '+modeLabel(o);$('#note').value=o.note;$('#orbColor').value=o.color;$('#orbHex').textContent=o.color}else{$('#selection').textContent='E B F♯ G D A';$('#orbHex').textContent='—'}}
 $('#note').addEventListener('change',()=>{if(!selected)return;selected.note=+$('#note').value;selected._hzNote=null;$('#selection').textContent=noteName(selected.note)+' · '+modeLabel(selected);queueHit(selected,72,false)});
 
 const controlBindings=[];
@@ -1515,14 +1515,22 @@ $('#revEq').append(sliderControl(R,'outHP','Final high-pass',10,3000,1,' Hz',sen
 $('#revEq').append(sliderControl(R,'outLP','Final low-pass 24 dB',300,20000,1,' Hz',sendParams));
 for(let i=0;i<8;i++){const proxy={get v(){return R.delays[i]},set v(x){R.delays[i]=x}};const c=sliderControl(proxy,'v','Delay '+(i+1),20,350,.1,' ms',sendParams);$('#revDelays').append(c)}
 
+// Diagnostics painters. Per Fable's constraint, an input event may write state
+// and set a dirty flag — never touch the hidden diagnostics DOM. Each painter
+// below keeps its state assignments and skips only its label writes; toggleDev
+// repaints them all on open.
+const devPainters=[];
+const devEl=$('#dev');
+function devVisible(){return !!devEl&&!devEl.hidden}
+function repaintDiagnostics(){for(const f of devPainters){try{f()}catch(err){}}}
+
 function updateSettings(){
   // This builds a multi-KB JSON string and writes four DOM nodes — all of
   // them inside the hidden diagnostics layer. Wheel drags call it per input
   // event (up to 120/s), which was pure garbage-collector pressure during
   // the exact moments that must stay smooth. Skip unless diagnostics are
   // actually visible; toggleDev(true) repaints on open.
-  const dev=$('#dev');
-  if(dev&&dev.hidden)return;
+  if(!devVisible())return;
   $('#settings').value=JSON.stringify({
     optimizations:{
       standalone_file:true,
@@ -1664,7 +1672,10 @@ function buildPreset(){
   };
 }
 function presetText(){return JSON.stringify(buildPreset(),null,2)}
-function refreshPresetBox(){if(document.activeElement!==$('#preset'))$('#preset').value=presetText()}
+function refreshPresetBox(){
+  if(!devVisible())return;   // multi-KB JSON for a hidden textarea
+  if(document.activeElement!==$('#preset'))$('#preset').value=presetText();
+}
 function setPresetStatus(msg,bad=false){const el=$('#presetStatus');el.textContent=msg;el.style.color=bad?'#d98b79':''}
 function setInputValue(id,value){
   const el=$('#'+id);if(!el||value===undefined||value===null)return;
@@ -2316,7 +2327,7 @@ function strikeNow(o,impact,physical=true){
 
 function updateVoiceStat(now){
   if(!ac||now-lastStat<STAT_INTERVAL_MS)return;
-  const dev=$('#dev');if(dev&&dev.hidden)return;   // stats live in diagnostics
+  if(!devVisible())return;   // stats live in diagnostics
   lastStat=now;
   $('#statVoices').textContent=activeVoiceCount();
   $('#statModes').textContent=activeModePartials;
@@ -2655,10 +2666,17 @@ function compositeField(){
     bctx.globalAlpha=1;bctx.globalCompositeOperation='source-over';
   }
 }
-function fieldLook(){const b=+$('#blur').value;fieldAtmo=+$('#atmo').value;fieldStrength=+$('#fieldStrength').value;fieldHaze=+$('#hazeAmt').value;fieldMix=$('#mix').value;
+const elBlur=$('#blur'),elAtmo=$('#atmo'),elFieldStrength=$('#fieldStrength'),elHazeAmt=$('#hazeAmt'),elMix=$('#mix');
+function fieldLook(){const b=+elBlur.value;fieldAtmo=+elAtmo.value;fieldStrength=+elFieldStrength.value;fieldHaze=+elHazeAmt.value;fieldMix=elMix.value;
   // The scratch surfaces are FIELD_SCALE of the screen, so a screen-space radius
   // of b costs only b*FIELD_SCALE here — and the upscale smooths what's left.
-  fieldBlurPx=b*FIELD_SCALE;$('#atmoV').textContent=fieldAtmo.toFixed(1)+'×';$('#blurV').textContent=b+'px';$('#fieldV').textContent=Math.round(fieldStrength*100)+'%';$('#hazeV').textContent=Math.round(fieldHaze*100)+'%';fieldDirty=true}
+  fieldBlurPx=b*FIELD_SCALE;fieldDirty=true;
+  if(devVisible())paintFieldLabels()}
+function paintFieldLabels(){
+  $('#atmoV').textContent=fieldAtmo.toFixed(1)+'×';$('#blurV').textContent=(+elBlur.value)+'px';
+  $('#fieldV').textContent=Math.round(fieldStrength*100)+'%';$('#hazeV').textContent=Math.round(fieldHaze*100)+'%';
+}
+devPainters.push(paintFieldLabels);
 ['atmo','blur','fieldStrength','hazeAmt','mix'].forEach(id=>{$('#'+id).addEventListener('input',fieldLook);$('#'+id).addEventListener('change',fieldLook)});fieldLook();stage.style.background=background;
 
 // PHYSICS
@@ -2825,7 +2843,7 @@ function draw(){
   };
   orbs.forEach(d);if(pointer.spawn)d(pointer.spawn);
 }
-body.addEventListener('pointerdown',e=>{e.preventDefault();const p=pt(e);pointer.id=e.pointerId;pointer.down=true;try{if(body.setPointerCapture)body.setPointerCapture(e.pointerId)}catch(err){}const o=hit(p.x,p.y);if(o){selectOrb(o);pointer.orb=o;pointer.spawn=null;pointer.gx=p.x-o.x;pointer.gy=p.y-o.y;o.held=true;o.tx=o.x;o.ty=o.y;body.style.cursor='grabbing';beginHold(o,p)}else{selectOrb(null);pointer.spawn=makeOrb(p.x,p.y,MIN_R);pointer.orb=null;$('#note').value=pointer.spawn.note;$('#selection').textContent=noteName(pointer.spawn.note);fieldDirty=true}});
+body.addEventListener('pointerdown',e=>{e.preventDefault();const p=pt(e);pointer.id=e.pointerId;pointer.down=true;try{if(body.setPointerCapture)body.setPointerCapture(e.pointerId)}catch(err){}const o=hit(p.x,p.y);if(o){selectOrb(o);pointer.orb=o;pointer.spawn=null;pointer.gx=p.x-o.x;pointer.gy=p.y-o.y;o.held=true;o.tx=o.x;o.ty=o.y;body.style.cursor='grabbing';beginHold(o,p)}else{selectOrb(null);pointer.spawn=makeOrb(p.x,p.y,MIN_R);pointer.orb=null;if(devVisible()){$('#note').value=pointer.spawn.note;$('#selection').textContent=noteName(pointer.spawn.note)}fieldDirty=true}});
 body.addEventListener('pointermove',e=>{if(!pointer.down||e.pointerId!==pointer.id)return;const p=pt(e);if(holdFrom&&Math.hypot(p.x-holdFrom.x,p.y-holdFrom.y)>HOLD_SLOP)cancelHold();if(pointer.orb){pointer.orb.tx=p.x-pointer.gx;pointer.orb.ty=p.y-pointer.gy}else if(pointer.spawn){setOrbRadius(pointer.spawn,clamp(Math.hypot(p.x-pointer.spawn.x,p.y-pointer.spawn.y),MIN_R,MAX_R));fieldDirty=true}});
 function end(e){cancelHold();if(!pointer.down||e.pointerId!==pointer.id)return;if(pointer.orb)pointer.orb.held=false;else if(pointer.spawn){admitOrb(pointer.spawn);selectOrb(pointer.spawn);refreshPresetBox()}pointer.id=null;pointer.down=false;pointer.orb=null;pointer.spawn=null;body.style.cursor='crosshair';fieldDirty=true}
 body.addEventListener('pointerup',end);body.addEventListener('pointercancel',end);
@@ -2856,8 +2874,19 @@ function beginHold(o,p){
     removeOrb(o);
   },HOLD_MS);
 }
-function syncMotionControls(){dragValue=+$('#drag').value;windValue=+$('#wind').value;$('#dragV').textContent=dragValue.toFixed(2);$('#windV').textContent=Math.round(windValue*100)+'%'}$('#drag').addEventListener('input',syncMotionControls);$('#wind').addEventListener('input',syncMotionControls);syncMotionControls();
-function ecosystemControl(id,key,label){const el=$('#'+id),paint=()=>{PHYS[key]=+el.value;$('#'+label).textContent=Math.round(PHYS[key]*100)+'%';updateSettings()};el.addEventListener('input',paint);paint()}
+const elDrag=$('#drag'),elWind=$('#wind');
+function syncMotionControls(){dragValue=+elDrag.value;windValue=+elWind.value;if(devVisible())paintMotionLabels()}
+function paintMotionLabels(){$('#dragV').textContent=dragValue.toFixed(2);$('#windV').textContent=Math.round(windValue*100)+'%'}
+devPainters.push(paintMotionLabels);
+devPainters.push(()=>selectOrb(selected));$('#drag').addEventListener('input',syncMotionControls);$('#wind').addEventListener('input',syncMotionControls);syncMotionControls();
+function ecosystemControl(id,key,label){
+  const el=$('#'+id);
+  const paintLabel=()=>{$('#'+label).textContent=Math.round(PHYS[key]*100)+'%'};
+  const apply=()=>{PHYS[key]=+el.value;if(devVisible()){paintLabel();updateSettings()}};
+  el.addEventListener('input',apply);
+  devPainters.push(paintLabel);
+  apply();
+}
 ecosystemControl('modalMix','modalMix','modalV');ecosystemControl('sympathy','sympathy','sympathyV');ecosystemControl('pressure','pressure','pressureV');
 // ================================================================
 // FLUID ATMOSPHERE (WebGL2, optional)
@@ -3054,6 +3083,17 @@ function fire(input,type){input.dispatchEvent(new Event(type||'input',{bubbles:t
 // Finger-first sizing. Every hit area clears 44px on a coarse pointer while
 // still leaving a gap between neighbours at the tightest ring (10 swatches).
 const COARSE=matchMedia('(pointer:coarse)').matches;
+// Input events may only write state and mark dirty. Rotary repaints build SVG
+// path strings, so they are queued here and drained once per frame — a 120Hz
+// drag repaints at most 120 times a second instead of twice per input sample.
+const dirtyPaints=new Set();
+function requestPaint(fn){if(fn)dirtyPaints.add(fn)}
+function flushPaints(){
+  if(!dirtyPaints.size)return;
+  for(const f of dirtyPaints){try{f()}catch(err){}}
+  dirtyPaints.clear();
+}
+
 const KNOB_R=21,KNOB_HIT=COARSE?32:30,A0=135,ASWEEP=270;
 const HIT_HUB=COARSE?30:28,HIT_ACT=COARSE?29:27,HIT_SWATCH=22,HIT_VOICE=COARSE?30:28;
 // A single window-level blur reset shared by every rotary. Registering one per
@@ -3088,7 +3128,7 @@ function makeKnob(spec){
     let x=fromN(v);
     x=Math.round(x/step)*step;
     input.value=clamp(x,min,max);
-    fire(input);paint();
+    fire(input);requestPaint(paint);
   }
   // A rotary answers only to the pointer that grabbed it: on a touch screen a
   // second finger landing on the same control would otherwise drive it too.
@@ -3125,7 +3165,7 @@ function makeKnob(spec){
     if(k==='ArrowUp'||k==='ArrowRight')  {nudge(.02);e.preventDefault()}
     if(k==='ArrowDown'||k==='ArrowLeft') {nudge(-.02);e.preventDefault()}
   });
-  input.addEventListener('input',paint);
+  input.addEventListener('input',()=>requestPaint(paint));
   node.paint=paint;paint();
   return node;
 }
@@ -3155,7 +3195,7 @@ function makeChoice(spec){
   pad.addEventListener('click',e=>{e.stopPropagation();advance(1)});
   pad.addEventListener('wheel',e=>{e.preventDefault();advance(e.deltaY<0?1:-1)},{passive:false});
   pad.addEventListener('keydown',e=>{if(e.key==='ArrowRight'||e.key==='ArrowUp'){advance(1);e.preventDefault()}if(e.key==='ArrowLeft'||e.key==='ArrowDown'){advance(-1);e.preventDefault()}});
-  input.addEventListener('change',paint);
+  input.addEventListener('change',()=>requestPaint(paint));
   paint();
   return{g,el:inner,paint,cx:0,cy:0};
 }
@@ -3452,7 +3492,7 @@ function toggleDev(force){
   const show=force===undefined?d.hidden:force;
   d.hidden=!show;
   // diagnostics skip their (expensive) repaints while hidden — refresh on open
-  if(show){try{updateSettings();refreshPresetBox()}catch(err){}}
+  if(show){try{repaintDiagnostics();updateSettings();refreshPresetBox()}catch(err){}}
 }
 addEventListener('keydown',e=>{
   if(e.target&&/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))return;
@@ -3539,6 +3579,7 @@ function frame(now){
   // body count; smoothness comes from pacing, not from skipped work.
   lastSimFrame=now;
   flushAudioParams(now);
+  flushPaints();
   const dt=Math.min(.025,(now-last)/1000||.016);
   last=now;
 
