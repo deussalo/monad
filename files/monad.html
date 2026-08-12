@@ -151,6 +151,30 @@ window.onerror = function(m, src, line, col){
 window.addEventListener('unhandledrejection', function(e){
   window.__monadErrors.push('promise rejection: ' + (e && e.reason));
 });
+// Frame-stall watchdog: the boot check below only covers a dead start. If the
+// loop dies LATER (device GPU reset, a throw the frame guard cannot contain),
+// the screen froze silently. Now it reports instead.
+(function(){
+  var lastCount = -1, stalls = 0, shown = false;
+  setInterval(function(){
+    if (shown || document.hidden) { lastCount = window.__monadFrames; return; }
+    if (window.__monadFrames === lastCount && window.__monadFrames > 0) {
+      if (++stalls >= 2) {
+        shown = true;
+        var d = document.createElement('div');
+        d.setAttribute('style', 'position:fixed;left:0;right:0;top:0;z-index:99999;background:rgba(20,16,10,.96);'
+          + 'color:#efe7d7;font:12px/1.5 ui-monospace,Menlo,monospace;padding:12px;white-space:pre-wrap;word-break:break-word');
+        d.textContent = 'Monad frame loop stalled.\n'
+          + (window.__monadErrors.length ? window.__monadErrors.slice(-4).join('\n') : 'no JS error recorded')
+          + '\nframes: ' + window.__monadFrames + '  viewport: ' + innerWidth + 'x' + innerHeight
+          + '  dpr: ' + (devicePixelRatio || 1);
+        d.addEventListener('pointerdown', function(){ d.remove(); shown = false; stalls = 0; });
+        if (document.body) document.body.appendChild(d);
+      }
+    } else stalls = 0;
+    lastCount = window.__monadFrames;
+  }, 1500);
+})();
 setTimeout(function(){
   if (window.__monadFrames > 0) return;   // running fine
   var gl2;
@@ -1356,7 +1380,11 @@ Monad is a live instrument and cannot run without it. The page you are looking a
 (()=>{'use strict';
 const $=q=>document.querySelector(q),clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 const stage=$('#stage'),field=$('#field'),body=$('#bodies'),haze=$('#haze');
-const CTX_OPTS={alpha:true,desynchronized:true};
+// desynchronized:true was here — it puts the canvas on a low-latency
+// compositor path that is broken on a wide range of Android GPUs (flicker,
+// stale frames, output that looks frozen while the loop runs). The ~8ms it
+// saves on desktop Chrome is not worth shipping a glitched phone build.
+const CTX_OPTS={alpha:true};
 const fctx=field.getContext('2d',CTX_OPTS),bctx=body.getContext('2d',CTX_OPTS),hctx=haze.getContext('2d',CTX_OPTS);
 const PALETTE=['#221202','#3A280D','#556979','#77807D','#878D80','#AB7F48','#C39A61','#E8C882'];
 
@@ -3639,8 +3667,19 @@ function adaptQuality(now,frameMs){
   }
 }
 
-// Optional on-device readout: put #perf on the end of the URL.
-const PERF=(function(){try{return /perf/.test(location.hash)}catch(e){return false}})();
+// On-device readout: #perf on the URL, or triple-tap the top-left corner —
+// content:// and messenger-preview URLs make hash fragments impractical on
+// the exact devices that need the readout most.
+let PERF=(function(){try{return /perf/.test(location.hash)}catch(e){return false}})();
+(function(){
+  let taps=0,firstTap=0;
+  addEventListener('pointerdown',e=>{
+    if(e.clientX>90||e.clientY>90)return;
+    const t=performance.now();
+    if(t-firstTap>900){taps=0;firstTap=t}
+    if(++taps>=3){taps=0;PERF=!PERF;if(!PERF&&perfEl){perfEl.remove();perfEl=null}}
+  },{capture:true});
+})();
 let perfEl=null,perfLast=0;const perfSamples=[];
 function perfTick(now,frameMs){
   if(!PERF)return;
