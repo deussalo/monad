@@ -1593,6 +1593,7 @@ function addPressureWave(o,impact){
   lastPressureWaveAt=now;
 
   // Cull before admitting new work. The active list is a strict fixed budget.
+  if(fluidOn&&window.MonadFluid){try{window.MonadFluid.ring(o.x,o.y,Math.max(2,o.r),amp)}catch(err){}}
   prunePressureWaves();
   let w;
   if(pressureWaves.length>=MAX_PRESSURE_WAVES){
@@ -2183,7 +2184,7 @@ function draw(){
   // This prevents stale ring pixels surviving transient canvas/layout resizes.
   bctx.save();bctx.setTransform(1,0,0,1,0,0);bctx.clearRect(0,0,body.width,body.height);bctx.restore();
 
-  compositeField();
+  if(!fluidOn)compositeField();
 
   for(const w of pressureWaves){
     const fade=pressureWaveStrength(w);
@@ -2226,6 +2227,64 @@ body.addEventListener('dblclick',e=>{
 function syncMotionControls(){dragValue=+$('#drag').value;windValue=+$('#wind').value;$('#dragV').textContent=dragValue.toFixed(2);$('#windV').textContent=Math.round(windValue*100)+'%'}$('#drag').addEventListener('input',syncMotionControls);$('#wind').addEventListener('input',syncMotionControls);syncMotionControls();
 function ecosystemControl(id,key,label){const el=$('#'+id),paint=()=>{PHYS[key]=+el.value;$('#'+label).textContent=Math.round(PHYS[key]*100)+'%';updateSettings()};el.addEventListener('input',paint);paint()}
 ecosystemControl('modalMix','modalMix','modalV');ecosystemControl('sympathy','sympathy','sympathyV');ecosystemControl('pressure','pressure','pressureV');
+// ================================================================
+// FLUID ATMOSPHERE (WebGL2, optional)
+// Bodies inject dye and velocity; pressure fronts push the field. If WebGL2 is
+// unavailable the 2D blurred-sprite path above stays in charge — the product
+// must degrade, never break.
+// ================================================================
+let fluidOn=false;
+const fluidCanvas=$('#fluid');
+function hexRGB(hex){
+  const n=parseInt(String(hex).slice(1),16);
+  if(!Number.isFinite(n))return[.76,.60,.38];
+  return[((n>>16)&255)/255,((n>>8)&255)/255,(n&255)/255];
+}
+function orbRGB(o){
+  if(o._rgbKey!==o.color){o._rgbKey=o.color;o._rgb=hexRGB(o.color)}
+  return o._rgb;
+}
+function initFluid(){
+  const F=window.MonadFluid;
+  if(!F||typeof F.init!=='function')return false;
+  let ok=false;
+  try{ok=!!F.init(fluidCanvas)}catch(err){ok=false}
+  if(!ok)return false;
+  fluidOn=true;
+  fluidCanvas.style.display='block';
+  try{F.resize(W,H,DPR)}catch(err){}
+  return true;
+}
+function fluidSplatOrb(o,extra){
+  const F=window.MonadFluid;
+  if(!fluidOn||!F)return;
+  const spd=Math.hypot(o.vx||0,o.vy||0);
+  const s=(.05+.55*(o.hit||0)+.22*(o.resonance||0)+(extra||0))*(.55+Math.min(1,spd/230));
+  if(s<=.004)return;
+  F.splat(o.x,o.y,o.vx||0,o.vy||0,orbRGB(o),o.r*1.35,s);
+}
+function fluidFrame(dt){
+  const F=window.MonadFluid;
+  if(!fluidOn||!F)return;
+  for(const o of orbs){if(!o.deleted)fluidSplatOrb(o,0)}
+  if(pointer.spawn)fluidSplatOrb(pointer.spawn,.05);
+  F.step(dt);
+  F.render({atmosphere:fieldAtmo,strength:fieldStrength,haze:fieldHaze,
+    grain:.5,warp:.6,background:hexRGB(background)});
+}
+// A new palette should arrive as a visible event, not a silent swap.
+function fluidBloomPalette(list,at){
+  const F=window.MonadFluid;
+  if(!fluidOn||!F||!list)return;
+  const cx=(at&&at.x)||W*.5,cy=(at&&at.y)||H*.5;
+  const R0=Math.min(W,H)*.22;
+  list.forEach((hex,i)=>{
+    const a=(i/list.length)*Math.PI*2;
+    F.splat(cx+Math.cos(a)*R0,cy+Math.sin(a)*R0,
+      Math.cos(a)*150,Math.sin(a)*150,hexRGB(hex),Math.min(W,H)*.1,.75);
+  });
+}
+
 // ================================================================
 // WORDLESS SHELL — one glyph, blooming into rotary selection wheels.
 // The wheels are a facade over the diagnostics inputs: every rotary
@@ -2697,17 +2756,18 @@ function ingestImage(file){
     .then(bmp=>MP.fromImage(bmp,8).then(hex=>{bmp.close();applyPhotoPalette(hex)}))
     .catch(()=>{});
 }
-function applyPhotoPalette(hexes){
+function applyPhotoPalette(hexes,at){
   if(!hexes||hexes.length<2)return;
   const MP=window.MonadPalette;
   const list=(MP&&MP.harmonize)?MP.harmonize(hexes):hexes;
   importPalette(list);
   // darkest swatch becomes the ground
   const bgEl=$('#bgColor');bgEl.value=list[0];fire(bgEl);
+  fluidBloomPalette(list,at);
   fieldDirty=true;paintPaletteGroup();
 }
 
-if(window.MonadPalette)window.MonadPalette.attachDropTarget(stage,hex=>applyPhotoPalette(hex));
+if(window.MonadPalette)window.MonadPalette.attachDropTarget(stage,(hex,at)=>applyPhotoPalette(hex,at));
 
 hubNodes.forEach(n=>layerRing.appendChild(n.g));
 showRing(hubNodes,false);
@@ -2715,6 +2775,7 @@ layoutShell();
 addEventListener('resize',layoutShell);
 
 function resize(){const r=stage.getBoundingClientRect();W=Math.max(1,r.width);H=Math.max(1,r.height);DPR=Math.min(devicePixelRatio||1,1.5);body.width=Math.round(W*DPR);body.height=Math.round(H*DPR);bctx.setTransform(DPR,0,0,DPR,0,0);FW=Math.ceil(W*FIELD_SCALE);FH=Math.ceil(H*FIELD_SCALE);field.width=FW;field.height=FH;haze.width=FW;haze.height=FH;glowC.width=FW;glowC.height=FH;
+  if(fluidOn&&window.MonadFluid){try{window.MonadFluid.resize(W,H,DPR)}catch(err){}}
   prunePressureWaves();fieldDirty=true;layoutShell()}
 function frame(now){
   if(now-lastSimFrame<SIM_MIN_FRAME_MS){requestAnimationFrame(frame);return}
@@ -2735,7 +2796,7 @@ function frame(now){
   captureMotionSample(now);
   updateVoiceStat(now);
   draw();
-  renderField(now);
+  if(fluidOn)fluidFrame(dt);else renderField(now);
   requestAnimationFrame(frame);
 }
 function seedWorld(){
@@ -2753,7 +2814,7 @@ function seedWorld(){
   }
   fieldDirty=true;refreshPresetBox();
 }
-new ResizeObserver(resize).observe(stage);resize();seedWorld();requestAnimationFrame(frame);
+new ResizeObserver(resize).observe(stage);resize();initFluid();seedWorld();requestAnimationFrame(frame);
 })();
 </script>
 </body>
