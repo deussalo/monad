@@ -3709,11 +3709,9 @@ layoutShell();
 let lastSizeKey='';
 function resize(){const r=stage.getBoundingClientRect();W=Math.max(1,r.width);H=Math.max(1,r.height);
   // Fill rate is the entire cost on a phone (CPU per frame measured at 0.3ms
-  // total: physics 0.06, draw 0.11, fluid 0.14). The bodies canvas is a second
-  // full-screen composited layer; at 1.5x on a 3x panel it was 585x1266. The
-  // bodies are flat discs over a deliberately soft field, so 1x costs 45% fewer
-  // pixels for no visible loss. Measured: p50 -7%, p95 -13% at equal quality.
-  // The bodies layer draws hard-edged circles — the one thing that MUST be
+  // total: physics 0.06, draw 0.11, fluid 0.14), so it is tempting to starve
+  // this layer. Do not: that was tried and reverted. The bodies layer draws
+  // hard-edged circles — the one thing that MUST be
   // panel-sharp. A DPR cap of 1 on phones meant a 390px canvas stretched
   // 2.75x onto a 1080px panel: every orb edge visibly pixelated, and the
   // cleaner the atmosphere got, the worse it read. Orbs are a few dozen
