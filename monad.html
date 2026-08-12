@@ -61,6 +61,11 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--ground);color:va
 #shell{position:fixed;inset:0;z-index:10;pointer-events:none;
   font-size:0;-webkit-user-select:none;user-select:none}
 #shell svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+/* A soft pool of shade under the ring so line-work stays legible over a bright
+   atmosphere. Anchored to the glyph, never dims the upper stage. */
+#scrim{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .45s ease;
+  background:radial-gradient(58% 42% at 50% 100%,rgba(8,5,2,.62),rgba(8,5,2,.28) 45%,transparent 72%)}
+#shell.open #scrim{opacity:1}
 .node{pointer-events:auto;cursor:pointer;transform-box:fill-box;transform-origin:center}
 .node circle,.node path,.node line,.node rect,.node polyline{vector-effect:non-scaling-stroke}
 .glyph-stroke{fill:none;stroke:var(--ink);stroke-width:1.3;stroke-linecap:round;stroke-linejoin:round}
@@ -127,7 +132,7 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--ground);color:va
 <div id="vignette" aria-hidden="true"></div>
 
 <!-- ===== SHELL: one glyph, blooming into rotary wheels ===== -->
-<div id="shell"><svg id="shellSvg" aria-hidden="false"></svg></div>
+<div id="shell"><div id="scrim"></div><svg id="shellSvg" aria-hidden="false"></svg></div>
 
 <!-- ===== DIAGNOSTICS (hidden; ? key or long-press the glyph) ===== -->
 <div id="dev" hidden>
@@ -2429,7 +2434,9 @@ function makeAction(spec){
 function makeSwatch(i){
   const inner=sv('g',null,'node bloom'),g=wrapNode(inner);
   const ring=sv('circle',{r:17,fill:'none',stroke:'var(--ink)','stroke-width':1.2,opacity:0});inner.appendChild(ring);
-  const dot=sv('circle',{r:12.5,stroke:'rgba(0,0,0,.35)','stroke-width':1});inner.appendChild(dot);
+  // Light rim, not dark: the ground is near-black and the darkest swatches
+  // would otherwise be invisible circles.
+  const dot=sv('circle',{r:12.5,stroke:'rgba(239,231,215,.34)','stroke-width':1});inner.appendChild(dot);
   const pad=sv('circle',{r:22,tabindex:'0','aria-label':'colour'},'hitpad');inner.appendChild(pad);
   const node={g,el:inner,cx:0,cy:0};
   function paint(){
@@ -2619,6 +2626,7 @@ function showRing(nodes,on){
 function setState(s,id){
   const prev=shellState;
   shellState=s;activeGroup=s===2?id:null;
+  $('#shell').classList.toggle('open',s>0);
   rootG.classList.toggle('resting',s===0);
   rootG.classList.toggle('open',s>0);
   rootDot.setAttribute('opacity',s===2?'0':'1');
@@ -2730,7 +2738,22 @@ function frame(now){
   renderField(now);
   requestAnimationFrame(frame);
 }
-new ResizeObserver(resize).observe(stage);resize();requestAnimationFrame(frame);
+function seedWorld(){
+  const n=clamp(Math.round(Math.min(W,H)/132),4,7);
+  const minDim=Math.min(W,H);
+  for(let i=0;i<n;i++){
+    const a=(i/n)*Math.PI*2+Math.random()*.9;
+    const rad=minDim*(.17+.15*Math.random());
+    const o=makeOrb(
+      clamp(W*.5+Math.cos(a)*rad*1.35,MAX_R,Math.max(MAX_R,W-MAX_R)),
+      clamp(H*.44+Math.sin(a)*rad,MAX_R,Math.max(MAX_R,H-MAX_R)),
+      MIN_R+Math.random()*(MAX_R-MIN_R)*.5);
+    o.vx=(Math.random()*2-1)*16;o.vy=(Math.random()*2-1)*16;
+    orbs.push(o);
+  }
+  fieldDirty=true;refreshPresetBox();
+}
+new ResizeObserver(resize).observe(stage);resize();seedWorld();requestAnimationFrame(frame);
 })();
 </script>
 </body>
