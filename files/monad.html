@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#17130d">
 <title>Monad</title>
 <style>
 /* ============================================================
@@ -21,9 +24,14 @@
   --bg:#17130d;--panel:#1d1912;--text:#efe7d7;--muted:#a99f8d;--border:#4b4337;
 }
 *{box-sizing:border-box}
-html,body{margin:0;height:100%;overflow:hidden;background:var(--ground);color:var(--ink);
+html,body{margin:0;height:100%;height:100dvh;overflow:hidden;background:var(--ground);color:var(--ink);
   font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-  -webkit-tap-highlight-color:transparent}
+  -webkit-tap-highlight-color:transparent;
+  /* touch instrument: no rubber-band, no magnifier, no double-tap zoom */
+  overscroll-behavior:none;touch-action:none;
+  -webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+/* measures env(safe-area-inset-bottom) so the glyph clears the home indicator */
+#safe{position:fixed;left:0;bottom:0;width:0;height:env(safe-area-inset-bottom,0px);pointer-events:none}
 
 /* ---------- STAGE: full-screen, zero chrome ---------- */
 #stage{position:fixed;inset:0;overflow:hidden;background:#221202;touch-action:none}
@@ -61,8 +69,8 @@ body.fluid #veil,body.fluid #grain{display:none}
   background:radial-gradient(120% 90% at 50% 45%,transparent 42%,rgba(8,5,2,.46) 100%)}
 
 /* ---------- SHELL: the only chrome ---------- */
-#shell{position:fixed;inset:0;z-index:10;pointer-events:none;
-  font-size:0;-webkit-user-select:none;user-select:none}
+#shell{position:fixed;inset:0;z-index:10;pointer-events:none;touch-action:none;
+  font-size:0;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 #shell svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
 /* A soft pool of shade under the ring so line-work stays legible over a bright
    atmosphere. Anchored to the glyph, never dims the upper stage. */
@@ -90,7 +98,7 @@ body.fluid #veil,body.fluid #grain{display:none}
 #root-glyph.open{opacity:1}
 
 /* ---------- DEV / DIAGNOSTICS LAYER (hidden by default) ---------- */
-#dev{position:fixed;inset:0;z-index:60;overflow:auto;background:rgba(12,9,5,.94);
+#dev{position:fixed;inset:0;z-index:60;overflow:auto;touch-action:pan-y;-webkit-overflow-scrolling:touch;background:rgba(12,9,5,.94);
   backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
 #dev[hidden]{display:none}
 #dev button,#dev input,#dev select,#dev textarea{border-radius:0!important}
@@ -130,6 +138,7 @@ body.fluid #veil,body.fluid #grain{display:none}
   <canvas id="bodies" aria-label="Monad"></canvas>
   <canvas id="haze" aria-hidden="true"></canvas>
 </div>
+<div id="safe" aria-hidden="true"></div>
 <div id="veil" aria-hidden="true"></div>
 <div id="grain" aria-hidden="true"></div>
 <div id="vignette" aria-hidden="true"></div>
@@ -1070,7 +1079,10 @@ body.fluid #veil,body.fluid #grain{display:none}
 
   function resize(cssW, cssH, ratio) {
     if (!gl) return;
-    dpr = Math.min(ratio || 1, 2);
+    // A 3x phone would render 1.3M fragments a frame; cap the atmosphere's
+    // buffer well below the panel's real density. It is a soft blurred field,
+    // so the loss is invisible and the fill saving is large.
+    dpr = Math.min(ratio || 1, cssW < 700 ? 1.5 : 2);
     dispW = Math.max(1, Math.round(cssW * dpr));
     dispH = Math.max(1, Math.round(cssH * dpr));
     canvas.width = dispW; canvas.height = dispH;
@@ -1257,6 +1269,25 @@ const stage=$('#stage'),field=$('#field'),body=$('#bodies'),haze=$('#haze');
 const CTX_OPTS={alpha:true,desynchronized:true};
 const fctx=field.getContext('2d',CTX_OPTS),bctx=body.getContext('2d',CTX_OPTS),hctx=haze.getContext('2d',CTX_OPTS);
 const PALETTE=['#221202','#3A280D','#556979','#77807D','#878D80','#AB7F48','#C39A61','#E8C882'];
+
+// ---- boot watchdog -------------------------------------------------------
+// Everything below is one long module. Starting the animation loop only at the
+// very end meant that a single throw anywhere -- an unsupported API, a browser
+// quirk during shell construction -- left a completely static, unresponsive
+// screen. boot() is idempotent, isolates each step, and is armed on a timeout
+// here as well as called normally at the end, so the world runs even if some
+// later section fails to build. Function declarations hoist, so this is safe.
+let booted=false;
+function boot(){
+  if(booted)return;
+  booted=true;
+  try{resize()}catch(err){console.error('monad: resize',err)}
+  requestAnimationFrame(frame);
+  try{new ResizeObserver(resize).observe(stage)}catch(err){}
+  try{initFluid()}catch(err){}
+  try{seedWorld()}catch(err){console.error('monad: seed',err)}
+}
+setTimeout(boot,0);
 const MIN_R=12,MAX_R=92,FIELD_SCALE=.35,FIELD_INTERVAL=1000/24,HIT_BATCH_MS=10,ORB_REFRACTORY_MS=20;
 const MOTION_HZ=30,MOTION_SAMPLE_MS=1000/MOTION_HZ,MOTION_SEAM_RATIO=.12;
 const SIM_MIN_FRAME_MS=12,STAT_INTERVAL_MS=250,MAX_SYMPATHETIC_TARGETS=3;
@@ -2681,19 +2712,37 @@ function draw(){
   };
   orbs.forEach(d);if(pointer.spawn)d(pointer.spawn);
 }
-body.addEventListener('pointerdown',e=>{e.preventDefault();const p=pt(e);pointer.id=e.pointerId;pointer.down=true;body.setPointerCapture?.(e.pointerId);const o=hit(p.x,p.y);if(o){selectOrb(o);pointer.orb=o;pointer.spawn=null;pointer.gx=p.x-o.x;pointer.gy=p.y-o.y;o.held=true;o.tx=o.x;o.ty=o.y;body.style.cursor='grabbing'}else{selectOrb(null);pointer.spawn=makeOrb(p.x,p.y,MIN_R);pointer.orb=null;$('#note').value=pointer.spawn.note;$('#selection').textContent=noteName(pointer.spawn.note);fieldDirty=true}});
-body.addEventListener('pointermove',e=>{if(!pointer.down||e.pointerId!==pointer.id)return;const p=pt(e);if(pointer.orb){pointer.orb.tx=p.x-pointer.gx;pointer.orb.ty=p.y-pointer.gy}else if(pointer.spawn){setOrbRadius(pointer.spawn,clamp(Math.hypot(p.x-pointer.spawn.x,p.y-pointer.spawn.y),MIN_R,MAX_R));fieldDirty=true}});
-function end(e){if(!pointer.down||e.pointerId!==pointer.id)return;if(pointer.orb)pointer.orb.held=false;else if(pointer.spawn){admitOrb(pointer.spawn);selectOrb(pointer.spawn);refreshPresetBox()}pointer.id=null;pointer.down=false;pointer.orb=null;pointer.spawn=null;body.style.cursor='crosshair';fieldDirty=true}
+body.addEventListener('pointerdown',e=>{e.preventDefault();const p=pt(e);pointer.id=e.pointerId;pointer.down=true;try{body.setPointerCapture?.(e.pointerId)}catch(err){}const o=hit(p.x,p.y);if(o){selectOrb(o);pointer.orb=o;pointer.spawn=null;pointer.gx=p.x-o.x;pointer.gy=p.y-o.y;o.held=true;o.tx=o.x;o.ty=o.y;body.style.cursor='grabbing';beginHold(o,p)}else{selectOrb(null);pointer.spawn=makeOrb(p.x,p.y,MIN_R);pointer.orb=null;$('#note').value=pointer.spawn.note;$('#selection').textContent=noteName(pointer.spawn.note);fieldDirty=true}});
+body.addEventListener('pointermove',e=>{if(!pointer.down||e.pointerId!==pointer.id)return;const p=pt(e);if(holdFrom&&Math.hypot(p.x-holdFrom.x,p.y-holdFrom.y)>HOLD_SLOP)cancelHold();if(pointer.orb){pointer.orb.tx=p.x-pointer.gx;pointer.orb.ty=p.y-pointer.gy}else if(pointer.spawn){setOrbRadius(pointer.spawn,clamp(Math.hypot(p.x-pointer.spawn.x,p.y-pointer.spawn.y),MIN_R,MAX_R));fieldDirty=true}});
+function end(e){cancelHold();if(!pointer.down||e.pointerId!==pointer.id)return;if(pointer.orb)pointer.orb.held=false;else if(pointer.spawn){admitOrb(pointer.spawn);selectOrb(pointer.spawn);refreshPresetBox()}pointer.id=null;pointer.down=false;pointer.orb=null;pointer.spawn=null;body.style.cursor='crosshair';fieldDirty=true}
 body.addEventListener('pointerup',end);body.addEventListener('pointercancel',end);
-body.addEventListener('dblclick',e=>{
-  const p=pt(e),o=hit(p.x,p.y);
-  if(!o)return;
+function removeOrb(o){
+  if(!o||o.deleted)return;
   o.deleted=true;
   const i=orbs.indexOf(o);
   if(i>=0)orbs.splice(i,1);
   if(selected===o)selectOrb(null);
+  // let the atmosphere remember it for a moment
+  if(fluidOn)fluidPuff(o,.55);
+  if(navigator.vibrate)try{navigator.vibrate(12)}catch(err){}
   fieldDirty=true;refreshPresetBox();
-});
+}
+body.addEventListener('dblclick',e=>{const p=pt(e);removeOrb(hit(p.x,p.y))});
+
+// Touch-native removal: press and hold a body. Double-tap is unreliable and
+// fiddly with a finger, so it stays as the pointer-device shortcut only.
+const HOLD_MS=550,HOLD_SLOP=11;
+let holdTimer=0,holdFrom=null;
+function cancelHold(){if(holdTimer){clearTimeout(holdTimer);holdTimer=0}holdFrom=null}
+function beginHold(o,p){
+  cancelHold();
+  holdFrom={x:p.x,y:p.y};
+  holdTimer=setTimeout(()=>{
+    holdTimer=0;
+    if(pointer.orb===o){o.held=false;pointer.orb=null;pointer.down=false;pointer.id=null}
+    removeOrb(o);
+  },HOLD_MS);
+}
 function syncMotionControls(){dragValue=+$('#drag').value;windValue=+$('#wind').value;$('#dragV').textContent=dragValue.toFixed(2);$('#windV').textContent=Math.round(windValue*100)+'%'}$('#drag').addEventListener('input',syncMotionControls);$('#wind').addEventListener('input',syncMotionControls);syncMotionControls();
 function ecosystemControl(id,key,label){const el=$('#'+id),paint=()=>{PHYS[key]=+el.value;$('#'+label).textContent=Math.round(PHYS[key]*100)+'%';updateSettings()};el.addEventListener('input',paint);paint()}
 ecosystemControl('modalMix','modalMix','modalV');ecosystemControl('sympathy','sympathy','sympathyV');ecosystemControl('pressure','pressure','pressureV');
@@ -2738,21 +2787,32 @@ function initFluid(){
   try{F.resize(W,H,DPR)}catch(err){}
   return true;
 }
-function fluidSplatOrb(o,extra){
+// Dye is injected as a RATE and integrated over dt, not as a fixed amount per
+// frame. Per-frame injection made the equilibrium brightness depend on frame
+// rate: the same scene that looked right at 30fps bleached to a flat white
+// cloud at 60. Equilibrium is now rate/dissipation, independent of frame rate.
+function fluidSplatOrb(o,dt){
   const F=window.MonadFluid;
   if(!fluidOn||!F)return;
   const spd=Math.hypot(o.vx||0,o.vy||0);
-  const s=(.10+.85*(o.hit||0)+.34*(o.resonance||0)+(extra||0))*(.6+Math.min(1,spd/230));
-  if(s<=.004)return;
+  const rate=(1.35+9*(o.hit||0)+3.6*(o.resonance||0))*(.55+Math.min(1,spd/230));
+  const s=rate*dt;
+  if(s<=.0004)return;
   // The atmosphere control is the glow radius, exactly as in the 2D path — a
   // body's aura is fieldAtmo times its own radius, not a fixed multiple.
+  F.splat(o.x,o.y,o.vx||0,o.vy||0,orbRGB(o),o.r*Math.max(1.2,fieldAtmo),s);
+}
+// one-shot impulse (a body leaving, a palette arriving) — not rate integrated
+function fluidPuff(o,s){
+  const F=window.MonadFluid;
+  if(!fluidOn||!F)return;
   F.splat(o.x,o.y,o.vx||0,o.vy||0,orbRGB(o),o.r*Math.max(1.2,fieldAtmo),s);
 }
 function fluidFrame(dt){
   const F=window.MonadFluid;
   if(!fluidOn||!F)return;
-  for(const o of orbs){if(!o.deleted)fluidSplatOrb(o,0)}
-  if(pointer.spawn)fluidSplatOrb(pointer.spawn,.05);
+  for(const o of orbs){if(!o.deleted)fluidSplatOrb(o,dt)}
+  if(pointer.spawn)fluidSplatOrb(pointer.spawn,dt);
   F.step(dt);
   F.render({atmosphere:fieldAtmo,strength:fieldStrength,haze:fieldHaze,
     grain:.5,warp:.6,background:hexRGB(background)});
@@ -2778,7 +2838,7 @@ function fluidBloomPalette(list,at){
 // keeps working with zero duplication.
 // ================================================================
 const NS='http://www.w3.org/2000/svg';
-const shellSvg=$('#shellSvg');
+const shellSvg=$('#shellSvg'),safeEl=$('#safe');
 function sv(tag,attrs,cls){const n=document.createElementNS(NS,tag);if(cls)n.setAttribute('class',cls);if(attrs)for(const k in attrs)n.setAttribute(k,attrs[k]);return n}
 
 const FILL='style="fill:var(--ink)"';
@@ -2830,12 +2890,20 @@ const ICON={
   cIn:`<path d="M12 3.4v11.2"/><path d="M8 10.6l4 4 4-4"/><path d="M3.6 14v6.6h16.8V14"/>`
 };
 const iconCache=new Map();
+// Icons are parsed inside THIS document. The previous version built them in a
+// detached DOMParser document and adopted the nodes across documents, which is
+// the kind of thing that throws on some engines — and a throw here happened
+// during shell construction, before the animation loop was ever started, which
+// leaves the whole instrument frozen and unresponsive.
+const iconScratch=document.createElementNS(NS,'svg');
 function iconFrag(markup){
   let f=iconCache.get(markup);
   if(!f){
-    const doc=new DOMParser().parseFromString('<svg xmlns="'+NS+'">'+markup+'</svg>','image/svg+xml');
     f=document.createDocumentFragment();
-    for(const c of Array.from(doc.documentElement.childNodes))f.appendChild(c);
+    try{
+      iconScratch.innerHTML=markup;
+      while(iconScratch.firstChild)f.appendChild(iconScratch.firstChild);
+    }catch(err){}
     iconCache.set(markup,f);
   }
   return f.cloneNode(true);
@@ -2870,7 +2938,11 @@ function wrapNode(inner){const o=sv('g');o.appendChild(inner);return o}
 function bindingInput(obj,key){const b=controlBindings.find(b=>b.obj===obj&&b.key===key);return b?b.input:null}
 function fire(input,type){input.dispatchEvent(new Event(type||'input',{bubbles:true}))}
 
-const KNOB_R=21,KNOB_HIT=30,A0=135,ASWEEP=270;
+// Finger-first sizing. Every hit area clears 44px on a coarse pointer while
+// still leaving a gap between neighbours at the tightest ring (10 swatches).
+const COARSE=matchMedia('(pointer:coarse)').matches;
+const KNOB_R=21,KNOB_HIT=COARSE?32:30,A0=135,ASWEEP=270;
+const HIT_HUB=COARSE?30:28,HIT_ACT=COARSE?29:27,HIT_SWATCH=22,HIT_VOICE=COARSE?30:28;
 // A single window-level blur reset shared by every rotary. Registering one per
 // knob left ~20 permanent listeners, 19 of them no-ops on every window blur.
 let activeKnobRelease=null;
@@ -2977,11 +3049,14 @@ function makeChoice(spec){
 
 function makeAction(spec){
   const inner=sv('g',null,'node bloom'),g=wrapNode(inner);
-  inner.appendChild(sv('circle',{r:23},'plate'));
+  // `small` actions share the palette ring with 8 swatches; at full size their
+  // hit areas overlapped their neighbours on a phone-width ring.
+  const small=!!spec.small;
+  inner.appendChild(sv('circle',{r:small?19:23},'plate'));
   const ico=sv('g',null,'glyph-stroke');inner.appendChild(ico);
-  const pad=sv('circle',{r:27,tabindex:'-1','aria-label':spec.a||'action'},'hitpad');inner.appendChild(pad);
+  const pad=sv('circle',{r:small?HIT_SWATCH:HIT_ACT,tabindex:'-1','aria-label':spec.a||'action'},'hitpad');inner.appendChild(pad);
   const node={g,el:inner,cx:0,cy:0};
-  function paint(){setIcon(ico,spec.icon(),19);if(spec.tint)ico.style.stroke=spec.tint()||''}
+  function paint(){setIcon(ico,spec.icon(),small?16:19);if(spec.tint)ico.style.stroke=spec.tint()||''}
   pad.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation()});
   pad.addEventListener('click',e=>{e.stopPropagation();spec.run();paint()});
   pad.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){spec.run();paint();e.preventDefault()}});
@@ -2995,7 +3070,7 @@ function makeSwatch(i){
   // Light rim, not dark: the ground is near-black and the darkest swatches
   // would otherwise be invisible circles.
   const dot=sv('circle',{r:12.5,stroke:'rgba(239,231,215,.34)','stroke-width':1});inner.appendChild(dot);
-  const pad=sv('circle',{r:22,tabindex:'-1','aria-label':'colour'},'hitpad');inner.appendChild(pad);
+  const pad=sv('circle',{r:HIT_SWATCH,tabindex:'-1','aria-label':'colour'},'hitpad');inner.appendChild(pad);
   const node={g,el:inner,cx:0,cy:0};
   function paint(){
     const c=PALETTE[i]||'#000';
@@ -3021,7 +3096,7 @@ function makeVoicingNode(mode){
   inner.appendChild(sv('circle',{r:24},'plate'));
   const axis=sv('line',{x1:0,x2:0,stroke:'var(--ink)','stroke-width':.8},'');inner.appendChild(axis);
   const dotsG=sv('g');inner.appendChild(dotsG);
-  const pad=sv('circle',{r:28,tabindex:'-1','aria-label':'voicing'},'hitpad');inner.appendChild(pad);
+  const pad=sv('circle',{r:HIT_VOICE,tabindex:'-1','aria-label':'voicing'},'hitpad');inner.appendChild(pad);
   const node={g,el:inner,cx:0,cy:0};
   function paint(){
     const MV=window.MonadVoicing;if(!MV)return;
@@ -3111,8 +3186,8 @@ if(window.MonadVoicing)for(const m of window.MonadVoicing.modes)GROUPS[3].items.
 // palette group is built from PALETTE + target toggle + photo import
 for(let i=0;i<8;i++)GROUPS[4].items.push({t:'swatch',i});
 GROUPS[4].items.push({t:'action',icon:()=>paletteTarget==='bg'?'tBg':'tOrb',
-  run:()=>{(paletteTarget==='bg'?$('#orbTarget'):$('#bgTarget')).click();paintPaletteGroup()},a:'colour target'});
-GROUPS[4].items.push({t:'action',icon:()=>'photo',run:()=>importPhoto(),a:'image palette'});
+  run:()=>{(paletteTarget==='bg'?$('#orbTarget'):$('#bgTarget')).click();paintPaletteGroup()},a:'colour target',small:true});
+GROUPS[4].items.push({t:'action',icon:()=>'photo',run:()=>importPhoto(),a:'image palette',small:true});
 
 // ---- build the scene graph ----
 const layerRing=sv('g'),layerRoot=sv('g');
@@ -3123,14 +3198,14 @@ rootG.appendChild(sv('circle',{r:25},'plate'));
 rootG.appendChild(sv('circle',{r:15},'glyph-stroke'));
 const rootDot=sv('circle',{r:3.4,style:'fill:var(--ink)'});rootG.appendChild(rootDot);
 const rootIcon=sv('g',null,'glyph-stroke');rootIcon.setAttribute('opacity','0');rootG.appendChild(rootIcon);
-rootG.appendChild(sv('circle',{r:30},'hitpad'));
+rootG.appendChild(sv('circle',{r:COARSE?34:30},'hitpad'));
 layerRoot.appendChild(rootG);
 
 const hubNodes=GROUPS.map(gr=>{
   const inner=sv('g',null,'node bloom'),g=wrapNode(inner);
   inner.appendChild(sv('circle',{r:24},'plate'));
   inner.appendChild(iconGroup(gr.icon,20));
-  const pad=sv('circle',{r:28,tabindex:'-1','aria-label':gr.id},'hitpad');inner.appendChild(pad);
+  const pad=sv('circle',{r:HIT_HUB,tabindex:'-1','aria-label':gr.id},'hitpad');inner.appendChild(pad);
   const node={g,el:inner,cx:0,cy:0,paint(){}};
   const open=()=>{openGroup(gr.id)};
   pad.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation()});
@@ -3174,9 +3249,13 @@ function fan(nodes,span,radius){
 }
 function layoutShell(){
   const w=innerWidth,h=innerHeight;
-  rootX=w/2;rootY=h-Math.max(46,Math.min(72,h*.075));
+  // lift the glyph clear of the iOS home indicator
+  const safeB=safeEl?safeEl.getBoundingClientRect().height:0;
+  rootX=w/2;rootY=h-Math.max(46,Math.min(72,h*.075))-safeB;
   layerRoot.setAttribute('transform','translate('+rootX.toFixed(1)+','+rootY.toFixed(1)+')');
-  ringR=clamp(Math.min(w*.40,h*.54),108,196);
+  // never let the ring push a node off a narrow screen or under the glyph
+  const fit=Math.min(w/2-38,rootY-38);
+  ringR=Math.min(clamp(Math.min(w*.44,h*.52),108,200),Math.max(96,fit));
   const gr=activeGroup&&GROUPS.find(g=>g.id===activeGroup);
   fan(hubNodes,166,ringR);
   if(gr)fan(itemNodes,gr.span,ringR);
@@ -3365,7 +3444,7 @@ function seedWorld(){
   }
   fieldDirty=true;refreshPresetBox();
 }
-new ResizeObserver(resize).observe(stage);resize();initFluid();seedWorld();requestAnimationFrame(frame);
+boot();
 })();
 </script>
 </body>
