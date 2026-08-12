@@ -1056,6 +1056,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
   var GROUND_W = 96, GROUND_H = 64, groundAge = 1e9;
   var BLUR_PASSES = 2;   // two separable passes, both at sim resolution   // seconds since last ground refresh
   var simW = 1, simH = 1, dispW = 1, dispH = 1, dpr = 1;
+  var cssWLast = 0, cssHLast = 0;   // true CSS size, free of any quality scaling
   var time = 0, ok = false, listening = false;
 
   function compile(vsSrc, fsSrc) {
@@ -1206,6 +1207,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     // Fill rate is the whole cost here. A phone panel is 3x; the atmosphere is
     // a soft blurred field, so 1x is visually identical and far cheaper.
     dpr = Math.min(ratio || 1, cssW < 700 ? 1 : 1.5);
+    cssWLast = cssW; cssHLast = cssH;
     dispW = Math.max(1, Math.round(cssW * dpr * qScale));
     dispH = Math.max(1, Math.round(cssH * dpr * qScale));
     canvas.width = dispW; canvas.height = dispH;
@@ -1334,7 +1336,11 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     if (typeof o.bloom === 'boolean') qBloom = o.bloom;
     if (typeof o.scale === 'number' && o.scale !== qScale) {
       qScale = Math.max(0.4, Math.min(1, o.scale));
-      if (canvas) resize(dispW / dpr, dispH / dpr, dpr);
+      // dispW/dpr still has the PREVIOUS qScale baked in, so feeding it back
+      // multiplied the scales together: 1.0 -> 0.7 -> 0.55 landed at 0.385, not
+      // 0.55, and every further step compounded again. Measured live: a 412px
+      // screen at scale 0.55 produced a 158px buffer instead of 227.
+      if (canvas) resize(cssWLast || (dispW / dpr), cssHLast || (dispH / dpr), dpr);
     }
     return { bloom: qBloom, scale: qScale };
   }
