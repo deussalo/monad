@@ -1475,7 +1475,7 @@ function boot(){
 }
 setTimeout(boot,0);
 const LOW_POWER=(function(){try{return matchMedia('(pointer:coarse)').matches||innerWidth<760}catch(e){return innerWidth<760}})();
-const MIN_R=12,MAX_R=92,FIELD_SCALE=.35,FIELD_INTERVAL=1000/24,HIT_BATCH_MS=10,ORB_REFRACTORY_MS=20;
+const MIN_R=12,MAX_R=92,FIELD_SCALE=.35,FIELD_INTERVAL=1000/24,HIT_BATCH_MS=10,ORB_REFRACTORY_MS=3;   // 20ms silently ate every consecutive-frame hit at 60fps
 const MOTION_HZ=30,MOTION_SAMPLE_MS=1000/MOTION_HZ,MOTION_SEAM_RATIO=.12;
 const STAT_INTERVAL_MS=250,MAX_SYMPATHETIC_TARGETS=3;   // no minimum-frame gate: render every rAF tick
 let W=1,H=1,DPR=1,FW=1,FH=1,last=performance.now(),lastSimFrame=0,lastField=0,lastStat=0,fieldDirty=true,paletteTarget='orb',selected=null,background='#221202';
@@ -1903,12 +1903,12 @@ let ac=null,master=null,dryBus=null,wetBus=null,revIn=null,wetOut=null,voiceMix=
 // without user activation and leaves the context suspended, which is exactly
 // how every phone shipped silent.
 window.__monadAudio=function(){return ac?ac.state:'none'};
-let voiceDrops=0,modalDrops=0;
+let voiceDrops=0,modalDrops=0,collisionCount=0,strikeCount=0,contactEvents=0;
 window.__monadAudioStats=function(){return{
   state:ac?ac.state:'none',
   voices:typeof activeSourceVoices==='number'?activeSourceVoices:-1,
   modals:typeof activeModePartials==='number'?activeModePartials:-1,
-  voiceDrops:voiceDrops,modalDrops:modalDrops,
+  voiceDrops:voiceDrops,modalDrops:modalDrops,collisionCount:collisionCount,strikeCount:strikeCount,contactEvents:contactEvents,
   baseLatency:ac&&ac.baseLatency?+(ac.baseLatency*1000).toFixed(1):null,
   sampleRate:ac?ac.sampleRate:null
 }};
@@ -2231,9 +2231,11 @@ function flushAudioParams(now){
 }
 
 function impactAmplitude(v){
-  if(v<=5)return 0;
+  // A graze is a QUIET note, not silence. Floor at 1 with the existing
+  // pow(x,.72) perceptual curve: v=5 lands near -24dB, delicate but present.
+  if(v<=1)return 0;
 
-  const x=clamp((v-5)/165,0,1);
+  const x=clamp((v-1)/169,0,1);
   const expressive=Math.pow(x,.72);
   const compressed=expressive/(1+.48*expressive);
 
@@ -2260,6 +2262,10 @@ function chooseFreeVoice(){
   // voice already past its scheduled stop. v.osc is cleared first so a late
   // onended sees v.osc!==osc and cannot double-decrement the active count.
   if(ac){const now=ac.currentTime;for(let n=0;n<limit;n++){const i=(nextVoiceSearch+n)%limit;const v=voices[i];if(v.busy&&now>v.end+0.05){try{if(v.osc)v.osc.disconnect()}catch(e){}v.busy=false;v.osc=null;activeSourceVoices=Math.max(0,activeSourceVoices-1);nextVoiceSearch=(i+1)%limit;return v}}}
+  // True exhaustion: STEAL rather than drop the strike. Victim is the voice
+  // furthest through its decay and quietest. v.osc is cleared before returning
+  // so a late onended cannot double-decrement the active count.
+  if(ac){const now=ac.currentTime;let best=null,bestScore=Infinity;for(let n=0;n<limit;n++){const v=voices[(nextVoiceSearch+n)%limit];if(!v.busy)continue;const span=Math.max(.001,v.end-v.peak);const fade=clamp((now-v.peak)/span,0,1);const score=v.amp*(1-fade);if(score<bestScore){bestScore=score;best=v}}if(best){try{if(best.osc){best.osc.stop(now+.001);best.osc.disconnect()}}catch(e){}best.osc=null;activeSourceVoices=Math.max(0,activeSourceVoices-1);best.busy=false;return best}}
   return null;
 }
 
@@ -2403,7 +2409,8 @@ function strikeNow(o,impact,physical=true){
 
   // The existing saw voice remains the canonical excitation layer; the new
   // modal body rings alongside it and is independently bounded for mobile.
-  playModalBody(o,impact,false);
+  // the expensive layer only for meaningful hits; the primary voice always fires
+  if(impact>12)playModalBody(o,impact,false);
 
   const t=ac.currentTime+.003;
   const v=chooseFreeVoice();
@@ -2437,6 +2444,7 @@ function strikeNow(o,impact,physical=true){
     }
   };
   osc.start(t);osc.stop(trueStop);
+  strikeCount++;
   updatePolyHeadroom(t);
   o.hit=clamp(impact/120,0,1);
   fieldDirty=true;
@@ -2466,6 +2474,7 @@ $('#audio').addEventListener('click',async()=>{
 
 // 10 ms collision coalescing + 20 ms per-orb refractory period.
 function queueHit(o,impact,physical=true){
+  collisionCount++;   // every attempt, before any gate: the honest denominator
   const now=performance.now();
   const existing=pendingHits.get(o);
 
@@ -2857,7 +2866,8 @@ function integrate(o,dt,t,now){
   if(o.y<o.r&&o.vy<0){imp=Math.max(imp,-o.vy);o.y=o.r;o.vy=-o.vy*b}
   if(o.y>H-o.r&&o.vy>0){imp=Math.max(imp,o.vy);o.y=H-o.r;o.vy=-o.vy*b}
 
-  if(imp>5&&o.wall<=0){
+  if(imp>0&&o.wall<=0)contactEvents++;
+  if(imp>1&&o.wall<=0){
     queueHit(o,imp);
     o.wall=.03;
   }
@@ -2885,7 +2895,7 @@ function collide(dt,pass){
     const rvx=b.vx-a.vx,rvy=b.vy-a.vy,closing=rvx*nx+rvy*ny;
     if(closing<0){
       const impact=-closing;
-      if(pass===0&&!previousContacts.has(key)&&impact>5){queueHit(a,impact);queueHit(b,impact)}
+      if(pass===0&&!previousContacts.has(key)){contactEvents+=2;if(impact>1){queueHit(a,impact);queueHit(b,impact)}}
       const J=-(1+.58)*closing/(a.invMass+b.invMass);
       if(!a.held){a.vx-=J*nx*a.invMass*.78;a.vy-=J*ny*a.invMass*.78}
       if(!b.held){b.vx+=J*nx*b.invMass*.78;b.vy+=J*ny*b.invMass*.78}
