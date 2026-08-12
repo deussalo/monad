@@ -1546,7 +1546,15 @@ function orbHz(o){
 function modeLabel(o){const m=materialFor(o);return m.ratios[1].toFixed(2)+'× · '+m.ratios[2].toFixed(2)+'×'}
 const pressureWaves=[],pressureWavePool=[],resonanceLinks=[];
 const MAX_PRESSURE_WAVES=8,PRESSURE_WAVE_MIN_INTERVAL_MS=24,MAX_RESONANCE_LINKS=56,MAX_MODAL_EVENTS=LOW_POWER?8:18,MAX_MODAL_PARTIALS=MAX_MODAL_EVENTS*3;
-let activeModePartials=0,lastPressureWaveAt=-1e9;
+let lastPressureWaveAt=-1e9;
+// Modal activity is read off the clock, not counted — onended bookkeeping is
+// gone with the warm pool. Approximate: 3 partials per sounding slot.
+function activeModalCount(){
+  if(!ac)return 0;
+  const now=ac.currentTime;let n=0;
+  for(const s of modalEvents)if(now<s.end)n+=3;
+  return n;
+}
 for(let i=0;i<MAX_PRESSURE_WAVES;i++)pressureWavePool.push({hit:new Set()});
 function releasePressureWaveAt(i){
   const w=pressureWaves[i],last=pressureWaves.pop();
@@ -1643,7 +1651,7 @@ function updateSettings(){
       contact_set_swap:true,
       cached_mass_powers:true,
       pooled_modal_event_nodes:true,
-      source_voice_reuse:"onended only",
+      source_voice_reuse:"warm pool, clock-based",
       simulation_fps_cap:60,
       sympathy_target_cap:MAX_SYMPATHETIC_TARGETS,
       pressure_wave_cap:MAX_PRESSURE_WAVES,
@@ -1666,7 +1674,7 @@ function updateSettings(){
       sympathetic_coupling:PHYS.sympathy,
       acoustic_pressure_feedback:PHYS.pressure,
       pressure_wave_speed_px_s:PHYS.waveSpeed,
-      active_modal_partials:activeModePartials,
+      active_modal_partials:activeModalCount(),
       pressure_waves:pressureWaves.length,
       pressure_wave_cap:MAX_PRESSURE_WAVES,
       model:"impact → material modes → sympathetic transfer → pressure impulse → new collisions"
@@ -1713,7 +1721,7 @@ function buildPreset(){
       fresh_zero_phase_oscillator_per_strike:true,static_reverb_graph:true,
       voice_stealing:false,polyphony_headroom:true,collision_batch_ms:HIT_BATCH_MS,
       orb_refractory_ms:ORB_REFRACTORY_MS,cached_atmosphere_sprites:true,cached_hot_loop_controls:true,
-      numeric_collision_keys:true,contact_set_swap:true,cached_mass_powers:true,pooled_modal_event_nodes:true,source_voice_reuse:'onended only',
+      numeric_collision_keys:true,contact_set_swap:true,cached_mass_powers:true,pooled_modal_event_nodes:true,source_voice_reuse:'warm pool, clock-based',
       simulation_fps_cap:60,sympathy_target_cap:MAX_SYMPATHETIC_TARGETS,pressure_wave_cap:MAX_PRESSURE_WAVES,pressure_wave_pool:true,offscreen_wave_cull:true,full_backbuffer_clear:true,field_fps:24
     },
     motion_loop:{
@@ -1906,21 +1914,27 @@ window.__monadAudio=function(){return ac?ac.state:'none'};
 let voiceDrops=0,modalDrops=0,collisionCount=0,strikeCount=0,contactEvents=0;
 window.__monadAudioStats=function(){return{
   state:ac?ac.state:'none',
-  voices:typeof activeSourceVoices==='number'?activeSourceVoices:-1,
-  modals:typeof activeModePartials==='number'?activeModePartials:-1,
+  voices:activeVoiceCount(),
+  modals:activeModalCount(),
   voiceDrops:voiceDrops,modalDrops:modalDrops,collisionCount:collisionCount,strikeCount:strikeCount,contactEvents:contactEvents,
   baseLatency:ac&&ac.baseLatency?+(ac.baseLatency*1000).toFixed(1):null,
   sampleRate:ac?ac.sampleRate:null
 }};
 let finalHP=null,finalLP1=null,finalLP2=null,fdn=null,driftTimer=null;
 const VOICE_POOL_SIZE=64;
+// Warm-pool sizes: oscillators that exist run FOREVER, so the pool is the
+// standing audio-thread cost. Desktop affords the full pool; phones get a
+// smaller one (32 source + 8x3 modal = 56 standing sines — comfortably cheap,
+// while 64+54 was not).
+const WARM_VOICES=LOW_POWER?32:VOICE_POOL_SIZE;
+const WARM_MODAL=LOW_POWER?8:MAX_MODAL_EVENTS;
 const voices=Array.from({length:VOICE_POOL_SIZE},()=>({
   busy:false,osc:null,gain:null,start:0,peak:0,end:0,amp:0
 }));
 const modalEvents=Array.from({length:MAX_MODAL_EVENTS},()=>({
-  busy:false,panner:null,gains:[null,null,null],remaining:0
+  busy:false,panner:null,gains:[null,null,null],oscs:[null,null,null],remaining:0,end:0
 }));
-let lastPolyNorm=-1,activeSourceVoices=0,nextVoiceSearch=0;
+let lastPolyNorm=-1,nextVoiceSearch=0;
 
 function hadamard8(){
   let h=[[1]];
@@ -1993,22 +2007,43 @@ function initAudio(){
   master.connect(limiter);
   limiter.connect(ac.destination);
 
-  // Only the gain slots are permanent. Oscillators are fresh for every strike
-  // so their waveform always begins at phase zero.
-  for(const v of voices){
+  // WARM POOL. Everything is permanent: gains AND oscillators, started once
+  // and running forever behind gain 0. A strike is retune + envelope ramps —
+  // zero allocation, zero start/stop scheduling, zero GC, no onended
+  // bookkeeping. This is the original architecture's strength restored: the
+  // per-strike path must be nearly free because "every impact sounds" makes
+  // strikes frequent by design. (The fresh-oscillator zero-phase ideal is
+  // what caused per-strike allocation; with a 2-4ms attack ramp, start phase
+  // is inaudible.) Pools are sized down on phones — a silent oscillator
+  // still costs audio-thread CPU.
+  for(let i=0;i<voices.length;i++){
+    const v=voices[i];
     v.gain=ac.createGain();
     v.gain.gain.value=0;
     v.gain.connect(voiceMix);
+    if(i<WARM_VOICES){
+      v.osc=ac.createOscillator();
+      v.osc.type=SOURCE.wave;
+      v.osc.frequency.value=261.63;
+      v.osc.connect(v.gain);
+      v.osc.start();
+    }
+    v.end=0;v.peak=0;v.amp=0;v.busy=false;
   }
 
-  // Modal events reuse permanent gain/panner nodes. Only their oscillators are
-  // ephemeral, avoiding bursts of AudioNode allocation during sympathetic hits.
-  for(const slot of modalEvents){
+  for(let s=0;s<modalEvents.length;s++){
+    const slot=modalEvents[s];
     slot.panner=ac.createStereoPanner?ac.createStereoPanner():ac.createGain();
     slot.panner.connect(modalBus);
+    slot.oscs=[null,null,null];
     for(let i=0;i<3;i++){
       const g=ac.createGain();g.gain.value=0;g.connect(slot.panner);slot.gains[i]=g;
+      if(s<WARM_MODAL){
+        const o=ac.createOscillator();o.type='sine';o.frequency.value=440;
+        o.connect(g);o.start();slot.oscs[i]=o;
+      }
     }
+    slot.end=0;
   }
 
   buildReverb();
@@ -2242,8 +2277,15 @@ function impactAmplitude(v){
   return SOURCE.level*compressed;
 }
 
-function activeVoiceCount(){return activeSourceVoices}
-
+// A voice is "sounding" purely by the clock: now < v.end. No onended, no
+// counters that can drift — Android Chrome drops onended under exactly the
+// load where a correct count matters most.
+function activeVoiceCount(){
+  if(!ac)return 0;
+  const now=ac.currentTime;let n=0;
+  for(let i=0;i<WARM_VOICES;i++)if(now<voices[i].end)n++;
+  return n;
+}
 
 function updatePolyHeadroom(t){
   if(!voiceMix)return;
@@ -2254,24 +2296,46 @@ function updatePolyHeadroom(t){
   voiceMix.gain.setTargetAtTime(norm,t,.025);
 }
 
+// Always returns a voice: a silent one when available, else the quietest
+// sounding one. The STEAL ITSELF IS SILENT — the caller ramps the residue to
+// zero before re-tuning, so a stolen voice fades in ~6ms instead of being
+// cut. (The old path called osc.stop(now+1ms) on a live oscillator: an
+// amplitude cliff, one audible click per steal, and storms steal constantly
+// — that WAS the crackle.)
 function chooseFreeVoice(){
-  const limit=Math.max(1,Math.min(VOICE_POOL_SIZE,Math.round(SOURCE.maxVoices)));
-  for(let n=0;n<limit;n++){const i=(nextVoiceSearch+n)%limit;if(!voices[i].busy){nextVoiceSearch=(i+1)%limit;return voices[i]}}
-  // onended is unreliable on Android Chrome under load; a voice that never
-  // reports back stays busy forever and silently shrinks polyphony. Reclaim any
-  // voice already past its scheduled stop. v.osc is cleared first so a late
-  // onended sees v.osc!==osc and cannot double-decrement the active count.
-  if(ac){const now=ac.currentTime;for(let n=0;n<limit;n++){const i=(nextVoiceSearch+n)%limit;const v=voices[i];if(v.busy&&now>v.end+0.05){try{if(v.osc)v.osc.disconnect()}catch(e){}v.busy=false;v.osc=null;activeSourceVoices=Math.max(0,activeSourceVoices-1);nextVoiceSearch=(i+1)%limit;return v}}}
-  // True exhaustion: STEAL rather than drop the strike. Victim is the voice
-  // furthest through its decay and quietest. v.osc is cleared before returning
-  // so a late onended cannot double-decrement the active count.
-  if(ac){const now=ac.currentTime;let best=null,bestScore=Infinity;for(let n=0;n<limit;n++){const v=voices[(nextVoiceSearch+n)%limit];if(!v.busy)continue;const span=Math.max(.001,v.end-v.peak);const fade=clamp((now-v.peak)/span,0,1);const score=v.amp*(1-fade);if(score<bestScore){bestScore=score;best=v}}if(best){try{if(best.osc){best.osc.stop(now+.001);best.osc.disconnect()}}catch(e){}best.osc=null;activeSourceVoices=Math.max(0,activeSourceVoices-1);best.busy=false;return best}}
-  return null;
+  const limit=Math.max(1,Math.min(WARM_VOICES,Math.round(SOURCE.maxVoices)));
+  const now=ac?ac.currentTime:0;
+  for(let n=0;n<limit;n++){
+    const i=(nextVoiceSearch+n)%limit,v=voices[i];
+    if(now>=v.end){nextVoiceSearch=(i+1)%limit;v.stolen=false;return v}
+  }
+  let best=null,bestScore=Infinity;
+  for(let n=0;n<limit;n++){
+    const v=voices[(nextVoiceSearch+n)%limit];
+    const span=Math.max(.001,v.end-v.peak);
+    const fade=clamp((now-v.peak)/span,0,1);
+    const score=v.amp*(1-fade);
+    if(score<bestScore){bestScore=score;best=v}
+  }
+  if(best)best.stolen=true;
+  return best;
 }
 
 
+// Time-based like the voices: a slot is free when its longest partial has
+// decayed. Prefer silent slots; else steal the one closest to silence (the
+// event path fades residue before retuning, so steals are click-free).
 function chooseFreeModalEvent(){
-  for(const slot of modalEvents)if(!slot.busy)return slot;
+  if(!ac)return null;
+  const now=ac.currentTime;
+  let best=null,bestEnd=Infinity;
+  for(let s=0;s<WARM_MODAL;s++){
+    const slot=modalEvents[s];
+    if(!slot.oscs||!slot.oscs[0])continue;
+    if(now>=slot.end)return slot;
+    if(slot.end<bestEnd){bestEnd=slot.end;best=slot}
+  }
+  return best;
   return null;
 }
 
@@ -2302,32 +2366,39 @@ function playModalBody(o,impact,sympathetic=false){
   const pan=clamp((o.x/Math.max(1,W))*2-1,-.88,.88);
   if(slot.panner.pan)slot.panner.pan.setValueAtTime(pan,t);
 
-  slot.busy=true;slot.remaining=0;
+  // WARM PATH: the slot's oscillators run forever; an event is retune + ramps.
+  // If the slot was still ringing (stolen), fade each residue linearly to zero
+  // before retuning — same click-free discipline as the source voices.
+  const stolen=ac.currentTime<slot.end;
+  slot.busy=true;slot.end=t;
   let started=0;
   for(let i=0;i<ratios.length;i++){
     const f=base*ratios[i];
+    const osc=slot.oscs[i];
+    if(!osc)continue;
     if(f>15000)continue;
     if(LOW_POWER&&i>=2&&f>2000)continue;   // masked by the reverb wash; still a full oscillator
-    const osc=ac.createOscillator(),g=slot.gains[i],gp=g.gain;
+    const gp=slot.gains[i].gain;
     const life=Math.max(.08,ring*(1-i*.13));
     const attack=sympathetic?.008:.0035+i*.0007;
-    const peak=t+attack,stop=peak+life+.018,trueStop=stop+.004;
+    let t0=t;
+    if(stolen){
+      if(gp.cancelAndHoldAtTime)gp.cancelAndHoldAtTime(t);else gp.cancelScheduledValues(t);
+      gp.linearRampToValueAtTime(0,t+.006);
+      t0=t+.006;
+    }else{
+      gp.cancelScheduledValues(t);gp.setValueAtTime(0,t);
+    }
+    const peak=t0+attack,stop=peak+life+.018;
     const microscopicDetune=((o.uid*17+i*31)%13-6)*.31;
-
-    osc.type='sine';osc.frequency.setValueAtTime(f,t);osc.detune.setValueAtTime(microscopicDetune,t);
-    gp.cancelScheduledValues(t);gp.setValueAtTime(0,t);
+    osc.frequency.setValueAtTime(f,t0);
+    osc.detune.setValueAtTime(microscopicDetune,t0);
     gp.linearRampToValueAtTime(Math.max(.00001,eventLevel*m.weights[i]),peak);
     gp.exponentialRampToValueAtTime(.000001,peak+life);gp.setValueAtTime(0,stop);
-    osc.connect(g);slot.remaining++;started++;activeModePartials++;
-    osc.onended=()=>{
-      activeModePartials=Math.max(0,activeModePartials-1);
-      slot.remaining=Math.max(0,slot.remaining-1);
-      try{osc.disconnect()}catch(e){}
-      if(slot.remaining===0)slot.busy=false
-    };
-    osc.start(t);osc.stop(trueStop);
+    started++;
+    if(stop>slot.end)slot.end=stop;
   }
-  if(!started)slot.busy=false;
+  if(!started){slot.busy=false;slot.end=0}
 }
 
 function addPressureWave(o,impact){
@@ -2402,8 +2473,8 @@ function excitePhysicalEcosystem(o,impact){
   sympatheticTransfer(o,impact);
 }
 
-function strikeNow(o,impact,physical=true){
-  const amp=impactAmplitude(impact);
+function strikeNow(o,impact,physical=true,massScale=1){
+  const amp=impactAmplitude(impact)*massScale;
   if(physical)excitePhysicalEcosystem(o,impact);
   if(!ac||ac.state!=='running'||amp<=0)return;
 
@@ -2414,36 +2485,36 @@ function strikeNow(o,impact,physical=true){
 
   const t=ac.currentTime+.003;
   const v=chooseFreeVoice();
-  if(!v){voiceDrops++;return}   // pool exhausted: the strike is silently lost
+  if(!v||!v.osc){voiceDrops++;return}   // cannot happen with a warm pool, but never throw from the hot path
 
-  const osc=ac.createOscillator();
-  osc.type=SOURCE.wave;
-  osc.frequency.setValueAtTime(hz(o.note),t);
+  // WARM PATH: no allocation, no start/stop, no onended. Retune + ramps only.
+  const g=v.gain.gain;
+  let t0=t;
+  if(v.stolen){
+    // Fade the residue to zero linearly from its HELD value, then retune at
+    // silence. ~6ms added latency on steals only; zero discontinuity.
+    if(g.cancelAndHoldAtTime)g.cancelAndHoldAtTime(t);else g.cancelScheduledValues(t);
+    g.linearRampToValueAtTime(0,t+.006);
+    t0=t+.006;
+  }else{
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(0,t);
+  }
+  if(v.osc.type!==SOURCE.wave)v.osc.type=SOURCE.wave;   // property set; only when the user changed waveform
+  v.osc.frequency.setValueAtTime(hz(o.note),t0);        // retune happens at zero gain
 
   const sizeNorm=clamp((o.r-MIN_R)/(MAX_R-MIN_R),0,1);
   const ring=Math.max(.03,SOURCE.decay*(1+SOURCE.sizeRing*sizeNorm));
   const attack=Math.max(.001,SOURCE.attack);
-  const peak=t+attack;
+  const peak=t0+attack;
   const end=peak+ring;
-  const stop=end+.012,trueStop=stop+.004;
+  const stop=end+.012;
 
-  const g=v.gain.gain;
-  g.cancelScheduledValues(t);
-  g.setValueAtTime(0,t);
   g.linearRampToValueAtTime(Math.max(.00002,amp),peak);
   g.exponentialRampToValueAtTime(.000001,end);
   g.setValueAtTime(0,stop);
 
-  osc.connect(v.gain);
-  v.busy=true;v.osc=osc;v.start=t;v.peak=peak;v.end=trueStop;v.amp=amp;activeSourceVoices++;
-  osc.onended=()=>{
-    try{osc.disconnect()}catch(e){}
-    if(v.osc===osc){
-      v.busy=false;v.osc=null;activeSourceVoices=Math.max(0,activeSourceVoices-1);
-      updatePolyHeadroom(ac.currentTime);
-    }
-  };
-  osc.start(t);osc.stop(trueStop);
+  v.busy=true;v.start=t0;v.peak=peak;v.end=stop;v.amp=amp;
   strikeCount++;
   updatePolyHeadroom(t);
   o.hit=clamp(impact/120,0,1);
@@ -2455,7 +2526,7 @@ function updateVoiceStat(now){
   if(!devVisible())return;   // stats live in diagnostics
   lastStat=now;
   $('#statVoices').textContent=activeVoiceCount();
-  $('#statModes').textContent=activeModePartials;
+  $('#statModes').textContent=activeModalCount();
   $('#statWaves').textContent=pressureWaves.length+'/'+MAX_PRESSURE_WAVES;
 }
 
@@ -2498,9 +2569,19 @@ function flushHits(){
 
   const now=performance.now();
 
+  // MASS NORMALIZATION. When one flush releases many simultaneous strikes
+  // (a cluster collapsing), their peaks are coherent enough to stack — the
+  // limiter slams and the top of the mix crackles. Scale each strike by
+  // 1/sqrt(n/4) beyond 4 so a pile-up reads as one loud event, not n
+  // stacked ones. Per-voice envelopes are untouched; this is the "debounce
+  // and normalize" of the original design applied at the right seam.
+  let n=0;
+  pendingHits.forEach((v,o)=>{if(now-o.lastStrikeSent>=ORB_REFRACTORY_MS)n++});
+  const massScale=n<=4?1:1/Math.sqrt(n/4);
+
   pendingHits.forEach((v,o)=>{
     if(now-o.lastStrikeSent>=ORB_REFRACTORY_MS){
-      strikeNow(o,v.impact,v.physical);
+      strikeNow(o,v.impact,v.physical,massScale);
       o.lastStrikeSent=now;
     }
   });
