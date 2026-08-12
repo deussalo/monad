@@ -1516,6 +1516,13 @@ $('#revEq').append(sliderControl(R,'outLP','Final low-pass 24 dB',300,20000,1,' 
 for(let i=0;i<8;i++){const proxy={get v(){return R.delays[i]},set v(x){R.delays[i]=x}};const c=sliderControl(proxy,'v','Delay '+(i+1),20,350,.1,' ms',sendParams);$('#revDelays').append(c)}
 
 function updateSettings(){
+  // This builds a multi-KB JSON string and writes four DOM nodes — all of
+  // them inside the hidden diagnostics layer. Wheel drags call it per input
+  // event (up to 120/s), which was pure garbage-collector pressure during
+  // the exact moments that must stay smooth. Skip unless diagnostics are
+  // actually visible; toggleDev(true) repaints on open.
+  const dev=$('#dev');
+  if(dev&&dev.hidden)return;
   $('#settings').value=JSON.stringify({
     optimizations:{
       standalone_file:true,
@@ -2084,8 +2091,20 @@ function applyReverb(){
   }
 }
 
+// Wheel drags dispatch 'input' per pointermove — up to 120 events/s, and
+// applyReverb() issues ~100 AudioParam automations per call. Coalesce: mark
+// dirty, flush at most once every 30 ms from the frame loop. The audible
+// result is identical (setTargetAtTime smooths anyway); the main thread
+// stops paying the automation cost per touch sample.
+let audioParamsDirty=false,lastParamFlush=0;
 function sendParams(){
   if(!ac)return;
+  audioParamsDirty=true;
+}
+function flushAudioParams(now){
+  if(!audioParamsDirty||!ac)return;
+  if(now-lastParamFlush<30)return;
+  lastParamFlush=now;audioParamsDirty=false;
   applyReverb();
 }
 
@@ -2297,6 +2316,7 @@ function strikeNow(o,impact,physical=true){
 
 function updateVoiceStat(now){
   if(!ac||now-lastStat<STAT_INTERVAL_MS)return;
+  const dev=$('#dev');if(dev&&dev.hidden)return;   // stats live in diagnostics
   lastStat=now;
   $('#statVoices').textContent=activeVoiceCount();
   $('#statModes').textContent=activeModePartials;
@@ -3431,6 +3451,8 @@ function toggleDev(force){
   const d=$('#dev');
   const show=force===undefined?d.hidden:force;
   d.hidden=!show;
+  // diagnostics skip their (expensive) repaints while hidden — refresh on open
+  if(show){try{updateSettings();refreshPresetBox()}catch(err){}}
 }
 addEventListener('keydown',e=>{
   if(e.target&&/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))return;
@@ -3487,7 +3509,15 @@ layoutShell();
 // out twice, in separate frames.
 
 
-function resize(){const r=stage.getBoundingClientRect();W=Math.max(1,r.width);H=Math.max(1,r.height);DPR=Math.min(devicePixelRatio||1,1.5);body.width=Math.round(W*DPR);body.height=Math.round(H*DPR);bctx.setTransform(DPR,0,0,DPR,0,0);FW=Math.ceil(W*FIELD_SCALE);FH=Math.ceil(H*FIELD_SCALE);field.width=FW;field.height=FH;haze.width=FW;haze.height=FH;glowC.width=FW;glowC.height=FH;
+let lastSizeKey='';
+function resize(){const r=stage.getBoundingClientRect();W=Math.max(1,r.width);H=Math.max(1,r.height);DPR=Math.min(devicePixelRatio||1,1.5);
+  // Mobile browsers fire ResizeObserver for URL-bar show/hide and momentary
+  // viewport nudges. Reallocating five canvases mid-touch is a guaranteed
+  // hitch, so only realloc when the physical size actually changed.
+  const key=Math.round(W*DPR)+'x'+Math.round(H*DPR);
+  if(key===lastSizeKey){try{layoutShell()}catch(err){}return}
+  lastSizeKey=key;
+  body.width=Math.round(W*DPR);body.height=Math.round(H*DPR);bctx.setTransform(DPR,0,0,DPR,0,0);FW=Math.ceil(W*FIELD_SCALE);FH=Math.ceil(H*FIELD_SCALE);field.width=FW;field.height=FH;haze.width=FW;haze.height=FH;glowC.width=FW;glowC.height=FH;
   if(fluidOn&&window.MonadFluid){try{window.MonadFluid.resize(W,H,DPR)}catch(err){}}
   prunePressureWaves();fieldDirty=true;
   try{layoutShell()}catch(err){}}
@@ -3502,8 +3532,13 @@ function frame(now){
   // Instrumentation must never be able to stop the instrument: these live
   // below the shell, so a shell failure leaves them in the temporal dead zone.
   try{adaptQuality(now,frameMs);perfTick(now,frameMs)}catch(err){}
-  if(now-lastSimFrame<SIM_MIN_FRAME_MS)return;
+  // No minimum-frame gate: the loop renders on EVERY rAF tick. The old
+  // 12 ms gate skipped alternate frames on 90/120 Hz panels — permanent
+  // judder on exactly the devices with the best displays. Physics is
+  // dt-integrated, so native-rate stepping is stable and free at this
+  // body count; smoothness comes from pacing, not from skipped work.
   lastSimFrame=now;
+  flushAudioParams(now);
   const dt=Math.min(.025,(now-last)/1000||.016);
   last=now;
 
@@ -3536,7 +3571,13 @@ function frame(now){
 //   3 full | 2 no bloom | 1 no bloom + 70% buffer | 0 fluid off (2D) | -1 bare
 // ---------------------------------------------------------------------------
 let qLevel=3,qSlow=0,qLastChange=0;
-const FRAME_BUDGET_MS=1000/50;   // cannot hold ~50fps -> shed work
+// The frame budget tracks the panel, not a fixed 50 fps floor. panelMs is the
+// fastest interval ever observed (~= refresh period: 16.7 on 60 Hz, 8.3 on
+// 120 Hz). Work is shed when frames run over ~1.45x the panel period, so a
+// ProMotion phone sheds until it actually holds high refresh instead of
+// sitting "close enough" at a juddery 70.
+let panelMs=16.7;
+function frameBudgetMs(){return Math.max(11,panelMs*1.45)}
 function applyQuality(){
   const F=window.MonadFluid;
   if(qLevel>=3){if(F&&F.quality)F.quality({bloom:true,scale:1})}
@@ -3550,7 +3591,8 @@ function applyQuality(){
   }
 }
 function adaptQuality(now,frameMs){
-  if(frameMs>FRAME_BUDGET_MS)qSlow++;else qSlow=Math.max(0,qSlow-2);
+  if(frameMs>4&&frameMs<panelMs)panelMs=Math.max(4,frameMs);
+  if(frameMs>frameBudgetMs())qSlow++;else qSlow=Math.max(0,qSlow-2);
   if(qSlow>45&&qLevel>-1&&now-qLastChange>2500){
     qLevel--;qSlow=0;qLastChange=now;applyQuality();
   }
