@@ -927,7 +927,7 @@ body.fluid #veil,body.fluid #grain{display:none}
   var vel = null, dye = null, ground = null;   // ping-pong pairs + ground scratch
   var GROUND_W = 96, GROUND_H = 64, groundAge = 1e9;
   var simW = 1, simH = 1, dispW = 1, dispH = 1, dpr = 1;
-  var time = 0, ok = false;
+  var time = 0, ok = false, listening = false;
 
   function compile(vsSrc, fsSrc) {
     function sh(type, src) {
@@ -998,10 +998,32 @@ body.fluid #veil,body.fluid #grain{display:none}
     return !!(vel && dye && ground);
   }
 
+  /* A lost context turns every GL call into a silent no-op and leaves an opaque
+     black canvas covering the instrument. Drop back to the 2D atmosphere until
+     the browser hands the context back. */
+  function handleLost(e) {
+    e.preventDefault();
+    ok = false; api.available = false;
+    vel = dye = ground = null;
+    progVel = progAdv = progSplat = progComp = progGround = null;
+    vao = quad = null;
+    if (typeof api.onContextLost === 'function') api.onContextLost();
+  }
+  function handleRestored() {
+    if (!canvas) return;
+    gl = null;
+    if (init(canvas) && typeof api.onContextRestored === 'function') api.onContextRestored();
+  }
+
   function init(target) {
     if (ok) return true;
     try {
       canvas = target;
+      if (!listening) {
+        listening = true;
+        canvas.addEventListener('webglcontextlost', handleLost, false);
+        canvas.addEventListener('webglcontextrestored', handleRestored, false);
+      }
       gl = canvas.getContext('webgl2', {
         alpha: true, antialias: false, depth: false, stencil: false,
         premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance'
@@ -2688,6 +2710,18 @@ function initFluid(){
   fluidOn=true;
   fluidCanvas.style.display='block';
   document.body.classList.add('fluid');
+  F.onContextLost=()=>{
+    fluidOn=false;
+    fluidCanvas.style.display='none';
+    document.body.classList.remove('fluid');
+    fieldDirty=true;
+  };
+  F.onContextRestored=()=>{
+    fluidOn=true;
+    fluidCanvas.style.display='block';
+    document.body.classList.add('fluid');
+    try{F.resize(W,H,DPR)}catch(err){}
+  };
   try{F.resize(W,H,DPR)}catch(err){}
   return true;
 }
