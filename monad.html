@@ -196,6 +196,602 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--ground);color:va
 </div>
 
 <script>
+/* MonadVoicing — voicing engine for monad.html
+ * Exposes window.MonadVoicing — plain IIFE, no imports, no external deps.
+ * Drop-in replacement for makeStack()/nextNote() in monad.html.
+ * tick(nowMs) must be called each animation frame for drift mode.
+ */
+(function (global) {
+  'use strict';
+
+  /* ── MIDI roots ────────────────────────────────────────────────────────────
+   * Matches monad.html exactly: E1(28) E2(40) E3(52), weights [1, 4.4, 3.2].
+   * Middle octave is most likely; bass octave rare — keeps music airy.
+   */
+  var ROOTS = [28, 40, 52];
+
+  /* ── Mode catalogue ────────────────────────────────────────────────────────
+   * semitones: 6 ascending offsets from root (same meaning as monad makeStack).
+   * rootWeights: 3 weights parallel to ROOTS.
+   * drift: true only for the drift entry.
+   *
+   * Interval choices are tuned for calm / windchime character at low-mid register.
+   * No offset pushes root=52 past MIDI 84 (52+29=81 ≤ 84). ✓
+   */
+  var MODES = [
+    {
+      id: 'quartal',
+      // Pure stacked perfect 4ths (+5 each).  Evenly spaced — gives the most
+      // uniform constellation and a wide open, harp-like sound.
+      semitones: [0, 5, 10, 15, 20, 25],
+      rootWeights: [1, 4.4, 3.2],
+      drift: false
+    },
+    {
+      id: 'quintal',
+      // DEFAULT. Exact replica of monad.html makeStack: E B F# G D A.
+      // Steps: +7 +7 +1 +7 +7 — the +1 cluster is the characteristic voicing.
+      semitones: [0, 7, 14, 15, 22, 29],
+      rootWeights: [1, 4.4, 3.2],
+      drift: false
+    },
+    {
+      id: 'jazz',
+      // Maj7/9 shell: root M3 P5 M7 M9 M10.
+      // Dense upper cluster; rootWeights tilted high for brighter register.
+      semitones: [0, 4, 7, 11, 14, 16],
+      rootWeights: [1, 3.8, 4.2],
+      drift: false
+    },
+    {
+      id: 'natural_minor',
+      // Aeolian hexatonic: R M2 m3 P4 P5 m7.
+      // Compact span (10 st) — small constellation tightly clustered left.
+      semitones: [0, 2, 3, 5, 7, 10],
+      rootWeights: [1, 4.4, 3.2],
+      drift: false
+    },
+    {
+      id: 'dorian',
+      // R M2 m3 P4 P5 M6.  Similar span to natural_minor but the raised 6th
+      // shifts the last dot right — two clusters with a notable central gap.
+      semitones: [0, 2, 3, 5, 7, 9],
+      rootWeights: [1, 4.4, 3.2],
+      drift: false
+    },
+    {
+      id: 'egyptian',
+      // Egyptian suspended pentatonic + octave: R M2 P4 P5 m7 Oct.
+      // Three clear pairs with equal-ish gaps — very open sound.
+      semitones: [0, 2, 5, 7, 10, 12],
+      rootWeights: [1, 4.4, 3.2],
+      drift: false
+    },
+    {
+      id: 'hirajoshi',
+      // Japanese: R M2 m3 P5 m6 Oct.
+      // Two tight clusters (0-2-3 and 7-8) with a large gap between — the most
+      // visually distinctive constellation (two blobs separated by void).
+      semitones: [0, 2, 3, 7, 8, 12],
+      rootWeights: [1, 4.0, 3.6],
+      drift: false
+    },
+    {
+      id: 'double_harmonic',
+      // Double harmonic (Arabic / Hijaz-like hexatonic): R m2 M3 P4 P5 m6.
+      // Three pairs of close intervals — dense, exotic clustering.
+      semitones: [0, 1, 4, 5, 7, 8],
+      rootWeights: [1, 4.4, 3.2],
+      drift: false
+    },
+    {
+      id: 'drift',
+      // Starts as quintal; tick() slowly lerps toward random non-drift targets.
+      // semitones here are kept in sync with _ds.current (rounded integers).
+      semitones: [0, 7, 14, 15, 22, 29],
+      rootWeights: [1, 4.4, 3.2],
+      drift: true
+    }
+  ];
+
+  /* ── Internal playback state ───────────────────────────────────────────── */
+  var _currentId = 'quintal';
+  var _stack = [];
+  var _idx = 0;
+
+  /* ── Drift engine state ────────────────────────────────────────────────── */
+  var _ds = {
+    current:       [0, 7, 14, 15, 22, 29].slice(),  // float intervals
+    target:        [0, 7, 14, 15, 22, 29].slice(),
+    currentW:      [1, 4.4, 3.2].slice(),            // float rootWeights
+    targetW:       [1, 4.4, 3.2].slice(),
+    nextShiftMs:   0,    // set on first tick
+    lastTickMs:    0
+  };
+
+  /* ── Helpers ───────────────────────────────────────────────────────────── */
+  function _weightedRoot(weights) {
+    var total = 0;
+    for (var i = 0; i < weights.length; i++) total += weights[i];
+    var r = Math.random() * total;
+    for (var j = 0; j < ROOTS.length; j++) {
+      r -= weights[j];
+      if (r <= 0) return ROOTS[j];
+    }
+    return ROOTS[1]; // fallback E2
+  }
+
+  function _makeStack(semitones, rootWeights) {
+    var root = _weightedRoot(rootWeights);
+    var s = [];
+    for (var i = 0; i < semitones.length; i++) {
+      s.push(Math.round(root + semitones[i]));
+    }
+    return s;
+  }
+
+  function _modeById(id) {
+    for (var i = 0; i < MODES.length; i++) {
+      if (MODES[i].id === id) return MODES[i];
+    }
+    return null;
+  }
+
+  /* ── Public API ────────────────────────────────────────────────────────── */
+
+  /** Switch active mode; resets the current stack. */
+  function setMode(id) {
+    if (!_modeById(id)) return;
+    _currentId = id;
+    _stack = [];
+    _idx = 0;
+  }
+
+  /**
+   * Drop-in replacement for monad.html nextNote().
+   * Same stack-then-advance semantics; weighted root selection per-mode.
+   * Returns a MIDI integer. Notes stay in 28..81 range across all modes.
+   */
+  function nextNote() {
+    var mode = _modeById(_currentId);
+    if (!mode) return 52;
+    if (!_stack.length || _idx >= 6) {
+      _stack = _makeStack(mode.semitones, mode.rootWeights);
+      _idx = 0;
+    }
+    return _stack[_idx++];
+  }
+
+  /**
+   * Call each animation frame with performance.now().
+   * Only does work in drift mode; safe to call in all modes.
+   */
+  function tick(nowMs) {
+    if (_ds.lastTickMs === 0) {
+      _ds.lastTickMs = nowMs;
+      _ds.nextShiftMs = nowMs + 30000; // first drift after 30 s
+      return;
+    }
+
+    var dt = nowMs - _ds.lastTickMs;
+    _ds.lastTickMs = nowMs;
+
+    if (_currentId !== 'drift') return;
+
+    // Pick a new target mode when timer fires
+    if (nowMs >= _ds.nextShiftMs) {
+      var candidates = [];
+      for (var k = 0; k < MODES.length; k++) {
+        if (!MODES[k].drift) candidates.push(MODES[k]);
+      }
+      var t = candidates[Math.floor(Math.random() * candidates.length)];
+      _ds.target  = t.semitones.slice().map(Number);
+      _ds.targetW = t.rootWeights.slice();
+      // Next shift in 60–120 s
+      _ds.nextShiftMs = nowMs + 60000 + Math.random() * 60000;
+    }
+
+    // Exponential approach — 120 s time constant (≈63 % of distance in 2 min)
+    var alpha = 1 - Math.exp(-dt / 120000);
+    var i;
+    for (i = 0; i < 6; i++) {
+      _ds.current[i] += (_ds.target[i] - _ds.current[i]) * alpha;
+    }
+    for (i = 0; i < 3; i++) {
+      _ds.currentW[i] += (_ds.targetW[i] - _ds.currentW[i]) * alpha;
+    }
+
+    // Sync the drift mode def so callers that read MODES[].semitones stay current
+    var driftDef = _modeById('drift');
+    for (i = 0; i < 6; i++) driftDef.semitones[i] = Math.round(_ds.current[i]);
+    for (i = 0; i < 3; i++) driftDef.rootWeights[i] = _ds.currentW[i];
+  }
+
+  /**
+   * Returns dot positions for drawing a 34 px constellation icon.
+   *
+   * dots: array of 6 {a: 0..1} where a is the normalized linear position.
+   *       dot spacing = intervals (larger gap → further apart visually).
+   * span: total semitone span; pass to drawing code as scale hint so the
+   *       caller can compare modes on a common axis (e.g. span/29 * 34 px).
+   *
+   * Drift returns the current float state so icons animate smoothly as it morphs.
+   */
+  function constellation(id) {
+    var mode = _modeById(id);
+    if (!mode) return { dots: [], span: 0 };
+
+    // Use float current for drift so the icon animates continuously
+    var raw = (id === 'drift') ? _ds.current : mode.semitones;
+    var first = raw[0];
+    var last  = raw[raw.length - 1];
+    var span  = last - first;
+    if (span <= 0) span = 1;
+
+    var dots = [];
+    for (var i = 0; i < raw.length; i++) {
+      dots.push({ a: (raw[i] - first) / span });
+    }
+
+    return { dots: dots, span: span };
+  }
+
+  /**
+   * Plays the mode as a soft ascending arpeggio.
+   * Calls strike(midiInt, amp, delaySeconds) — caller supplies the callback.
+   * Uses E3 (MIDI 52) as audition root so preview is always in mid register.
+   * ~90 ms spacing, amplitude decays 0.82× per step.
+   */
+  function audition(id, strike, nowMs) {
+    var mode = _modeById(id);
+    if (!mode || typeof strike !== 'function') return;
+
+    var ROOT    = 52; // E3
+    var SPACING = 0.09; // seconds between notes
+    var amp     = 0.65;
+    var AMP_DECAY = 0.82;
+
+    for (var i = 0; i < mode.semitones.length; i++) {
+      var midi = mode.semitones[i] + ROOT;
+      if (midi < 0) midi = 0;
+      if (midi > 127) midi = 127;
+      strike(midi, amp, i * SPACING);
+      amp *= AMP_DECAY;
+    }
+  }
+
+  /* ── Export ────────────────────────────────────────────────────────────── */
+  global.MonadVoicing = {
+    /** Ordered mode catalogue — read-only by convention. */
+    modes: MODES,
+
+    /** ID of the currently active mode. */
+    get current() { return _currentId; },
+
+    setMode:       setMode,
+    nextNote:      nextNote,
+    tick:          tick,
+    constellation: constellation,
+    audition:      audition
+  };
+
+}(window));
+</script>
+
+<script>
+/* MonadPalette — photo→palette extraction for monad.html
+ * Exposes window.MonadPalette — plain IIFE, no imports, no external deps.
+ * Client-side only; no network calls; no user-visible text injected into DOM.
+ */
+(function (global) {
+  'use strict';
+
+  /* ── Helpers ───────────────────────────────────────────────────────────── */
+  function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+  function lum(r, g, b) {
+    // Relative luminance (sRGB, linearised via approximate gamma)
+    var rr = r / 255, gg = g / 255, bb = b / 255;
+    return 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
+  }
+
+  function hexToRgb(h) {
+    var n = parseInt(h.replace('#', ''), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  function rgbToHex(rgb) {
+    return '#' + rgb.map(function (v) {
+      return clamp(Math.round(v), 0, 255).toString(16).padStart(2, '0');
+    }).join('');
+  }
+
+  /* ── HSL utilities (for harmonize) ────────────────────────────────────── */
+  function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    var max = Math.max(r, g, b), min = Math.min(r, g, b);
+    var l = (max + min) / 2;
+    if (max === min) return [0, 0, l];
+    var d = max - min;
+    var s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    var h;
+    if (max === r)      h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (max === g) h = ((b - r) / d + 2) / 6;
+    else                h = ((r - g) / d + 4) / 6;
+    return [h, s, l];
+  }
+
+  function hslToRgb(h, s, l) {
+    if (s === 0) {
+      var v = Math.round(l * 255);
+      return [v, v, v];
+    }
+    var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    var p = 2 * l - q;
+    function hue(t) {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    }
+    return [
+      Math.round(hue(h + 1 / 3) * 255),
+      Math.round(hue(h)         * 255),
+      Math.round(hue(h - 1 / 3) * 255)
+    ];
+  }
+
+  /* ── Median-cut quantizer ──────────────────────────────────────────────── */
+  /**
+   * Classic recursive median cut.
+   * pixels: array of [r,g,b] triples (already downsampled).
+   * n:      target colour count (8 by default).
+   * Returns an array of [r,g,b] averages, length = n.
+   */
+  function medianCut(pixels, n) {
+    if (!pixels.length) return [[128, 128, 128]];
+    var depth = Math.ceil(Math.log2(Math.max(1, n)));
+
+    function averageBucket(bucket) {
+      var sr = 0, sg = 0, sb = 0;
+      for (var i = 0; i < bucket.length; i++) {
+        sr += bucket[i][0]; sg += bucket[i][1]; sb += bucket[i][2];
+      }
+      var l = bucket.length;
+      return [sr / l, sg / l, sb / l];
+    }
+
+    function cut(bucket, d) {
+      if (d === 0 || bucket.length <= 1) {
+        return bucket.length ? [averageBucket(bucket)] : [];
+      }
+
+      // Find channel with maximum range
+      var minC = [255, 255, 255], maxC = [0, 0, 0];
+      for (var i = 0; i < bucket.length; i++) {
+        var p = bucket[i];
+        for (var c = 0; c < 3; c++) {
+          if (p[c] < minC[c]) minC[c] = p[c];
+          if (p[c] > maxC[c]) maxC[c] = p[c];
+        }
+      }
+      var ranges = [maxC[0] - minC[0], maxC[1] - minC[1], maxC[2] - minC[2]];
+      var ch = 0;
+      if (ranges[1] > ranges[ch]) ch = 1;
+      if (ranges[2] > ranges[ch]) ch = 2;
+
+      // Sort along widest axis and split at median
+      bucket.sort(function (a, b) { return a[ch] - b[ch]; });
+      var mid = bucket.length >> 1;
+
+      var lo = cut(bucket.slice(0, mid), d - 1);
+      var hi = cut(bucket.slice(mid),    d - 1);
+      return lo.concat(hi);
+    }
+
+    var colors = cut(pixels, depth);
+
+    // If fewer colors than requested (degenerate input), pad with first color
+    while (colors.length < n) colors.push(colors[0] || [0, 0, 0]);
+    return colors.slice(0, n);
+  }
+
+  /* ── Source → 2D context helper ────────────────────────────────────────── */
+  /**
+   * Draws source onto a canvas capped at MAX_DIM on its longest axis.
+   * Returns {ctx, w, h} or throws.
+   */
+  var MAX_DIM = 128;
+
+  function sourceToCtx(source) {
+    var sw, sh;
+
+    if (typeof ImageBitmap !== 'undefined' && source instanceof ImageBitmap) {
+      sw = source.width;
+      sh = source.height;
+    } else if (source instanceof HTMLImageElement) {
+      sw = source.naturalWidth;
+      sh = source.naturalHeight;
+    } else if (source instanceof HTMLCanvasElement) {
+      sw = source.width;
+      sh = source.height;
+    } else if (typeof OffscreenCanvas !== 'undefined' && source instanceof OffscreenCanvas) {
+      sw = source.width;
+      sh = source.height;
+    } else {
+      throw new TypeError('fromImage: source must be ImageBitmap, HTMLImageElement, or Canvas');
+    }
+
+    if (!sw || !sh) throw new TypeError('fromImage: source has zero dimensions');
+
+    var scale = Math.min(1, MAX_DIM / Math.max(sw, sh));
+    var w = Math.max(1, Math.round(sw * scale));
+    var h = Math.max(1, Math.round(sh * scale));
+
+    var canvas = document.createElement('canvas');
+    canvas.width  = w;
+    canvas.height = h;
+    var ctx = canvas.getContext('2d');
+    ctx.drawImage(source, 0, 0, w, h);
+    return { ctx: ctx, w: w, h: h };
+  }
+
+  /* ── Public API ────────────────────────────────────────────────────────── */
+
+  /**
+   * fromImage(source, n=8)
+   * → Promise<string[]> of n '#rrggbb' hex values, sorted darkest→lightest.
+   *
+   * Downsamples to ≤128 px before quantizing (keeps median-cut fast even on
+   * 3000×2000 originals; measured ~4–18 ms on that size depending on device).
+   *
+   * Supports: ImageBitmap, HTMLImageElement, HTMLCanvasElement, OffscreenCanvas.
+   */
+  function fromImage(source, n) {
+    if (n === undefined) n = 8;
+    return new Promise(function (resolve, reject) {
+      var result;
+      try {
+        var ref = sourceToCtx(source);
+        var imageData = ref.ctx.getImageData(0, 0, ref.w, ref.h);
+        var data = imageData.data;
+
+        // Collect opaque pixels only
+        var pixels = [];
+        for (var i = 0; i < data.length; i += 4) {
+          if (data[i + 3] < 128) continue; // skip transparent / semi-transparent
+          pixels.push([data[i], data[i + 1], data[i + 2]]);
+        }
+
+        if (!pixels.length) {
+          reject(new Error('fromImage: no opaque pixels in source'));
+          return;
+        }
+
+        var colors = medianCut(pixels, n);
+
+        // Sort darkest → lightest by relative luminance
+        colors.sort(function (a, b) {
+          return lum(a[0], a[1], a[2]) - lum(b[0], b[1], b[2]);
+        });
+
+        result = colors.slice(0, n).map(function (c) {
+          return rgbToHex(c);
+        });
+      } catch (err) {
+        reject(err);
+        return;
+      }
+      resolve(result);
+    });
+  }
+
+  /**
+   * attachDropTarget(el, onPalette)
+   * Wires dragover/drop + document-level paste for image files on el.
+   * Calls onPalette(hexArray, {x, y}) with drop point in CSS px.
+   * Returns a detach() function.
+   * Never navigates the page away; only prevents default on image drops/pastes.
+   */
+  function attachDropTarget(el, onPalette) {
+    function processFile(file, x, y) {
+      if (!file || !file.type.startsWith('image/')) return;
+      createImageBitmap(file).then(function (bmp) {
+        return fromImage(bmp, 8).then(function (hexes) {
+          bmp.close();
+          onPalette(hexes, { x: x, y: y });
+        });
+      }).catch(function (err) {
+        console.warn('MonadPalette: drop failed', err);
+      });
+    }
+
+    function onDragover(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+    }
+
+    function onDrop(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var rect = el.getBoundingClientRect();
+      var x = e.clientX - rect.left;
+      var y = e.clientY - rect.top;
+      var file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      processFile(file, x, y);
+    }
+
+    function onPaste(e) {
+      var items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith('image/')) {
+          e.preventDefault();
+          var file = items[i].getAsFile();
+          processFile(file, 0, 0);
+          return;
+        }
+      }
+    }
+
+    el.addEventListener('dragover', onDragover);
+    el.addEventListener('drop',     onDrop);
+    document.addEventListener('paste', onPaste);
+
+    return function detach() {
+      el.removeEventListener('dragover', onDragover);
+      el.removeEventListener('drop',     onDrop);
+      document.removeEventListener('paste', onPaste);
+    };
+  }
+
+  /**
+   * harmonize(hexes)
+   * Lightly adjusts the sorted-by-luminance palette so:
+   *   index 0 → guaranteed dark background candidate (lum ≤ 0.08)
+   *   last index → guaranteed bright accent (lum ≥ 0.65)
+   *   middle swatches → saturation nudged +~12 % for instrument vividness.
+   * Returns a new array of '#rrggbb' strings; does not mutate input.
+   */
+  function harmonize(hexes) {
+    if (!hexes || !hexes.length) return [];
+    var n = hexes.length;
+
+    return hexes.map(function (hex, i) {
+      var rgb = hexToRgb(hex);
+      var hsl = rgbToHsl(rgb[0], rgb[1], rgb[2]);
+      var h = hsl[0], s = hsl[1], l = hsl[2];
+
+      if (i === 0) {
+        // Dark end — pull luminance down to background-viable level
+        l = Math.min(l, 0.08);
+        s = Math.max(s, 0.08); // preserve a trace of chroma for warmth
+      } else if (i === n - 1) {
+        // Bright end — ensure readable accent luminance
+        l = Math.max(l, 0.65);
+      } else {
+        // Mid-range — lift saturation so any muted photo stays instrument-useful
+        s = Math.min(1, s * 1.15 + 0.04);
+      }
+
+      return rgbToHex(hslToRgb(h, s, l));
+    });
+  }
+
+  /* ── Export ────────────────────────────────────────────────────────────── */
+  global.MonadPalette = {
+    fromImage:        fromImage,
+    attachDropTarget: attachDropTarget,
+    harmonize:        harmonize
+  };
+
+}(window));
+</script>
+
+<script>
 (()=>{'use strict';
 const $=q=>document.querySelector(q),clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 const stage=$('#stage'),field=$('#field'),body=$('#bodies'),haze=$('#haze');
@@ -283,7 +879,14 @@ function prunePressureWaves(){for(let i=pressureWaves.length-1;i>=0;i--)if(!pres
 const ROOTS=[28,40,52],ROOT_WEIGHTS=[1,4.4,3.2];let stack=[],stackIndex=0;
 function weightedRoot(){let total=ROOT_WEIGHTS.reduce((a,b)=>a+b,0),r=Math.random()*total;for(let i=0;i<ROOT_WEIGHTS.length;i++){r-=ROOT_WEIGHTS[i];if(r<=0)return ROOTS[i]}return 40}
 function makeStack(){const e=weightedRoot();return[e,e+7,e+14,e+15,e+22,e+29]}
-function nextNote(){if(!stack.length||stackIndex>=6){stack=makeStack();stackIndex=0}return stack[stackIndex++]}
+// The voicing engine owns note choice; the local stack is the fallback if it is
+// ever absent. Its 'quintal' default reproduces this makeStack() exactly.
+function nextNote(){
+  const MV=window.MonadVoicing;
+  if(MV)return MV.nextNote();
+  if(!stack.length||stackIndex>=6){stack=makeStack();stackIndex=0}
+  return stack[stackIndex++];
+}
 function randomColour(){return PALETTE[Math.floor(Math.random()*PALETTE.length)]}
 
 const names=['C','C♯','D','E♭','E','F','F♯','G','A♭','A','B♭','B'],noteName=m=>names[m%12]+(Math.floor(m/12)-1);
@@ -439,6 +1042,7 @@ function buildPreset(){
       background,
       palette:[...PALETTE]
     },
+    voicing:{mode:window.MonadVoicing?window.MonadVoicing.current:'quintal'},
     scene:{
       coordinate_space:'normalized',
       orbs:orbs.filter(o=>!o.deleted).map(o=>({
@@ -517,6 +1121,7 @@ function applyPresetObject(p){
   if(Number.isFinite(+env.over_light))setInputValue('hazeAmt',clamp(+env.over_light,0,.6));
   if(['screen','lighter','source-over'].includes(env.mix))setInputValue('mix',env.mix);
 
+  if(p.voicing&&typeof p.voicing.mode==='string'&&window.MonadVoicing)window.MonadVoicing.setMode(p.voicing.mode);
   const colour=p.colour||p.color||{};
   importPalette(colour.palette);
   if(typeof colour.background==='string'&&/^#[0-9a-f]{6}$/i.test(colour.background)){
@@ -1841,9 +2446,66 @@ function makeSwatch(i){
   return node;
 }
 
+// A voicing reads as an interval constellation: a vertical stack whose dot
+// spacing IS the interval structure, and whose overall length is the mode's
+// span. Dots closer than the dot diameter are merged into one larger mark —
+// otherwise quintal's +1 semitone pair renders as an illegible smudge.
+const CONST_LEN=32,CONST_MAXSPAN=29,MERGE_PX=3.4;
+function makeVoicingNode(mode){
+  const inner=sv('g',null,'node bloom'),g=wrapNode(inner);
+  inner.appendChild(sv('circle',{r:24},'plate'));
+  const axis=sv('line',{x1:0,x2:0,stroke:'var(--ink)','stroke-width':.8},'');inner.appendChild(axis);
+  const dotsG=sv('g');inner.appendChild(dotsG);
+  const pad=sv('circle',{r:28,tabindex:'0','aria-label':'voicing'},'hitpad');inner.appendChild(pad);
+  const node={g,el:inner,cx:0,cy:0};
+  function paint(){
+    const MV=window.MonadVoicing;if(!MV)return;
+    const c=MV.constellation(mode.id);
+    const active=MV.current===mode.id;
+    const len=CONST_LEN*clamp(c.span/CONST_MAXSPAN,.2,1);
+    axis.setAttribute('y1',(len/2).toFixed(2));axis.setAttribute('y2',(-len/2).toFixed(2));
+    axis.setAttribute('opacity',active?.42:.2);
+    while(dotsG.firstChild)dotsG.removeChild(dotsG.firstChild);
+    // cluster near-coincident dots so every mode stays legible at 34px
+    const ys=c.dots.map(d=>len/2-d.a*len).sort((a,b)=>a-b);
+    const groups=[];
+    for(const y of ys){
+      const g0=groups[groups.length-1];
+      if(g0&&Math.abs(y-g0.y)<MERGE_PX){g0.y=(g0.y*g0.n+y)/(g0.n+1);g0.n++}
+      else groups.push({y,n:1});
+    }
+    for(const gp of groups){
+      dotsG.appendChild(sv('circle',{cx:0,cy:gp.y.toFixed(2),
+        r:((active?2.1:1.8)*(1+.3*(gp.n-1))).toFixed(2),
+        style:'fill:var(--'+(active?'accent':'ink')+')',opacity:active?1:.6}));
+    }
+  }
+  function pick(){
+    const MV=window.MonadVoicing;if(!MV)return;
+    MV.setMode(mode.id);
+    MV.audition(mode.id,auditionStrike,performance.now());
+    itemNodes.forEach(n=>n.paint&&n.paint());
+  }
+  pad.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation()});
+  pad.addEventListener('click',e=>{e.stopPropagation();pick()});
+  pad.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){pick();e.preventDefault()}});
+  node.paint=paint;paint();
+  return node;
+}
+// Audition adapter: MonadVoicing calls strike(midi, amp, delaySeconds). We ring
+// a detached body through the normal modal/source path without touching physics.
+function auditionStrike(midi,amp,delaySec){
+  setTimeout(()=>{
+    if(!ac||ac.state!=='running')return;
+    const ghost={uid:9e6+((midi*7)%97),note:midi,r:MIN_R+22,x:W*.5,y:H*.5,
+      color:PALETTE[5]||'#C39A61',hit:0,resonance:0,energy:0};
+    strikeNow(ghost,10+58*clamp(amp,0,1),false);
+  },Math.max(0,delaySec*1000));
+}
+
 // ---- group definitions ----
 const GROUPS=[
-  {id:'source',icon:'hubSource',span:172,items:[
+  {id:'source',icon:'hubSource',span:168,items:[
     {t:'choice',el:'#wave',icons:['wSine','wTriangle','wSquare','wSawtooth'],a:'waveform'},
     {t:'knob',obj:SOURCE,key:'attack',icon:'pAttack',curve:'log',a:'attack'},
     {t:'knob',obj:SOURCE,key:'decay',icon:'pDecay',curve:'log',a:'tone decay'},
@@ -1852,7 +2514,7 @@ const GROUPS=[
     {t:'knob',el:'#modalMix',icon:'pModal',a:'modal body'},
     {t:'knob',el:'#sympathy',icon:'pSympathy',a:'sympathy'}
   ]},
-  {id:'space',icon:'hubSpace',span:172,items:[
+  {id:'space',icon:'hubSpace',span:168,items:[
     {t:'knob',obj:R,key:'dry',icon:'pDry',a:'dry'},
     {t:'knob',obj:R,key:'wet',icon:'pWet',a:'wet'},
     {t:'knob',obj:R,key:'predelay',icon:'pPredelay',a:'predelay'},
@@ -1861,7 +2523,7 @@ const GROUPS=[
     {t:'knob',obj:R,key:'feedback',icon:'pFeedback',a:'feedback'},
     {t:'knob',obj:R,key:'damping',icon:'pDamping',curve:'log',a:'damping'}
   ]},
-  {id:'weather',icon:'hubWeather',span:178,items:[
+  {id:'weather',icon:'hubWeather',span:168,items:[
     {t:'knob',el:'#wind',icon:'pWind',a:'wind'},
     {t:'knob',el:'#drag',icon:'pDrag',curve:'log',a:'drag'},
     {t:'knob',el:'#pressure',icon:'pPressure',a:'pressure'},
@@ -1871,14 +2533,16 @@ const GROUPS=[
     {t:'knob',el:'#hazeAmt',icon:'pHaze',a:'over light'},
     {t:'choice',el:'#mix',icons:['mScreen','mAdd','mSoft'],a:'blend'}
   ]},
-  {id:'voicing',icon:'hubVoicing',span:186,items:[]},
-  {id:'palette',icon:'hubPalette',span:214,items:[]},
-  {id:'capture',icon:'hubCapture',span:104,items:[
+  {id:'voicing',icon:'hubVoicing',span:168,items:[]},
+  {id:'palette',icon:'hubPalette',span:168,items:[]},
+  {id:'capture',icon:'hubCapture',span:96,items:[
     {t:'action',icon:()=>'cRec',tint:()=>$('#motionRec').classList.contains('recording')?'#E0876A':'',run:()=>$('#motionRec').click(),a:'record motion'},
     {t:'action',icon:()=>'cOut',run:()=>$('#copyPreset').click(),a:'copy'},
     {t:'action',icon:()=>'cIn',run:()=>$('#pastePreset').click(),a:'paste'}
   ]}
 ];
+// voicing group mirrors the engine's mode catalogue
+if(window.MonadVoicing)for(const m of window.MonadVoicing.modes)GROUPS[3].items.push({t:'voicing',mode:m});
 // palette group is built from PALETTE + target toggle + photo import
 for(let i=0;i<8;i++)GROUPS[4].items.push({t:'swatch',i});
 GROUPS[4].items.push({t:'action',icon:()=>paletteTarget==='bg'?'tBg':'tOrb',
@@ -1910,13 +2574,14 @@ const hubNodes=GROUPS.map(gr=>{
   return node;
 });
 
-let shellState=0,activeGroup=null,itemNodes=[];
+let shellState=0,activeGroup=null,itemNodes=[],lastVoicingPaint=0;
 function buildItems(gr){
   itemNodes.forEach(n=>n.g.remove());
   itemNodes=gr.items.map(spec=>{
     if(spec.t==='knob')return makeKnob(spec);
     if(spec.t==='choice')return makeChoice(spec);
     if(spec.t==='swatch')return makeSwatch(spec.i);
+    if(spec.t==='voicing')return makeVoicingNode(spec.mode);
     return makeAction(spec);
   });
   itemNodes.forEach(n=>layerRing.appendChild(n.g));
@@ -2017,8 +2682,12 @@ function importPhoto(){
   photoInput.click();
 }
 function ingestImage(file){
-  if(typeof window.MonadPalette==='undefined')return;
-  window.MonadPalette.fromImage(file,8).then(hexes=>applyPhotoPalette(hexes)).catch(()=>{});
+  const MP=window.MonadPalette;
+  if(!MP||!file)return;
+  // fromImage() accepts ImageBitmap/Image/Canvas — a File must be decoded first.
+  createImageBitmap(file)
+    .then(bmp=>MP.fromImage(bmp,8).then(hex=>{bmp.close();applyPhotoPalette(hex)}))
+    .catch(()=>{});
 }
 function applyPhotoPalette(hexes){
   if(!hexes||hexes.length<2)return;
@@ -2029,6 +2698,8 @@ function applyPhotoPalette(hexes){
   const bgEl=$('#bgColor');bgEl.value=list[0];fire(bgEl);
   fieldDirty=true;paintPaletteGroup();
 }
+
+if(window.MonadPalette)window.MonadPalette.attachDropTarget(stage,hex=>applyPhotoPalette(hex));
 
 hubNodes.forEach(n=>layerRing.appendChild(n.g));
 showRing(hubNodes,false);
@@ -2051,6 +2722,8 @@ function frame(now){
 
   const oldPrevious=previousContacts;previousContacts=contacts;contacts=oldPrevious;
 
+  if(window.MonadVoicing)window.MonadVoicing.tick(now);
+  if(activeGroup==='voicing'&&now-lastVoicingPaint>420){lastVoicingPaint=now;itemNodes.forEach(n=>n.paint&&n.paint())}
   captureMotionSample(now);
   updateVoiceStat(now);
   draw();
