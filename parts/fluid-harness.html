@@ -1,0 +1,50 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>fluid harness</title>
+<style>html,body{margin:0;height:100%;background:#17130d;overflow:hidden}canvas{position:fixed;inset:0;width:100%;height:100%}</style>
+</head><body>
+<canvas id="c"></canvas>
+<script src="fluid-lead.js"></script>
+<script>
+(function(){
+  var c=document.getElementById('c');
+  var F=window.MonadFluid;
+  var ok=F.init(c);
+  window.__fluidOk=ok;
+  if(!ok){ console.error('FLUID INIT FAILED'); window.__fps=0; return; }
+  F.resize(innerWidth,innerHeight,Math.min(devicePixelRatio||1,2));
+  var PAL=[[0.13,0.07,0.01],[0.23,0.16,0.05],[0.33,0.41,0.47],[0.47,0.50,0.49],
+           [0.53,0.55,0.50],[0.67,0.50,0.28],[0.76,0.60,0.38],[0.91,0.78,0.51]];
+  var bodies=[];
+  for(var i=0;i<7;i++) bodies.push({
+    x:Math.random()*innerWidth, y:Math.random()*innerHeight,
+    vx:(Math.random()*2-1)*90, vy:(Math.random()*2-1)*90,
+    r:26+Math.random()*54, c:PAL[(Math.random()*PAL.length)|0]});
+  var last=performance.now(), frames=0, t0=performance.now(), acc=0;
+  var stepMs=[], renderMs=[];
+  function loop(now){
+    var dt=Math.min(0.033,(now-last)/1000||0.016); last=now;
+    for(var i=0;i<bodies.length;i++){
+      var b=bodies[i];
+      b.x+=b.vx*dt; b.y+=b.vy*dt;
+      if(b.x<b.r||b.x>innerWidth-b.r){b.vx*=-1;b.x=Math.max(b.r,Math.min(innerWidth-b.r,b.x));}
+      if(b.y<b.r||b.y>innerHeight-b.r){b.vy*=-1;b.y=Math.max(b.r,Math.min(innerHeight-b.r,b.y));}
+      F.splat(b.x,b.y,b.vx,b.vy,b.c,b.r*1.35,0.055);
+    }
+    acc+=dt;
+    if(acc>1.1){acc=0;var b2=bodies[0];F.ring(b2.x,b2.y,b2.r,0.8);}
+    var a=performance.now(); F.step(dt); var b3=performance.now();
+    F.render({atmosphere:3.4,strength:0.85,haze:0.25,grain:0.5,warp:0.6,background:[0.13,0.07,0.01]});
+    var c3=performance.now();
+    stepMs.push(b3-a); renderMs.push(c3-b3);
+    frames++;
+    if(performance.now()-t0>4000 && !window.__fps){
+      window.__fps=frames/((performance.now()-t0)/1000);
+      stepMs.sort(function(p,q){return p-q}); renderMs.sort(function(p,q){return p-q});
+      window.__stepMs=stepMs[stepMs.length>>1]; window.__renderMs=renderMs[renderMs.length>>1];
+    }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body></html>
