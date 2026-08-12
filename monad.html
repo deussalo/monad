@@ -2641,16 +2641,24 @@ const hubNodes=GROUPS.map(gr=>{
 });
 
 let shellState=0,activeGroup=null,itemNodes=[],lastVoicingPaint=0;
-function buildItems(gr){
-  itemNodes.forEach(n=>n.g.remove());
-  itemNodes=gr.items.map(spec=>{
-    if(spec.t==='knob')return makeKnob(spec);
-    if(spec.t==='choice')return makeChoice(spec);
-    if(spec.t==='swatch')return makeSwatch(spec.i);
-    if(spec.t==='voicing')return makeVoicingNode(spec.mode);
-    return makeAction(spec);
-  });
-  itemNodes.forEach(n=>layerRing.appendChild(n.g));
+// Each group is built exactly once and kept. Rebuilding on every open leaked a
+// listener onto the bound <input> per rotary per open, each pinning a detached
+// SVG node. Hidden groups are inert anyway (.bloom sets pointer-events:none).
+const builtGroups=new Map();
+function itemsFor(gr){
+  let list=builtGroups.get(gr.id);
+  if(!list){
+    list=gr.items.map(spec=>{
+      if(spec.t==='knob')return makeKnob(spec);
+      if(spec.t==='choice')return makeChoice(spec);
+      if(spec.t==='swatch')return makeSwatch(spec.i);
+      if(spec.t==='voicing')return makeVoicingNode(spec.mode);
+      return makeAction(spec);
+    });
+    list.forEach(n=>layerRing.appendChild(n.g));
+    builtGroups.set(gr.id,list);
+  }
+  return list;
 }
 function paintPaletteGroup(){if(activeGroup==='palette')itemNodes.forEach(n=>n.paint())}
 
@@ -2683,7 +2691,6 @@ function showRing(nodes,on){
   });
 }
 function setState(s,id){
-  const prev=shellState;
   shellState=s;activeGroup=s===2?id:null;
   $('#shell').classList.toggle('open',s>0);
   rootG.classList.toggle('resting',s===0);
@@ -2691,16 +2698,18 @@ function setState(s,id){
   rootDot.setAttribute('opacity',s===2?'0':'1');
   if(s===2){
     const gr=GROUPS.find(g=>g.id===id);
-    setIcon(rootIcon,gr.icon,17);rootIcon.setAttribute('opacity','.9');
-    buildItems(gr);layoutShell();
-    showRing(hubNodes,false);showRing(itemNodes,true);
+    const next=itemsFor(gr);
+    if(itemNodes.length&&itemNodes!==next)showRing(itemNodes,false);
+    itemNodes=next;
+    next.forEach(n=>n.paint&&n.paint());
+    layoutShell();
+    showRing(hubNodes,false);showRing(next,true);
   }else{
     rootIcon.setAttribute('opacity','0');
     showRing(itemNodes,false);
     if(s===1){layoutShell();showRing(hubNodes,true)}
     else showRing(hubNodes,false);
   }
-  if(prev===2&&s!==2)setTimeout(()=>{if(shellState!==2)itemNodes.forEach(n=>n.g.remove()),itemNodes=[]},420);
 }
 function openGroup(id){setState(2,id)}
 function collapseShell(){if(shellState!==0)setState(0)}
