@@ -886,8 +886,8 @@ Monad is a live instrument and cannot run without it. The page you are looking a
  * Bodies inject dye + velocity; pressure fronts push annular impulses; the
  * field advects itself through a divergence-free curl-noise flow so colours
  * smear and swirl instead of sitting still. The composite pass carries the
- * visual identity: soft-clipped dye over a slow domain-warped ground, lifted
- * by a cheap bloom and finished with animated hash grain.
+ * visual identity: a widely Gaussian-diffused dye over a slow domain-warped
+ * ground, tone mapped on luminance so impacts bloom as saturated colour.
  *
  * Passes are discrete named programs so a real pressure-projection solver can
  * replace the curl-noise velocity stage later without touching the rest.
@@ -996,14 +996,15 @@ Monad is a live instrument and cannot run without it. The page you are looking a
   var FRAG_BLUR =
     '#version 300 es\nprecision highp float;\n' +
     'in vec2 vUv; out vec4 outColor;\n' +
-    'uniform sampler2D uSrc; uniform vec2 uDir;\n' +
+    'uniform sampler2D uSrc; uniform vec2 uDir; uniform float uStride;\n' +
     'void main(){\n' +
     // 9-tap Gaussian folded into 5 linearly-interpolated fetches
+    '  vec2 d = uDir * uStride;\n' +
     '  vec3 c = texture(uSrc, vUv).rgb * 0.2270270270;\n' +
-    '  c += texture(uSrc, vUv + uDir*1.3846153846).rgb * 0.3162162162;\n' +
-    '  c += texture(uSrc, vUv - uDir*1.3846153846).rgb * 0.3162162162;\n' +
-    '  c += texture(uSrc, vUv + uDir*3.2307692308).rgb * 0.0702702703;\n' +
-    '  c += texture(uSrc, vUv - uDir*3.2307692308).rgb * 0.0702702703;\n' +
+    '  c += texture(uSrc, vUv + d*1.3846153846).rgb * 0.3162162162;\n' +
+    '  c += texture(uSrc, vUv - d*1.3846153846).rgb * 0.3162162162;\n' +
+    '  c += texture(uSrc, vUv + d*3.2307692308).rgb * 0.0702702703;\n' +
+    '  c += texture(uSrc, vUv - d*3.2307692308).rgb * 0.0702702703;\n' +
     '  outColor = vec4(c, 1.0);\n' +
     '}\n';
 
@@ -1029,19 +1030,26 @@ Monad is a live instrument and cannot run without it. The page you are looking a
   var FRAG_COMP =
     '#version 300 es\nprecision highp float;\n' +
     'in vec2 vUv; out vec4 outColor;\n' +
-    'uniform sampler2D uDye, uGround, uBloom; uniform vec2 uTexel;\n' +
+    'uniform sampler2D uDye, uGround; uniform vec2 uTexel;\n' +
     'uniform vec3 uBg; uniform float uTime, uGrain, uHaze, uStrength, uAtmo;\n' +
-    'float hash2(vec2 p){ p = fract(p*vec2(443.897,441.423)); p += dot(p, p+19.19); return fract(p.x*p.y); }\n' +
+
     'void main(){\n' +
     // ONE tap. The dye arrives already blurred at sim resolution, where a pass
     // costs ~14k pixels; a tent here would cost four extra fetches per SCREEN
     // pixel (~160k+). Soften where pixels are cheap, sample where they are not.
     '  vec3 dye = texture(uDye, vUv).rgb;\n' +
-    '  vec3 c = dye + texture(uBloom, vUv).rgb * uHaze * 2.2;\n' +
+    // The separate half-resolution bloom buffer was the coarsest thing on
+    // screen (40x88 stretched to a 1080 panel) and is redundant now that the
+    // dye is properly diffused - its lift folds straight into the dye.
+    '  vec3 c = dye * (1.0 + uHaze * 1.6);\n' +
     '  c *= uStrength * (0.55 + 0.16*uAtmo);\n' +
     '  c += uBg * (0.72 + 0.85*texture(uGround, vUv).r);\n' +
-    '  c = c / (1.0 + c*0.78);\n' +          // soft clip, no hard highlights
-    '  c += (hash2(gl_FragCoord.xy + floor(uTime*24.0)) - 0.5) * uGrain * 0.055;\n' +
+    // Tone map LUMINANCE and rescale, so chromaticity is preserved exactly: a
+    // hard impact blooms as saturated colour and can never wash toward white,
+    // which is what a per-channel shoulder did.
+    '  float L = dot(c, vec3(0.2126, 0.7152, 0.0722));\n' +
+    '  float Lm = L / (1.0 + L * 1.45);\n' +
+    '  c *= Lm / max(L, 1e-4);\n' +          // soft clip, no hard highlights
     // vignette in-shader: replaces a whole full-screen composited CSS layer
     '  vec2 vd = (vUv - vec2(0.5, 0.55)) * vec2(1.15, 1.0);\n' +
     '  c *= 1.0 - smoothstep(0.34, 0.78, dot(vd, vd)) * 0.46;\n' +
@@ -1049,12 +1057,16 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     '}\n';
 
   var gl = null, canvas = null;
-  var progVel = null, progAdv = null, progSplat = null, progComp = null, progGround = null, progBloom = null, progBlur = null;
+  var progVel = null, progAdv = null, progSplat = null, progComp = null, progGround = null, progBlur = null;
   var vao = null, quad = null;
-  var vel = null, dye = null, ground = null, bloom = null, blurA = null, blurB = null;
+  var vel = null, dye = null, ground = null, blurA = null, blurB = null;
+  var blurW = 1, blurH2 = 1;
   var velW = 1, velH = 1;   // velocity runs at half the dye resolution
-  var GROUND_W = 96, GROUND_H = 64, groundAge = 1e9;
-  var BLUR_PASSES = 2;   // two separable passes, both at sim resolution   // seconds since last ground refresh
+  var GROUND_W = 160, GROUND_H = 160, groundAge = 1e9;
+  // Widening strides compose into one very wide, properly weighted Gaussian for
+  // three cheap passes: a fully diffuse field has no fine structure left to
+  // alias when it is magnified onto the panel.
+  var BLUR_STRIDES = [1.0, 2.0, 4.0];   // at half res these are 2/4/8 dye texels   // seconds since last ground refresh
   var simW = 1, simH = 1, dispW = 1, dispH = 1, dpr = 1;
   var cssWLast = 0, cssHLast = 0;   // true CSS size, free of any quality scaling
   var time = 0, ok = false, listening = false;
@@ -1127,14 +1139,15 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     velW = Math.max(8, simW >> 1); velH = Math.max(8, simH >> 1);
     vel = makePair(velW, velH, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
     dye = makePair(simW, simH, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
+    // Blur at HALF the dye resolution: four times cheaper per pass AND wider
+    // per tap, and the result is so smooth that upsampling it shows nothing.
+    blurW = Math.max(8, simW >> 1); blurH2 = Math.max(8, simH >> 1);
     dropTarget(blurA); dropTarget(blurB);
-    blurA = makeTarget(simW, simH, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
-    blurB = makeTarget(simW, simH, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
+    blurA = makeTarget(blurW, blurH2, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
+    blurB = makeTarget(blurW, blurH2, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
     if (!ground) ground = makeTarget(GROUND_W, GROUND_H, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
-    dropTarget(bloom);
-    bloom = makeTarget(Math.max(8, simW >> 1), Math.max(8, simH >> 1), gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
     groundAge = 1e9;
-    return !!(vel && dye && ground && bloom && blurA && blurB);
+    return !!(vel && dye && ground && blurA && blurB);
   }
 
   /* A lost context turns every GL call into a silent no-op and leaves an opaque
@@ -1143,7 +1156,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
   function handleLost(e) {
     e.preventDefault();
     ok = false; api.available = false;
-    vel = dye = ground = bloom = null;
+    vel = dye = ground = null;
     progVel = progAdv = progSplat = progComp = progGround = null;
     vao = quad = null;
     if (typeof api.onContextLost === 'function') api.onContextLost();
@@ -1177,9 +1190,8 @@ Monad is a live instrument and cannot run without it. The page you are looking a
       progSplat = compile(VERT, FRAG_SPLAT);
       progComp = compile(VERT, FRAG_COMP);
       progGround = compile(VERT, FRAG_GROUND);
-      progBloom = compile(VERT, FRAG_BLOOM);
       progBlur = compile(VERT, FRAG_BLUR);
-      if (!progVel || !progAdv || !progSplat || !progComp || !progGround || !progBloom || !progBlur) { gl = null; return false; }
+      if (!progVel || !progAdv || !progSplat || !progComp || !progGround || !progBlur) { gl = null; return false; }
 
       quad = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, quad);
@@ -1192,7 +1204,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
 
       gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
       resize(canvas.clientWidth || 1, canvas.clientHeight || 1, global.devicePixelRatio || 1);
-      if (!vel || !dye || !ground || !bloom || !blurA || !blurB) { gl = null; return false; }
+      if (!vel || !dye || !ground || !blurA || !blurB) { gl = null; return false; }
       ok = true;
       api.available = true;
       return true;
@@ -1215,7 +1227,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     // Much lower than before. Blurring at sim resolution means a small buffer
     // reads as soft atmosphere rather than as visible cells, and fill rate is
     // the entire cost on a phone.
-    var cap = cssW < 700 ? 176 : 384;
+    var cap = cssW < 700 ? 256 : 512;
     var long = Math.max(cssW, cssH);
     var scale = Math.min(0.5, cap / Math.max(1, long));
     var nw = Math.max(16, Math.round(cssW * scale));
@@ -1367,42 +1379,30 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     // colour into one grey mass; the state stays sharp and only what reaches
     // the screen is softened.
     gl.useProgram(progBlur.p);
-    gl.viewport(0, 0, simW, simH);
+    gl.viewport(0, 0, blurW, blurH2);
     var srcTex = dye.read.tex;
-    for (var pass = 0; pass < BLUR_PASSES; pass++) {
+    for (var pass = 0; pass < BLUR_STRIDES.length; pass++) {
+      gl.uniform1f(progBlur.u.uStride, BLUR_STRIDES[pass]);
       gl.bindFramebuffer(gl.FRAMEBUFFER, blurA.fb);
       bindTex(0, srcTex);
       gl.uniform1i(progBlur.u.uSrc, 0);
-      gl.uniform2f(progBlur.u.uDir, 1 / simW, 0);
+      gl.uniform2f(progBlur.u.uDir, 1 / blurW, 0);
       drawQuad();
       gl.bindFramebuffer(gl.FRAMEBUFFER, blurB.fb);
       bindTex(0, blurA.tex);
-      gl.uniform2f(progBlur.u.uDir, 0, 1 / simH);
+      gl.uniform2f(progBlur.u.uDir, 0, 1 / blurH2);
       drawQuad();
       srcTex = blurB.tex;
-    }
-
-    // Bloom at HALF SIM resolution, and skipped entirely at reduced quality.
-    // Doing this 9-tap blur per screen pixel was the single biggest cost.
-    if (qBloom) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, bloom.fb);
-      gl.viewport(0, 0, bloom.w, bloom.h);
-      gl.useProgram(progBloom.p);
-      bindTex(0, blurB.tex);
-      gl.uniform1i(progBloom.u.uDye, 0);
-      gl.uniform2f(progBloom.u.uTexel, 1 / simW, 1 / simH);
-      drawQuad();
     }
 
     // Composite: three texture taps and one hash.
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, dispW, dispH);
     gl.useProgram(progComp.p);
-    bindTex(0, blurB.tex); bindTex(1, ground.tex); bindTex(2, bloom.tex);
+    bindTex(0, blurB.tex); bindTex(1, ground.tex);
     var u = progComp.u;
     gl.uniform1i(u.uDye, 0);
     gl.uniform1i(u.uGround, 1);
-    gl.uniform1i(u.uBloom, 2);
     gl.uniform2f(u.uTexel, 1 / simW, 1 / simH);
     gl.uniform3f(u.uBg, bg[0], bg[1], bg[2]);
     gl.uniform1f(u.uTime, time);
@@ -1417,12 +1417,11 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     if (!gl) { ok = false; return; }
     destroyPair(vel); destroyPair(dye);
     dropTarget(ground); ground = null;
-    dropTarget(bloom); bloom = null;
     dropTarget(blurA); blurA = null; dropTarget(blurB); blurB = null;
-    [progVel, progAdv, progSplat, progComp, progGround, progBloom].forEach(function (pr) { if (pr) gl.deleteProgram(pr.p); });
+    [progVel, progAdv, progSplat, progComp, progGround, progBlur].forEach(function (pr) { if (pr) gl.deleteProgram(pr.p); });
     if (quad) gl.deleteBuffer(quad);
     if (vao) gl.deleteVertexArray(vao);
-    vel = dye = null; progVel = progAdv = progSplat = progComp = progGround = progBloom = progBlur = null;
+    vel = dye = null; progVel = progAdv = progSplat = progComp = progGround = progBlur = null;
     gl = null; ok = false; api.available = false;
   }
 
@@ -1435,7 +1434,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     step: step,
     render: render,
     quality: quality,
-    info: function(){ return simW + 'x' + simH + ' dye, ' + velW + 'x' + velH + ' vel, ' + dispW + 'x' + dispH + ' out'; },
+    info: function(){ return simW + 'x' + simH + ' dye, ' + blurW + 'x' + blurH2 + ' blur, ' + dispW + 'x' + dispH + ' out'; },
     dispose: dispose
   };
   global.MonadFluid = api;
@@ -3065,7 +3064,12 @@ function fluidSplatOrb(o,dt){
   if(!fluidOn||!F)return;
   const energy=(o.hit||0)+.7*(o.resonance||0);
   const spd=Math.hypot(o.vx||0,o.vy||0);
-  const rate=.44+15*energy+.45*Math.min(1,spd/260);
+  // Soft knee on the hot end: a hard strike used to inject ~25 units/s, which
+  // saturated the dye and washed the impact toward white. Energy now saturates,
+  // so impacts bloom brighter but bounded, and the luminance tone map keeps
+  // whatever brightness survives fully saturated in colour.
+  const knee=energy/(1+.85*energy);
+  const rate=.40+9.5*knee+.45*Math.min(1,spd/260);
   const s=rate*dt;
   if(s<=.0004)return;
   // Wide aura: the dye is heavily blurred, so a large soft source reads as an
