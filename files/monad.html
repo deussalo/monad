@@ -138,6 +138,51 @@ body.fluid #veil,body.fluid #grain{display:none}
   <canvas id="bodies" aria-label="Monad"></canvas>
   <canvas id="haze" aria-hidden="true"></canvas>
 </div>
+<script>
+/* First script in the document, deliberately written in very old syntax so it
+   parses everywhere. If the instrument never renders a frame, this turns a
+   silent frozen screen into an on-device report of why. */
+window.__monadFrames = 0;
+window.__monadErrors = [];
+window.onerror = function(m, src, line, col){
+  window.__monadErrors.push(m + '  @' + String(src || '?').split('/').pop() + ':' + line + ':' + col);
+  return false;
+};
+window.addEventListener('unhandledrejection', function(e){
+  window.__monadErrors.push('promise rejection: ' + (e && e.reason));
+});
+setTimeout(function(){
+  if (window.__monadFrames > 0) return;   // running fine
+  var gl2;
+  try { gl2 = !!document.createElement('canvas').getContext('webgl2'); } catch(e){ gl2 = 'threw'; }
+  var why = window.__monadErrors.length
+    ? window.__monadErrors.join('\n\n')
+    : 'No JavaScript error was reported.\nScripts may be blocked (sandboxed preview / CSP), or this is not running as a live page.';
+  var d = document.createElement('div');
+  d.setAttribute('style', 'position:fixed;inset:0;z-index:99999;background:#14100a;color:#efe7d7;'
+    + 'font:13px/1.5 ui-monospace,Menlo,monospace;padding:16px;overflow:auto;'
+    + 'white-space:pre-wrap;word-break:break-word');
+  d.textContent = 'Monad did not start.\n\n' + why
+    + '\n\nWebGL2: ' + gl2
+    + '\nviewport: ' + window.innerWidth + ' x ' + window.innerHeight
+    + '\ndpr: ' + (window.devicePixelRatio || 1)
+    + '\nUA: ' + navigator.userAgent;
+  if (document.body) document.body.appendChild(d);
+}, 2500);
+</script>
+
+<noscript>
+<div style="position:fixed;inset:0;z-index:99999;background:#14100a;color:#efe7d7;
+  font:15px/1.6 system-ui,-apple-system,sans-serif;padding:22px;overflow:auto">
+<div style="color:#E8C882;font-size:17px;font-weight:600;margin-bottom:10px">JavaScript is switched off</div>
+Monad is a live instrument and cannot run without it. The page you are looking at is only its background.
+<div style="margin-top:14px;color:#E8C882">On Android this is usually one of:</div>
+<div style="margin-top:6px">1. The file was opened through a <b>content://</b> link (from a downloads or files app). Chrome and Brave do not run scripts on content:// pages. Type the file path directly instead, e.g. <b>file:///sdcard/Download/monad.html</b></div>
+<div style="margin-top:6px">2. Brave Shields is blocking scripts. Tap the lion icon and allow JavaScript for this page.</div>
+<div style="margin-top:6px">3. Best of all: open it from an <b>http(s)</b> address rather than a local file.</div>
+</div>
+</noscript>
+
 <div id="safe" aria-hidden="true"></div>
 <div id="veil" aria-hidden="true"></div>
 <div id="grain" aria-hidden="true"></div>
@@ -1334,7 +1379,7 @@ const R={input:.55,dry:.82,wet:.687,output:.85,predelay:51.7,size:2.3399,decay:4
 // 3) real impacts launch visible pressure fronts that physically push other bodies
 const PHYS={modalMix:.66,sympathy:.62,pressure:.47,waveSpeed:520};
 function materialFor(o){
-  const key=(o?.color||'#C39A61').toUpperCase();
+  const key=((o&&o.color)||'#C39A61').toUpperCase();
   if(o&&o._materialKey===key&&o._material)return o._material;
   let hex=key.replace('#','');
   if(hex.length===3)hex=hex.split('').map(c=>c+c).join('');
@@ -1401,7 +1446,7 @@ function selectOrb(o){selected=o;if(o){$('#selection').textContent=noteName(o.no
 $('#note').addEventListener('change',()=>{if(!selected)return;selected.note=+$('#note').value;selected._hzNote=null;$('#selection').textContent=noteName(selected.note)+' · '+modeLabel(selected);queueHit(selected,72,false)});
 
 const controlBindings=[];
-function sliderControl(obj,key,label,min,max,step,suffix,onChange){const l=document.createElement('label');l.className='control';const line=document.createElement('span');line.className='line';const n=document.createElement('span');n.textContent=label;const v=document.createElement('span');v.className='mono';const input=document.createElement('input');input.type='range';input.min=min;input.max=max;input.step=step;input.value=obj[key];const paint=()=>{const x=+input.value;v.textContent=(step>=1?x.toFixed(0):step>=.1?x.toFixed(1):step>=.01?x.toFixed(2):x.toFixed(3))+(suffix||'')};paint();input.addEventListener('input',()=>{obj[key]=+input.value;paint();onChange?.();updateSettings()});line.append(n,v);l.append(line,input);controlBindings.push({obj,key,input,paint,onChange});return l}
+function sliderControl(obj,key,label,min,max,step,suffix,onChange){const l=document.createElement('label');l.className='control';const line=document.createElement('span');line.className='line';const n=document.createElement('span');n.textContent=label;const v=document.createElement('span');v.className='mono';const input=document.createElement('input');input.type='range';input.min=min;input.max=max;input.step=step;input.value=obj[key];const paint=()=>{const x=+input.value;v.textContent=(step>=1?x.toFixed(0):step>=.1?x.toFixed(1):step>=.01?x.toFixed(2):x.toFixed(3))+(suffix||'')};paint();input.addEventListener('input',()=>{obj[key]=+input.value;paint();if(onChange)onChange();updateSettings()});line.append(n,v);l.append(line,input);controlBindings.push({obj,key,input,paint,onChange});return l}
 
 // SOURCE UI
 const waveLabel=document.createElement('label');waveLabel.className='control';const wl=document.createElement('span');wl.textContent='Waveform';const wave=document.createElement('select');wave.id='wave';['sine','triangle','square','sawtooth'].forEach(w=>{const o=document.createElement('option');o.value=w;o.textContent=w.toUpperCase();wave.append(o)});wave.value=SOURCE.wave;wave.addEventListener('change',()=>{SOURCE.wave=wave.value;sendParams();updateSettings()});waveLabel.append(wl,wave);$('#sourceControls').append(waveLabel);
@@ -2712,7 +2757,7 @@ function draw(){
   };
   orbs.forEach(d);if(pointer.spawn)d(pointer.spawn);
 }
-body.addEventListener('pointerdown',e=>{e.preventDefault();const p=pt(e);pointer.id=e.pointerId;pointer.down=true;try{body.setPointerCapture?.(e.pointerId)}catch(err){}const o=hit(p.x,p.y);if(o){selectOrb(o);pointer.orb=o;pointer.spawn=null;pointer.gx=p.x-o.x;pointer.gy=p.y-o.y;o.held=true;o.tx=o.x;o.ty=o.y;body.style.cursor='grabbing';beginHold(o,p)}else{selectOrb(null);pointer.spawn=makeOrb(p.x,p.y,MIN_R);pointer.orb=null;$('#note').value=pointer.spawn.note;$('#selection').textContent=noteName(pointer.spawn.note);fieldDirty=true}});
+body.addEventListener('pointerdown',e=>{e.preventDefault();const p=pt(e);pointer.id=e.pointerId;pointer.down=true;try{if(body.setPointerCapture)body.setPointerCapture(e.pointerId)}catch(err){}const o=hit(p.x,p.y);if(o){selectOrb(o);pointer.orb=o;pointer.spawn=null;pointer.gx=p.x-o.x;pointer.gy=p.y-o.y;o.held=true;o.tx=o.x;o.ty=o.y;body.style.cursor='grabbing';beginHold(o,p)}else{selectOrb(null);pointer.spawn=makeOrb(p.x,p.y,MIN_R);pointer.orb=null;$('#note').value=pointer.spawn.note;$('#selection').textContent=noteName(pointer.spawn.note);fieldDirty=true}});
 body.addEventListener('pointermove',e=>{if(!pointer.down||e.pointerId!==pointer.id)return;const p=pt(e);if(holdFrom&&Math.hypot(p.x-holdFrom.x,p.y-holdFrom.y)>HOLD_SLOP)cancelHold();if(pointer.orb){pointer.orb.tx=p.x-pointer.gx;pointer.orb.ty=p.y-pointer.gy}else if(pointer.spawn){setOrbRadius(pointer.spawn,clamp(Math.hypot(p.x-pointer.spawn.x,p.y-pointer.spawn.y),MIN_R,MAX_R));fieldDirty=true}});
 function end(e){cancelHold();if(!pointer.down||e.pointerId!==pointer.id)return;if(pointer.orb)pointer.orb.held=false;else if(pointer.spawn){admitOrb(pointer.spawn);selectOrb(pointer.spawn);refreshPresetBox()}pointer.id=null;pointer.down=false;pointer.orb=null;pointer.spawn=null;body.style.cursor='crosshair';fieldDirty=true}
 body.addEventListener('pointerup',end);body.addEventListener('pointercancel',end);
@@ -3003,7 +3048,7 @@ function makeKnob(spec){
   const stop=e=>{
     if(dragId!==null&&e.pointerId!==dragId)return;
     mode=null;dragId=null;activeKnobRelease=null;
-    try{pad.releasePointerCapture?.(e.pointerId)}catch(err){}
+    try{if(pad.releasePointerCapture)pad.releasePointerCapture(e.pointerId)}catch(err){}
   };
   pad.addEventListener('pointerup',stop);pad.addEventListener('pointercancel',stop);
   pad.addEventListener('wheel',e=>{e.preventDefault();nudge(e.deltaY<0?.028:-.028)},{passive:false});
@@ -3402,6 +3447,7 @@ function resize(){const r=stage.getBoundingClientRect();W=Math.max(1,r.width);H=
 // good. A fault in the atmosphere drops us to the 2D path rather than stopping.
 function frame(now){
   try{
+  window.__monadFrames=(window.__monadFrames||0)+1;
   if(now-lastSimFrame<SIM_MIN_FRAME_MS)return;
   lastSimFrame=now;
   const dt=Math.min(.025,(now-last)/1000||.016);

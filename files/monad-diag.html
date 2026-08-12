@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Monad diagnostic</title>
+<style>
+html,body{margin:0;background:#14100a;color:#efe7d7;font:14px/1.45 system-ui,-apple-system,sans-serif;padding:14px}
+h2{font-size:15px;margin:18px 0 6px;color:#E8C882}
+#css-canary{width:46px;height:46px;border-radius:50%;background:#E8C882;animation:sweep 1.4s ease-in-out infinite alternate}
+@keyframes sweep{from{transform:translateX(0)}to{transform:translateX(calc(100vw - 90px))}}
+.box{border:1px solid #4b4337;padding:10px;margin:8px 0}
+.ok{color:#8ec98e}.bad{color:#e08a6a}.big{font-size:17px;font-weight:600}
+#jscanary{padding:12px;border:2px solid #e08a6a;color:#e08a6a}
+#jscanary.live{border-color:#8ec98e;color:#8ec98e}
+#err{white-space:pre-wrap;word-break:break-word;color:#e08a6a;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+#tap{height:110px;border:1px dashed #4b4337;display:flex;align-items:center;justify-content:center;touch-action:none;margin-top:6px}
+canvas{width:100%;height:90px;display:block;border:1px solid #4b4337;background:#000}
+table{width:100%;border-collapse:collapse;font-size:13px}td{padding:3px 0;border-bottom:1px solid #2a251c}
+td:last-child{text-align:right}
+</style>
+</head>
+<body>
+
+<h2>1. CSS animation (no JavaScript needed)</h2>
+<div class="box">
+  <div id="css-canary"></div>
+  <div style="margin-top:8px;font-size:12px;opacity:.8">The dot above must slide left&harr;right. If it is frozen, this page is not running as a live web page.</div>
+</div>
+
+<h2>2. JavaScript</h2>
+<div class="box">
+  <div id="jscanary" class="big">JAVASCRIPT DID NOT RUN</div>
+  <div style="margin-top:8px;font-size:12px;opacity:.8">If this stays red, scripts are blocked (sandboxed preview / CSP) — no change to the app can fix that; open the file in a normal browser tab instead.</div>
+</div>
+
+<h2>3. Animation frames</h2>
+<div class="box"><span id="raf" class="big">rAF: never fired</span></div>
+
+<h2>4. Errors caught</h2>
+<div class="box"><div id="err">none yet</div></div>
+
+<h2>5. Feature support</h2>
+<div class="box"><table id="feat"><tr><td>collecting…</td><td></td></tr></table></div>
+
+<h2>6. Canvas 2D draw</h2>
+<div class="box"><canvas id="c2d"></canvas></div>
+
+<h2>7. WebGL2</h2>
+<div class="box"><div id="gl">testing…</div></div>
+
+<h2>8. Touch</h2>
+<div class="box"><div id="tap">tap / drag here</div></div>
+
+<script>
+/* Deliberately old-fashioned syntax: no arrow functions, no optional chaining,
+   no template literals — so this file parses on very old engines too. */
+(function(){
+  var errEl = document.getElementById('err');
+  var errors = [];
+  function report(msg){
+    errors.push(msg);
+    errEl.textContent = errors.join('\n\n');
+  }
+  window.onerror = function(m, src, line, col){
+    report('window.onerror: ' + m + '  @' + (src||'?') + ':' + line + ':' + col);
+    return false;
+  };
+  window.addEventListener('unhandledrejection', function(e){
+    report('unhandledrejection: ' + (e && e.reason));
+  });
+
+  try {
+    var js = document.getElementById('jscanary');
+    js.textContent = 'JAVASCRIPT IS RUNNING';
+    js.className = 'live big';
+  } catch(e){ report('canary: ' + e); }
+
+  // ---- animation frames ----
+  var n = 0, t0 = Date.now();
+  function tick(){
+    n++;
+    var secs = (Date.now() - t0) / 1000;
+    document.getElementById('raf').textContent =
+      'rAF: ' + n + ' frames, ' + (n / Math.max(0.001, secs)).toFixed(1) + ' fps';
+    requestAnimationFrame(tick);
+  }
+  if (window.requestAnimationFrame) requestAnimationFrame(tick);
+  else document.getElementById('raf').textContent = 'rAF: NOT SUPPORTED';
+
+  // ---- feature table ----
+  function has(name, fn){
+    var ok;
+    try { ok = !!fn(); } catch(e){ ok = false; }
+    return { name: name, ok: ok };
+  }
+  var feats = [
+    has('requestAnimationFrame', function(){ return window.requestAnimationFrame; }),
+    has('PointerEvent',        function(){ return window.PointerEvent; }),
+    has('TouchEvent',          function(){ return window.TouchEvent; }),
+    has('ResizeObserver',      function(){ return window.ResizeObserver; }),
+    has('AudioContext',        function(){ return window.AudioContext || window.webkitAudioContext; }),
+    has('canvas 2d',           function(){ return document.createElement('canvas').getContext('2d'); }),
+    has('WebGL2',              function(){ return document.createElement('canvas').getContext('webgl2'); }),
+    has('matchMedia',          function(){ return window.matchMedia; }),
+    has('DOMParser',           function(){ return window.DOMParser; }),
+    has('SVG innerHTML',       function(){
+        var s = document.createElementNS('http://www.w3.org/2000/svg','svg');
+        s.innerHTML = '<circle r="1"/>';
+        return s.childNodes.length > 0; }),
+    has('createImageBitmap',   function(){ return window.createImageBitmap; }),
+    has('optional chaining',   function(){ return eval('({a:1})?.a') === 1; }),
+    has('CSS 100dvh',          function(){ return window.CSS && CSS.supports && CSS.supports('height','100dvh'); }),
+    has('env(safe-area)',      function(){ return window.CSS && CSS.supports && CSS.supports('padding','env(safe-area-inset-bottom)'); })
+  ];
+  var rows = '';
+  for (var i = 0; i < feats.length; i++){
+    rows += '<tr><td>' + feats[i].name + '</td><td class="' + (feats[i].ok ? 'ok' : 'bad') + '">' +
+            (feats[i].ok ? 'yes' : 'NO') + '</td></tr>';
+  }
+  rows += '<tr><td>devicePixelRatio</td><td>' + (window.devicePixelRatio || 1) + '</td></tr>';
+  rows += '<tr><td>viewport</td><td>' + window.innerWidth + ' x ' + window.innerHeight + '</td></tr>';
+  rows += '<tr><td>UA</td><td style="font-size:10px">' + navigator.userAgent + '</td></tr>';
+  document.getElementById('feat').innerHTML = rows;
+
+  // ---- canvas 2d ----
+  try {
+    var c = document.getElementById('c2d');
+    c.width = c.clientWidth; c.height = 90;
+    var x = c.getContext('2d');
+    var g = x.createRadialGradient(c.width/2, 45, 0, c.width/2, 45, 60);
+    g.addColorStop(0, '#E8C882'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    x.fillStyle = g; x.fillRect(0,0,c.width,90);
+  } catch(e){ report('canvas2d: ' + e); }
+
+  // ---- webgl2 ----
+  try {
+    var gc = document.createElement('canvas');
+    var gl = gc.getContext('webgl2');
+    if (!gl) {
+      document.getElementById('gl').innerHTML = '<span class="bad">WebGL2 unavailable</span> (app falls back to 2D)';
+    } else {
+      var f  = gl.getExtension('EXT_color_buffer_float');
+      var hf = gl.getExtension('EXT_color_buffer_half_float');
+      document.getElementById('gl').innerHTML =
+        'WebGL2 <span class="ok">yes</span><br>float RT: <span class="' + (f?'ok':'bad') + '">' + (f?'yes':'no') +
+        '</span> &nbsp; half-float RT: <span class="' + (hf?'ok':'bad') + '">' + (hf?'yes':'no') + '</span><br>' +
+        'renderer: ' + gl.getParameter(gl.VERSION);
+    }
+  } catch(e){
+    document.getElementById('gl').innerHTML = '<span class="bad">threw: ' + e + '</span>';
+  }
+
+  // ---- touch ----
+  try {
+    var tapEl = document.getElementById('tap');
+    var count = 0;
+    function show(e, kind){
+      count++;
+      var p = (e.touches && e.touches[0]) || e;
+      tapEl.textContent = kind + ' #' + count + '  ' + Math.round(p.clientX) + ',' + Math.round(p.clientY);
+      if (e.cancelable) e.preventDefault();
+    }
+    tapEl.addEventListener('pointerdown', function(e){ show(e,'pointer'); });
+    tapEl.addEventListener('touchstart',  function(e){ show(e,'touch'); }, {passive:false});
+    tapEl.addEventListener('mousedown',   function(e){ show(e,'mouse'); });
+  } catch(e){ report('touch: ' + e); }
+})();
+</script>
+</body>
+</html>
