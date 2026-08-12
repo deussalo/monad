@@ -47,7 +47,11 @@ const FILE = process.argv[2] || ('file://' + path.join(__dirname, 'monad.html'))
   console.log('peak voices        ', peak('voices'), '/ 64 pool');
   console.log('peak modal partials', peak('modals'));
   console.log('dropped strikes    ', last.voiceDrops, '(voice pool exhausted)');
-  console.log('dropped modal events', last.modalDrops);
+  // modalDrops > 0 under storm is BY DESIGN as of 9ee36a7: the modal layer
+  // drops rather than steals, because re-pitching a live sine is audible.
+  // Stacking modal partials is what produced the dial-up tone. Do NOT
+  // 'fix' a non-zero number here.
+  console.log('dropped modal events', last.modalDrops, '(>0 is by design - see 9ee36a7)');
   console.log('AudioContext states seen:', states.join(','), states.length===1&&states[0]==='running'?'✓':'✗ CHANGED');
   console.log('errors:', errs.length?errs.slice(0,2):'NONE');
   const ok = states.length===1 && states[0]==='running' && peak('voices')<=64;

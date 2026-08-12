@@ -29,7 +29,7 @@ const FILE = process.argv[2] || ('file://' + path.join(__dirname, 'monad.html'))
   console.log('strikes sounded      :', ds);
   console.log('ratio                :', dc? (ds/dc).toFixed(3) : 'n/a');
   console.log('voiceDrops           :', end.voiceDrops, '(must be 0)');
-  console.log('modalDrops           :', end.modalDrops);
+  console.log('modalDrops           :', end.modalDrops, '(>0 by design: modal layer drops, never steals)');
   console.log('AudioContext state   :', end.state);
   console.log('errors               :', errs.length?errs.slice(0,2):'NONE');
   const ok = end.state==='running' && end.voiceDrops===0 && (!dc || ds/dc > 0.9);

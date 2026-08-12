@@ -44,7 +44,9 @@ const FILE = process.argv[2] || ('file://' + path.join(__dirname, 'monad.html'))
   const total = sum(after)-sum(before);
   console.log('strikes during storm       :', st.strikeCount);
   console.log('AudioNodes created DURING  :', total, Object.keys(grew).length?JSON.stringify(grew):'(none)');
-  console.log('voiceDrops / modalDrops    :', st.voiceDrops, '/', st.modalDrops);
+  // voiceDrops must be 0 (warm pool). modalDrops is expected to be non-zero
+  // under load and is not a failure condition.
+  console.log('voiceDrops / modalDrops    :', st.voiceDrops, '/', st.modalDrops, '(modal drops by design)');
   console.log('AudioContext state         :', st.state);
   console.log('errors                     :', errs.length?errs.slice(0,2):'NONE');
   const ok = total === 0 && st.state === 'running' && st.voiceDrops === 0 && errs.length === 0;
