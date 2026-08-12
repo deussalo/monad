@@ -2872,7 +2872,7 @@ function makeKnob(spec){
   const arc=sv('path',{d:''},'arc');inner.appendChild(arc);
   const handle=sv('circle',{r:2.7,style:'fill:var(--accent)'});inner.appendChild(handle);
   const ico=iconGroup(spec.icon,16);inner.appendChild(ico);
-  const pad=sv('circle',{r:KNOB_HIT,tabindex:'0','aria-label':spec.a||'control'},'hitpad');inner.appendChild(pad);
+  const pad=sv('circle',{r:KNOB_HIT,tabindex:'-1','aria-label':spec.a||'control'},'hitpad');inner.appendChild(pad);
   const node={g,el:inner,cx:0,cy:0};
   function paint(){
     const v=clamp(toN(+input.value),0,1);
@@ -2888,16 +2888,21 @@ function makeKnob(spec){
     input.value=clamp(x,min,max);
     fire(input);paint();
   }
-  let mode=null,prevAng=0,prevY=0;
+  // A rotary answers only to the pointer that grabbed it: on a touch screen a
+  // second finger landing on the same control would otherwise drive it too.
+  let mode=null,dragId=null,prevAng=0,prevY=0;
   pad.addEventListener('pointerdown',e=>{
-    e.preventDefault();e.stopPropagation();pad.setPointerCapture(e.pointerId);
+    if(dragId!==null)return;
+    e.preventDefault();e.stopPropagation();
+    dragId=e.pointerId;
+    try{pad.setPointerCapture(e.pointerId)}catch(err){}
     const d=Math.hypot(e.clientX-node.cx,e.clientY-node.cy);
     mode=d<12?'y':'a';
     prevAng=Math.atan2(e.clientY-node.cy,e.clientX-node.cx)*180/Math.PI;
     prevY=e.clientY;
   });
   pad.addEventListener('pointermove',e=>{
-    if(!mode)return;
+    if(!mode||e.pointerId!==dragId)return;
     if(mode==='y'){nudge((prevY-e.clientY)/190);prevY=e.clientY}
     else{
       const a=Math.atan2(e.clientY-node.cy,e.clientX-node.cx)*180/Math.PI;
@@ -2905,8 +2910,14 @@ function makeKnob(spec){
       prevAng=a;nudge(d/ASWEEP);
     }
   });
-  const stop=e=>{mode=null;pad.releasePointerCapture?.(e.pointerId)};
+  const stop=e=>{
+    if(dragId!==null&&e.pointerId!==dragId)return;
+    mode=null;dragId=null;
+    try{pad.releasePointerCapture?.(e.pointerId)}catch(err){}
+  };
   pad.addEventListener('pointerup',stop);pad.addEventListener('pointercancel',stop);
+  // a drag interrupted by focus loss must not stay armed
+  addEventListener('blur',()=>{mode=null;dragId=null});
   pad.addEventListener('wheel',e=>{e.preventDefault();nudge(e.deltaY<0?.028:-.028)},{passive:false});
   pad.addEventListener('keydown',e=>{
     const k=e.key;
@@ -2926,7 +2937,7 @@ function makeChoice(spec){
   inner.appendChild(sv('circle',{r:KNOB_R},'rail'));
   const ico=sv('g',null,'glyph-stroke');inner.appendChild(ico);
   const dots=sv('g');inner.appendChild(dots);
-  const pad=sv('circle',{r:KNOB_HIT,tabindex:'0','aria-label':spec.a||'mode'},'hitpad');inner.appendChild(pad);
+  const pad=sv('circle',{r:KNOB_HIT,tabindex:'-1','aria-label':spec.a||'mode'},'hitpad');inner.appendChild(pad);
   const n=input.options.length;
   function paint(){
     const i=Math.max(0,input.selectedIndex);
@@ -2952,7 +2963,7 @@ function makeAction(spec){
   const inner=sv('g',null,'node bloom'),g=wrapNode(inner);
   inner.appendChild(sv('circle',{r:23},'plate'));
   const ico=sv('g',null,'glyph-stroke');inner.appendChild(ico);
-  const pad=sv('circle',{r:27,tabindex:'0','aria-label':spec.a||'action'},'hitpad');inner.appendChild(pad);
+  const pad=sv('circle',{r:27,tabindex:'-1','aria-label':spec.a||'action'},'hitpad');inner.appendChild(pad);
   const node={g,el:inner,cx:0,cy:0};
   function paint(){setIcon(ico,spec.icon(),19);if(spec.tint)ico.style.stroke=spec.tint()||''}
   pad.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation()});
@@ -2968,7 +2979,7 @@ function makeSwatch(i){
   // Light rim, not dark: the ground is near-black and the darkest swatches
   // would otherwise be invisible circles.
   const dot=sv('circle',{r:12.5,stroke:'rgba(239,231,215,.34)','stroke-width':1});inner.appendChild(dot);
-  const pad=sv('circle',{r:22,tabindex:'0','aria-label':'colour'},'hitpad');inner.appendChild(pad);
+  const pad=sv('circle',{r:22,tabindex:'-1','aria-label':'colour'},'hitpad');inner.appendChild(pad);
   const node={g,el:inner,cx:0,cy:0};
   function paint(){
     const c=PALETTE[i]||'#000';
@@ -2994,7 +3005,7 @@ function makeVoicingNode(mode){
   inner.appendChild(sv('circle',{r:24},'plate'));
   const axis=sv('line',{x1:0,x2:0,stroke:'var(--ink)','stroke-width':.8},'');inner.appendChild(axis);
   const dotsG=sv('g');inner.appendChild(dotsG);
-  const pad=sv('circle',{r:28,tabindex:'0','aria-label':'voicing'},'hitpad');inner.appendChild(pad);
+  const pad=sv('circle',{r:28,tabindex:'-1','aria-label':'voicing'},'hitpad');inner.appendChild(pad);
   const node={g,el:inner,cx:0,cy:0};
   function paint(){
     const MV=window.MonadVoicing;if(!MV)return;
@@ -3103,7 +3114,7 @@ const hubNodes=GROUPS.map(gr=>{
   const inner=sv('g',null,'node bloom'),g=wrapNode(inner);
   inner.appendChild(sv('circle',{r:24},'plate'));
   inner.appendChild(iconGroup(gr.icon,20));
-  const pad=sv('circle',{r:28,tabindex:'0','aria-label':gr.id},'hitpad');inner.appendChild(pad);
+  const pad=sv('circle',{r:28,tabindex:'-1','aria-label':gr.id},'hitpad');inner.appendChild(pad);
   const node={g,el:inner,cx:0,cy:0,paint(){}};
   const open=()=>{openGroup(gr.id)};
   pad.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation()});
@@ -3158,6 +3169,9 @@ function layoutShell(){
 function showRing(nodes,on){
   nodes.forEach((nd,i)=>{
     const e=nd.el;if(!e)return;
+    // a faded-out node must leave the tab order too, or Tab walks all 44
+    // invisible controls before reaching anything on screen
+    e.querySelectorAll('.hitpad').forEach(h=>h.setAttribute('tabindex',on?'0':'-1'));
     if(on){
       e.style.transitionDelay=(i*26)+'ms';
       // Flush the freshly-appended element's initial style synchronously so the
