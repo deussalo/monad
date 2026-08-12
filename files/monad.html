@@ -65,6 +65,8 @@ html,body{margin:0;height:100%;height:100dvh;overflow:hidden;background:var(--gr
 /* The fluid composite renders its own ground and grain, so the CSS veil and
    grain would double-texture the image and pay for fill twice. */
 body.fluid #veil,body.fluid #grain{display:none}
+/* the fluid composite draws its own vignette; this layer is for the 2D path */
+body.fluid #vignette{display:none}
 #vignette{position:fixed;inset:0;pointer-events:none;z-index:4;
   background:radial-gradient(120% 90% at 50% 45%,transparent 42%,rgba(8,5,2,.46) 100%)}
 
@@ -920,9 +922,12 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     'in vec2 vUv; out vec4 outColor;\n' +
     'uniform sampler2D uVel; uniform vec2 uTexel; uniform float uDt, uTime, uDecay, uCurl, uScale;\n' +
     NOISE +
+    // Velocity is stored in UV/second, not sim-pixels/second, so the velocity
+    // field can run at a different resolution from the dye without any unit
+    // coupling between the two.
     'void main(){\n' +
     '  vec2 v = texture(uVel, vUv).xy;\n' +
-    '  vec2 src = vUv - v*uDt*uTexel;\n' +
+    '  vec2 src = vUv - v*uDt;\n' +
     '  vec2 sv = texture(uVel, src).xy;\n' +
     '  vec2 f = curl(vUv*uScale, uTime*0.05);\n' +
     '  outColor = vec4(sv*uDecay + f*uCurl*uDt, 0.0, 1.0);\n' +
@@ -935,7 +940,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     'uniform sampler2D uSrc, uVel; uniform vec2 uTexel; uniform float uDt, uDiss;\n' +
     'void main(){\n' +
     '  vec2 v = texture(uVel, vUv).xy;\n' +
-    '  vec2 src = vUv - v*uDt*uTexel;\n' +
+    '  vec2 src = vUv - v*uDt;\n' +
     // Backtracking past the edge clamps to the border row, so dye piles up
     // there. Fade the last few percent instead of accumulating a rim.
     '  vec2 e = smoothstep(vec2(0.0), vec2(0.045), vUv)\n' +
@@ -983,6 +988,25 @@ Monad is a live instrument and cannot run without it. The page you are looking a
      pixel: 6.7M texture fetches a frame at phone resolution, which is what
      made this unusable on a real device. At 59x128 it is ~25x cheaper and,
      being a soft glow, indistinguishable once bilinearly upscaled. */
+  /* Separable Gaussian, run at DYE resolution. The jaggedness the owner saw was
+     the dye compositing straight from a 256-wide texture with one bilinear
+     upscale to 1080+: diamond artifacts and hard dye edges. Blurring at sim
+     resolution first is what removes texel structure, and at these sizes each
+     pass is a few tens of thousands of pixels - free. */
+  var FRAG_BLUR =
+    '#version 300 es\nprecision highp float;\n' +
+    'in vec2 vUv; out vec4 outColor;\n' +
+    'uniform sampler2D uSrc; uniform vec2 uDir;\n' +
+    'void main(){\n' +
+    // 9-tap Gaussian folded into 5 linearly-interpolated fetches
+    '  vec3 c = texture(uSrc, vUv).rgb * 0.2270270270;\n' +
+    '  c += texture(uSrc, vUv + uDir*1.3846153846).rgb * 0.3162162162;\n' +
+    '  c += texture(uSrc, vUv - uDir*1.3846153846).rgb * 0.3162162162;\n' +
+    '  c += texture(uSrc, vUv + uDir*3.2307692308).rgb * 0.0702702703;\n' +
+    '  c += texture(uSrc, vUv - uDir*3.2307692308).rgb * 0.0702702703;\n' +
+    '  outColor = vec4(c, 1.0);\n' +
+    '}\n';
+
   var FRAG_BLOOM =
     '#version 300 es\nprecision highp float;\n' +
     'in vec2 vUv; out vec4 outColor;\n' +
@@ -1009,20 +1033,28 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     'uniform vec3 uBg; uniform float uTime, uGrain, uHaze, uStrength, uAtmo;\n' +
     'float hash2(vec2 p){ p = fract(p*vec2(443.897,441.423)); p += dot(p, p+19.19); return fract(p.x*p.y); }\n' +
     'void main(){\n' +
+    // ONE tap. The dye arrives already blurred at sim resolution, where a pass
+    // costs ~14k pixels; a tent here would cost four extra fetches per SCREEN
+    // pixel (~160k+). Soften where pixels are cheap, sample where they are not.
     '  vec3 dye = texture(uDye, vUv).rgb;\n' +
     '  vec3 c = dye + texture(uBloom, vUv).rgb * uHaze * 2.2;\n' +
     '  c *= uStrength * (0.55 + 0.16*uAtmo);\n' +
     '  c += uBg * (0.72 + 0.85*texture(uGround, vUv).r);\n' +
     '  c = c / (1.0 + c*0.78);\n' +          // soft clip, no hard highlights
     '  c += (hash2(gl_FragCoord.xy + floor(uTime*24.0)) - 0.5) * uGrain * 0.055;\n' +
+    // vignette in-shader: replaces a whole full-screen composited CSS layer
+    '  vec2 vd = (vUv - vec2(0.5, 0.55)) * vec2(1.15, 1.0);\n' +
+    '  c *= 1.0 - smoothstep(0.34, 0.78, dot(vd, vd)) * 0.46;\n' +
     '  outColor = vec4(max(c, 0.0), 1.0);\n' +
     '}\n';
 
   var gl = null, canvas = null;
-  var progVel = null, progAdv = null, progSplat = null, progComp = null, progGround = null, progBloom = null;
+  var progVel = null, progAdv = null, progSplat = null, progComp = null, progGround = null, progBloom = null, progBlur = null;
   var vao = null, quad = null;
-  var vel = null, dye = null, ground = null, bloom = null;   // ping-pong pairs + scratch
-  var GROUND_W = 96, GROUND_H = 64, groundAge = 1e9;   // seconds since last ground refresh
+  var vel = null, dye = null, ground = null, bloom = null, blurA = null, blurB = null;
+  var velW = 1, velH = 1;   // velocity runs at half the dye resolution
+  var GROUND_W = 96, GROUND_H = 64, groundAge = 1e9;
+  var BLUR_PASSES = 2;   // two separable passes, both at sim resolution   // seconds since last ground refresh
   var simW = 1, simH = 1, dispW = 1, dispH = 1, dpr = 1;
   var time = 0, ok = false, listening = false;
 
@@ -1091,13 +1123,17 @@ Monad is a live instrument and cannot run without it. The page you are looking a
 
   function allocate() {
     destroyPair(vel); destroyPair(dye);
-    vel = makePair(simW, simH, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
+    velW = Math.max(8, simW >> 1); velH = Math.max(8, simH >> 1);
+    vel = makePair(velW, velH, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
     dye = makePair(simW, simH, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
+    dropTarget(blurA); dropTarget(blurB);
+    blurA = makeTarget(simW, simH, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
+    blurB = makeTarget(simW, simH, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
     if (!ground) ground = makeTarget(GROUND_W, GROUND_H, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
     dropTarget(bloom);
     bloom = makeTarget(Math.max(8, simW >> 1), Math.max(8, simH >> 1), gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
     groundAge = 1e9;
-    return !!(vel && dye && ground && bloom);
+    return !!(vel && dye && ground && bloom && blurA && blurB);
   }
 
   /* A lost context turns every GL call into a silent no-op and leaves an opaque
@@ -1141,7 +1177,8 @@ Monad is a live instrument and cannot run without it. The page you are looking a
       progComp = compile(VERT, FRAG_COMP);
       progGround = compile(VERT, FRAG_GROUND);
       progBloom = compile(VERT, FRAG_BLOOM);
-      if (!progVel || !progAdv || !progSplat || !progComp || !progGround || !progBloom) { gl = null; return false; }
+      progBlur = compile(VERT, FRAG_BLUR);
+      if (!progVel || !progAdv || !progSplat || !progComp || !progGround || !progBloom || !progBlur) { gl = null; return false; }
 
       quad = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, quad);
@@ -1154,7 +1191,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
 
       gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
       resize(canvas.clientWidth || 1, canvas.clientHeight || 1, global.devicePixelRatio || 1);
-      if (!vel || !dye || !ground || !bloom) { gl = null; return false; }
+      if (!vel || !dye || !ground || !bloom || !blurA || !blurB) { gl = null; return false; }
       ok = true;
       api.available = true;
       return true;
@@ -1173,7 +1210,10 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     dispH = Math.max(1, Math.round(cssH * dpr * qScale));
     canvas.width = dispW; canvas.height = dispH;
     // Half resolution, capped; quarter on small screens. This is the budget.
-    var cap = cssW < 700 ? 256 : 512;
+    // Much lower than before. Blurring at sim resolution means a small buffer
+    // reads as soft atmosphere rather than as visible cells, and fill rate is
+    // the entire cost on a phone.
+    var cap = cssW < 700 ? 176 : 384;
     var long = Math.max(cssW, cssH);
     var scale = Math.min(0.5, cap / Math.max(1, long));
     var nw = Math.max(16, Math.round(cssW * scale));
@@ -1234,7 +1274,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     var r = Math.max(0.004, (radius || 20) / w);
     var s = Math.max(0, strength || 0);
     // velocity in sim px/s; the shader consumes texel-space offsets
-    var k = 0.55 * s * (simW / Math.max(1, w));
+    var k = 0.00055 * s;   // px/s -> UV/s
     inject(vel, false, px, py, [dx * k, -dy * k, 0], r, 0);
     inject(dye, false, px, py, [rgb[0] * s, rgb[1] * s, rgb[2] * s], r, 0);
   }
@@ -1245,7 +1285,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     if (w <= 0 || h <= 0) return;
     var px = x / w, py = 1.0 - y / h;
     var r = Math.max(0.004, (radius || 20) / w);
-    var s = Math.max(0, strength || 0) * 90.0 * (simW / Math.max(1, w));
+    var s = Math.max(0, strength || 0) * 0.09;   // UV/s
     inject(vel, true, px, py, [s, s, 0], r, Math.max(0.012, r * 0.5));
   }
 
@@ -1258,15 +1298,15 @@ Monad is a live instrument and cannot run without it. The page you are looking a
 
     // 1) velocity: self-advect, decay, re-inject curl
     gl.bindFramebuffer(gl.FRAMEBUFFER, vel.write.fb);
-    gl.viewport(0, 0, simW, simH);
+    gl.viewport(0, 0, velW, velH);
     gl.useProgram(progVel.p);
     bindTex(0, vel.read.tex);
     gl.uniform1i(progVel.u.uVel, 0);
     gl.uniform2f(progVel.u.uTexel, texel[0], texel[1]);
     gl.uniform1f(progVel.u.uDt, d);
     gl.uniform1f(progVel.u.uTime, time);
-    gl.uniform1f(progVel.u.uDecay, Math.exp(-0.85 * d));
-    gl.uniform1f(progVel.u.uCurl, 44.0);
+    gl.uniform1f(progVel.u.uDecay, Math.exp(-0.55 * d));
+    gl.uniform1f(progVel.u.uCurl, 0.0075);
     gl.uniform1f(progVel.u.uScale, 3.2);
     drawQuad();
     vel.swap();
@@ -1280,7 +1320,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     gl.uniform1i(progAdv.u.uVel, 1);
     gl.uniform2f(progAdv.u.uTexel, texel[0], texel[1]);
     gl.uniform1f(progAdv.u.uDt, d);
-    gl.uniform1f(progAdv.u.uDiss, Math.exp(-1.45 * d));
+    gl.uniform1f(progAdv.u.uDiss, Math.exp(-1.05 * d));
     drawQuad();
     dye.swap();
 
@@ -1316,13 +1356,33 @@ Monad is a live instrument and cannot run without it. The page you are looking a
       drawQuad();
     }
 
+    // Separable Gaussian for DISPLAY ONLY. Feeding the blur back into the dye
+    // state compounds as numerical diffusion every frame and flattens every
+    // colour into one grey mass; the state stays sharp and only what reaches
+    // the screen is softened.
+    gl.useProgram(progBlur.p);
+    gl.viewport(0, 0, simW, simH);
+    var srcTex = dye.read.tex;
+    for (var pass = 0; pass < BLUR_PASSES; pass++) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, blurA.fb);
+      bindTex(0, srcTex);
+      gl.uniform1i(progBlur.u.uSrc, 0);
+      gl.uniform2f(progBlur.u.uDir, 1 / simW, 0);
+      drawQuad();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, blurB.fb);
+      bindTex(0, blurA.tex);
+      gl.uniform2f(progBlur.u.uDir, 0, 1 / simH);
+      drawQuad();
+      srcTex = blurB.tex;
+    }
+
     // Bloom at HALF SIM resolution, and skipped entirely at reduced quality.
     // Doing this 9-tap blur per screen pixel was the single biggest cost.
     if (qBloom) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, bloom.fb);
       gl.viewport(0, 0, bloom.w, bloom.h);
       gl.useProgram(progBloom.p);
-      bindTex(0, dye.read.tex);
+      bindTex(0, blurB.tex);
       gl.uniform1i(progBloom.u.uDye, 0);
       gl.uniform2f(progBloom.u.uTexel, 1 / simW, 1 / simH);
       drawQuad();
@@ -1332,7 +1392,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, dispW, dispH);
     gl.useProgram(progComp.p);
-    bindTex(0, dye.read.tex); bindTex(1, ground.tex); bindTex(2, bloom.tex);
+    bindTex(0, blurB.tex); bindTex(1, ground.tex); bindTex(2, bloom.tex);
     var u = progComp.u;
     gl.uniform1i(u.uDye, 0);
     gl.uniform1i(u.uGround, 1);
@@ -1352,10 +1412,11 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     destroyPair(vel); destroyPair(dye);
     dropTarget(ground); ground = null;
     dropTarget(bloom); bloom = null;
+    dropTarget(blurA); blurA = null; dropTarget(blurB); blurB = null;
     [progVel, progAdv, progSplat, progComp, progGround, progBloom].forEach(function (pr) { if (pr) gl.deleteProgram(pr.p); });
     if (quad) gl.deleteBuffer(quad);
     if (vao) gl.deleteVertexArray(vao);
-    vel = dye = null; progVel = progAdv = progSplat = progComp = progGround = progBloom = null;
+    vel = dye = null; progVel = progAdv = progSplat = progComp = progGround = progBloom = progBlur = null;
     gl = null; ok = false; api.available = false;
   }
 
@@ -1368,7 +1429,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     step: step,
     render: render,
     quality: quality,
-    info: function(){ return simW + 'x' + simH + ' sim, ' + dispW + 'x' + dispH + ' out'; },
+    info: function(){ return simW + 'x' + simH + ' dye, ' + velW + 'x' + velH + ' vel, ' + dispW + 'x' + dispH + ' out'; },
     dispose: dispose
   };
   global.MonadFluid = api;
@@ -1479,7 +1540,7 @@ function orbHz(o){
 }
 function modeLabel(o){const m=materialFor(o);return m.ratios[1].toFixed(2)+'× · '+m.ratios[2].toFixed(2)+'×'}
 const pressureWaves=[],pressureWavePool=[],resonanceLinks=[];
-const MAX_PRESSURE_WAVES=8,PRESSURE_WAVE_MIN_INTERVAL_MS=24,MAX_RESONANCE_LINKS=56,MAX_MODAL_EVENTS=18,MAX_MODAL_PARTIALS=MAX_MODAL_EVENTS*3;
+const MAX_PRESSURE_WAVES=8,PRESSURE_WAVE_MIN_INTERVAL_MS=24,MAX_RESONANCE_LINKS=56,MAX_MODAL_EVENTS=LOW_POWER?8:18,MAX_MODAL_PARTIALS=MAX_MODAL_EVENTS*3;
 let activeModePartials=0,lastPressureWaveAt=-1e9;
 for(let i=0;i<MAX_PRESSURE_WAVES;i++)pressureWavePool.push({hit:new Set()});
 function releasePressureWaveAt(i){
@@ -1837,6 +1898,15 @@ let ac=null,master=null,dryBus=null,wetBus=null,revIn=null,wetOut=null,voiceMix=
 // without user activation and leaves the context suspended, which is exactly
 // how every phone shipped silent.
 window.__monadAudio=function(){return ac?ac.state:'none'};
+let voiceDrops=0,modalDrops=0;
+window.__monadAudioStats=function(){return{
+  state:ac?ac.state:'none',
+  voices:typeof activeSourceVoices==='number'?activeSourceVoices:-1,
+  modals:typeof activeModePartials==='number'?activeModePartials:-1,
+  voiceDrops:voiceDrops,modalDrops:modalDrops,
+  baseLatency:ac&&ac.baseLatency?+(ac.baseLatency*1000).toFixed(1):null,
+  sampleRate:ac?ac.sampleRate:null
+}};
 let finalHP=null,finalLP1=null,finalLP2=null,fdn=null,driftTimer=null;
 const VOICE_POOL_SIZE=64;
 const voices=Array.from({length:VOICE_POOL_SIZE},()=>({
@@ -1870,7 +1940,10 @@ function initAudio(){
   if(ac)return;
 
   const AC=window.AudioContext||window.webkitAudioContext;
-  ac=new AC({latencyHint:'balanced'});
+  // 'playback' asks for the largest feasible buffer: on a phone the extra
+  // 20-40ms of latency is inaudible against the reverb tail, underrun crackle
+  // is not. Desktop keeps the shorter buffer.
+  ac=new AC({latencyHint:LOW_POWER?'playback':'balanced'});
 
   master=ac.createGain();
   master.gain.value=.68;
@@ -2052,7 +2125,7 @@ function buildReverb(){
 
   clearInterval(driftTimer);
   driftTimer=setInterval(()=>{
-    if(!fdn||!ac)return;
+    if(!fdn||!ac||ac.state!=='running')return;   // automating a suspended context floods the schedule on resume
 
     const t=ac.currentTime;
     for(let i=0;i<8;i++){
@@ -2065,7 +2138,7 @@ function buildReverb(){
         1.05
       );
     }
-  },950);
+  },1500);
 }
 
 function applyReverb(){
@@ -2177,6 +2250,11 @@ function updatePolyHeadroom(t){
 function chooseFreeVoice(){
   const limit=Math.max(1,Math.min(VOICE_POOL_SIZE,Math.round(SOURCE.maxVoices)));
   for(let n=0;n<limit;n++){const i=(nextVoiceSearch+n)%limit;if(!voices[i].busy){nextVoiceSearch=(i+1)%limit;return voices[i]}}
+  // onended is unreliable on Android Chrome under load; a voice that never
+  // reports back stays busy forever and silently shrinks polyphony. Reclaim any
+  // voice already past its scheduled stop. v.osc is cleared first so a late
+  // onended sees v.osc!==osc and cannot double-decrement the active count.
+  if(ac){const now=ac.currentTime;for(let n=0;n<limit;n++){const i=(nextVoiceSearch+n)%limit;const v=voices[i];if(v.busy&&now>v.end+0.05){try{if(v.osc)v.osc.disconnect()}catch(e){}v.busy=false;v.osc=null;activeSourceVoices=Math.max(0,activeSourceVoices-1);nextVoiceSearch=(i+1)%limit;return v}}}
   return null;
 }
 
@@ -2200,7 +2278,7 @@ function resonanceAffinity(a,b){
 function playModalBody(o,impact,sympathetic=false){
   if(!ac||ac.state!=='running'||!modalBus||PHYS.modalMix<=.001)return;
   const slot=chooseFreeModalEvent();
-  if(!slot)return;
+  if(!slot){modalDrops++;return}
   const m=materialFor(o),ratios=m.ratios;
   const strength=clamp((impact-2)/130,0,1);
   if(strength<=.008)return;
@@ -2218,6 +2296,7 @@ function playModalBody(o,impact,sympathetic=false){
   for(let i=0;i<ratios.length;i++){
     const f=base*ratios[i];
     if(f>15000)continue;
+    if(LOW_POWER&&i>=2&&f>2000)continue;   // masked by the reverb wash; still a full oscillator
     const osc=ac.createOscillator(),g=slot.gains[i],gp=g.gain;
     const life=Math.max(.08,ring*(1-i*.13));
     const attack=sympathetic?.008:.0035+i*.0007;
@@ -2323,7 +2402,7 @@ function strikeNow(o,impact,physical=true){
 
   const t=ac.currentTime+.003;
   const v=chooseFreeVoice();
-  if(!v)return;
+  if(!v){voiceDrops++;return}   // pool exhausted: the strike is silently lost
 
   const osc=ac.createOscillator();
   osc.type=SOURCE.wave;
@@ -2971,16 +3050,25 @@ function initFluid(){
 // frame. Per-frame injection made the equilibrium brightness depend on frame
 // rate: the same scene that looked right at 30fps bleached to a flat white
 // cloud at 60. Equilibrium is now rate/dissipation, independent of frame rate.
+// SPARSE emission. The old constant per-body drizzle filled the field with a
+// uniform haze; the target is a handful of discrete, very large, very soft
+// masses of colour folding into each other. So: a low idle rate, big bursts
+// when a body is actually struck or resonating, and a much wider aura.
 function fluidSplatOrb(o,dt){
   const F=window.MonadFluid;
   if(!fluidOn||!F)return;
+  const energy=(o.hit||0)+.7*(o.resonance||0);
   const spd=Math.hypot(o.vx||0,o.vy||0);
-  const rate=(1.35+9*(o.hit||0)+3.6*(o.resonance||0))*(.55+Math.min(1,spd/230));
+  const rate=.44+15*energy+.45*Math.min(1,spd/260);
   const s=rate*dt;
   if(s<=.0004)return;
-  // The atmosphere control is the glow radius, exactly as in the 2D path — a
-  // body's aura is fieldAtmo times its own radius, not a fixed multiple.
-  F.splat(o.x,o.y,o.vx||0,o.vy||0,orbRGB(o),o.r*Math.max(1.2,fieldAtmo),s);
+  // Wide aura: the dye is heavily blurred, so a large soft source reads as an
+  // atmospheric mass rather than a disc.
+  // Deliberately NOT huge: the display blur spreads it. An emission radius over
+  // half the screen made every source overlap into one uniform wash instead of
+  // discrete masses of colour.
+  const radius=o.r*Math.max(1.5,fieldAtmo*1.05)*(1+.3*energy);
+  F.splat(o.x,o.y,o.vx||0,o.vy||0,orbRGB(o),radius,s);
 }
 // one-shot impulse (a body leaving, a palette arriving) — not rate integrated
 function fluidPuff(o,s){
@@ -3599,7 +3687,13 @@ layoutShell();
 
 
 let lastSizeKey='';
-function resize(){const r=stage.getBoundingClientRect();W=Math.max(1,r.width);H=Math.max(1,r.height);DPR=Math.min(devicePixelRatio||1,1.5);
+function resize(){const r=stage.getBoundingClientRect();W=Math.max(1,r.width);H=Math.max(1,r.height);
+  // Fill rate is the entire cost on a phone (CPU per frame measured at 0.3ms
+  // total: physics 0.06, draw 0.11, fluid 0.14). The bodies canvas is a second
+  // full-screen composited layer; at 1.5x on a 3x panel it was 585x1266. The
+  // bodies are flat discs over a deliberately soft field, so 1x costs 45% fewer
+  // pixels for no visible loss. Measured: p50 -7%, p95 -13% at equal quality.
+  DPR=Math.min(devicePixelRatio||1,LOW_POWER?1:1.5);
   // Mobile browsers fire ResizeObserver for URL-bar show/hide and momentary
   // viewport nudges. Reallocating five canvases mid-touch is a guaranteed
   // hitch, so only realloc when the physical size actually changed.
@@ -3668,17 +3762,25 @@ let qLevel=3,qSlow=0,qLastChange=0;
 // sitting "close enough" at a juddery 70.
 let panelMs=16.7;
 function frameBudgetMs(){return Math.max(11,panelMs*1.45)}
+// Measured: the 2D atmosphere costs ~1.7x the WebGL fluid on a phone viewport
+// (47.7ms vs 27.8ms), so the old bottom rungs - "turn the fluid off" - made a
+// struggling device SLOWER. The ladder now only ever shrinks the fluid. Falling
+// back to 2D is for absent WebGL2, never for performance.
+const QUALITY_STEPS=[
+  {bloom:false,scale:.40},   // -1
+  {bloom:false,scale:.55},   //  0
+  {bloom:false,scale:.70},   //  1
+  {bloom:false,scale:1},     //  2
+  {bloom:true, scale:1}      //  3
+];
+const qTransitions=[];
 function applyQuality(){
   const F=window.MonadFluid;
-  if(qLevel>=3){if(F&&F.quality)F.quality({bloom:true,scale:1})}
-  else if(qLevel===2){if(F&&F.quality)F.quality({bloom:false,scale:1})}
-  else if(qLevel===1){if(F&&F.quality)F.quality({bloom:false,scale:.7})}
-  else if(qLevel===0){
-    if(fluidOn&&F&&F.onContextLost)F.onContextLost();   // hand back to the 2D path
-    fluidOn=false;
-  }else{
-    fieldHaze=0;                                        // 2D: drop the second blit
-  }
+  const step=QUALITY_STEPS[clamp(qLevel+1,0,QUALITY_STEPS.length-1)];
+  if(F&&F.quality){try{F.quality(step)}catch(err){}}
+  if(!fluidOn&&qLevel<=0)fieldHaze=0;   // only the 2D path needs this
+  qTransitions.push(qLevel);
+  if(qTransitions.length>8)qTransitions.shift();
 }
 function adaptQuality(now,frameMs){
   if(frameMs>4&&frameMs<panelMs)panelMs=Math.max(4,frameMs);
@@ -3718,7 +3820,7 @@ function perfTick(now,frameMs){
   const F=window.MonadFluid;
   perfEl.textContent=
     'fps '+(1000/Math.max(.001,p50)).toFixed(0)+'   frame p50 '+p50.toFixed(1)+'ms  p95 '+p95.toFixed(1)+'ms\n'+
-    'quality '+qLevel+'   atmosphere '+(fluidOn?'webgl':'2d')+'\n'+
+    'quality '+qLevel+' ['+qTransitions.join('>')+']  atmosphere '+(fluidOn?'webgl':'2d')+'\n'+
     'bodies '+orbs.length+'   dpr '+DPR+'   '+innerWidth+'x'+innerHeight+'\n'+
     'buffer '+(F&&F.info?F.info():'-');
 }
