@@ -1832,6 +1832,11 @@ $('#preset').value=presetText();
 
 // ---------- AUDIO: CLEAN ZERO-PHASE STRIKES / SINGLE-FILE PHONE BUILD ----------
 let ac=null,master=null,dryBus=null,wetBus=null,revIn=null,wetOut=null,voiceMix=null,modalBus=null;
+// Confirmed-state probe. Gesture-gated APIs must be verified by their resulting
+// state, never by the fact that the call was made: ac.resume() returns happily
+// without user activation and leaves the context suspended, which is exactly
+// how every phone shipped silent.
+window.__monadAudio=function(){return ac?ac.state:'none'};
 let finalHP=null,finalLP1=null,finalLP2=null,fdn=null,driftTimer=null;
 const VOICE_POOL_SIZE=64;
 const voices=Array.from({length:VOICE_POOL_SIZE},()=>({
@@ -2883,7 +2888,12 @@ function removeOrb(o){
   if(selected===o)selectOrb(null);
   // let the atmosphere remember it for a moment
   if(fluidOn)fluidPuff(o,.55);
-  if(navigator.vibrate)try{navigator.vibrate(12)}catch(err){}
+  // gesture-gated: the long-press timer fires before the pointerup that grants
+  // activation, so the first-ever press has none. Sticky activation covers the rest.
+  try{
+    const ua=navigator.userActivation;
+    if(navigator.vibrate&&(!ua||ua.hasBeenActive))navigator.vibrate(12);
+  }catch(err){}
   fieldDirty=true;refreshPresetBox();
 }
 body.addEventListener('dblclick',e=>{const p=pt(e);removeOrb(hit(p.x,p.y))});

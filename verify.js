@@ -5,7 +5,7 @@ const path = require('path');
 (async () => {
   const browser = await chromium.launch({
     executablePath:'/srv/rig/.cache/ms-playwright/chromium-1187/chrome-linux/chrome',
-    args: ['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--autoplay-policy=no-user-gesture-required','--mute-audio']
+    args: ['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--mute-audio']
   });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 
