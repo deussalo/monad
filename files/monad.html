@@ -3532,10 +3532,21 @@ stage.addEventListener('pointerdown',e=>{
   if(shellState!==0){collapseShell();e.stopPropagation();e.preventDefault()}
 },true);
 // first gesture anywhere starts audio — no button, no words
-let audioArmed=false;
-function armAudio(){if(audioArmed)return;audioArmed=true;$('#audio').click()}
-addEventListener('pointerdown',armAudio,{capture:true,once:true});
-addEventListener('keydown',armAudio,{capture:true,once:true});
+// Arming on pointerdown with {once:true} was silent on every phone: for touch
+// input the browser grants user activation at pointerUP/touchend — not down —
+// so ac.resume() ran without authority, stayed suspended, and never retried.
+// Arm on activation-granting events and KEEP retrying until audio is actually
+// running; also re-resume when the tab returns from background (Android drops
+// the context to suspended/interrupted there).
+function audioLive(){return !!(ac&&ac.state==='running')}
+function armAudio(){
+  if(audioLive())return;
+  try{$('#audio').click()}catch(err){}
+}
+['pointerup','click','keydown','touchend'].forEach(t=>addEventListener(t,armAudio,{capture:true}));
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden&&ac&&ac.state!=='running'){try{ac.resume()}catch(err){}}
+});
 
 // ---- photo -> palette (wired fully when the extractor lands) ----
 let photoInput=null;
