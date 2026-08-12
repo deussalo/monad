@@ -54,6 +54,9 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--ground);color:va
 #grain{position:fixed;inset:0;pointer-events:none;z-index:3;opacity:.055;mix-blend-mode:overlay;
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='140' height='140' filter='url(%23n)'/></svg>");
   background-size:140px 140px}
+/* The fluid composite renders its own ground and grain, so the CSS veil and
+   grain would double-texture the image and pay for fill twice. */
+body.fluid #veil,body.fluid #grain{display:none}
 #vignette{position:fixed;inset:0;pointer-events:none;z-index:4;
   background:radial-gradient(120% 90% at 50% 45%,transparent 42%,rgba(8,5,2,.46) 100%)}
 
@@ -2651,6 +2654,7 @@ function initFluid(){
   if(!ok)return false;
   fluidOn=true;
   fluidCanvas.style.display='block';
+  document.body.classList.add('fluid');
   try{F.resize(W,H,DPR)}catch(err){}
   return true;
 }
@@ -3109,6 +3113,8 @@ function setState(s,id){
   rootDot.setAttribute('opacity',s===2?'0':'1');
   if(s===2){
     const gr=GROUPS.find(g=>g.id===id);
+    // the glyph carries the active group's mark — the only "you are here"
+    setIcon(rootIcon,gr.icon,17);rootIcon.setAttribute('opacity','.9');
     const next=itemsFor(gr);
     if(itemNodes.length&&itemNodes!==next)showRing(itemNodes,false);
     itemNodes=next;
