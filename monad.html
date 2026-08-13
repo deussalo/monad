@@ -3647,7 +3647,7 @@ function noteSelPcElsewhere(pc){
 function makeKeyNode(spec){
   const pc=spec.pc,black=!!spec.black;
   const inner=sv('g',null,'node bloom'),g=wrapNode(inner);
-  const r=black?11:15;
+  const r=black?11:16;
   const face=sv('circle',{r});inner.appendChild(face);
   const ring=sv('circle',{r:r+4.5,fill:'none',stroke:'var(--accent)','stroke-width':1.2,opacity:0});inner.appendChild(ring);
   const pad=sv('circle',{r:black?(COARSE?18:16):(COARSE?21:20),tabindex:'-1','aria-label':'note'},'hitpad');inner.appendChild(pad);
@@ -3655,8 +3655,9 @@ function makeKeyNode(spec){
   function paint(){
     const midi=NOTESEL_BASE+noteSel.oct*12+pc;
     const on=noteSel.set.has(midi);
-    face.setAttribute('fill',on?'var(--accent)':black?'rgba(20,15,9,.78)':'rgba(239,231,215,.12)');
-    face.setAttribute('stroke',on?'var(--accent)':'var(--ink-faint)');
+    // read like a piano: whites clearly light, blacks solidly dark
+    face.setAttribute('fill',on?'var(--accent)':black?'rgba(12,9,5,.92)':'rgba(239,231,215,.5)');
+    face.setAttribute('stroke',on?'var(--accent)':black?'rgba(239,231,215,.42)':'rgba(239,231,215,.65)');
     face.setAttribute('stroke-width',on?1.4:1);
     face.setAttribute('opacity',on?.95:1);
     // same pitch class lit in another octave — faint halo, not a full ring
@@ -3723,15 +3724,20 @@ const NOTESEL={id:'notesel',icon:'hubKeys',span:168,items:[
   {t:'action',icon:()=>'kScatter',run:()=>noteSelScatter(),a:'scatter across octaves',small:true}
 ],layout(nodes){
   // whites fan the standard arc; blacks sit inset at the piano's gaps
-  // (C#,D# between C-D-E; F#,G#,A# between F-G-A-B); controls hug the root.
+  // (C#,D# between C-D-E; F#,G#,A# between F-G-A-B). Controls are a
+  // symmetric cluster on the vertical axis: minus | octave dots | plus
+  // mirrored about centre, scatter directly above the dots.
   const start=270-NOTESEL.span/2,step=NOTESEL.span/6;
   const at=(nd,ang,rad)=>{const a=ang*Math.PI/180;place(nd,rootX+rad*Math.cos(a),rootY+rad*Math.sin(a))};
   for(let i=0;i<7;i++)at(nodes[i],start+step*i,ringR);
   const gaps=[0,1,3,4,5];   // white-pair indices that carry a black key
-  const rb=ringR-Math.min(36,ringR*.24);   // proportional inset keeps blacks apart on tiny rings
+  const rb=ringR-Math.min(34,ringR*.23);   // proportional inset keeps blacks apart on tiny rings
   for(let i=0;i<5;i++)at(nodes[7+i],start+step*(gaps[i]+.5),rb);
-  const cr=Math.max(56,ringR*.45),cs=270-66,cstep=132/3;
-  for(let i=0;i<4;i++)at(nodes[12+i],cs+cstep*i,cr);
+  const cr=Math.max(52,ringR*.4);
+  at(nodes[12],270-46,cr);           // octave down, left
+  at(nodes[13],270,cr);              // octave dots, centre
+  at(nodes[14],270+46,cr);           // octave up, right — mirror of minus
+  at(nodes[15],270,cr+36);           // scatter, straight above the dots
 }};
 function groupById(id){return GROUPS.find(g=>g.id===id)||(id==='notesel'?NOTESEL:null)}
 
