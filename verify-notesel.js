@@ -72,21 +72,42 @@ const path = require('path');
   out.afterUntoggle = await page.evaluate(() => window.MonadVoicing.getCustomNotes().length);
   if (out.afterUntoggle !== 3) errors.push('untoggle failed, ' + out.afterUntoggle + ' notes');
 
-  // scatter preserves pitch classes, may change octaves
-  const pcsBefore = await page.evaluate(() => new Set(window.MonadVoicing.getCustomNotes().map(m => m % 12)).size);
-  await clickPad('scatter across octaves');
-  out.afterScatter = await page.evaluate(() => window.MonadVoicing.getCustomNotes());
-  const pcsAfter = new Set(out.afterScatter.map(m => m % 12)).size;
-  if (pcsAfter !== pcsBefore) errors.push('scatter changed pitch classes: ' + pcsBefore + ' -> ' + pcsAfter);
+  // octave-spread knob exists on the ring
+  out.spreadKnob = await page.evaluate(() =>
+    !!document.querySelector('.bloom.in .hitpad[aria-label="octave spread"]'));
+  if (!out.spreadKnob) errors.push('octave spread knob missing');
 
-  // the pool is what the music generates from: 40 draws all come from the pool
+  // spread 0: the pool is what the music generates from — 40 draws stay in it
   out.draws = await page.evaluate(() => {
+    window.MonadVoicing.setOctaveSpread(0);
     const pool = new Set(window.MonadVoicing.getCustomNotes());
     let bad = 0;
     for (let i = 0; i < 40; i++) if (!pool.has(window.MonadVoicing.nextNote())) bad++;
     return bad;
   });
-  if (out.draws) errors.push(out.draws + ' nextNote() draws left the custom pool');
+  if (out.draws) errors.push(out.draws + ' nextNote() draws left the custom pool at spread 0');
+
+  // spread 1: strikes scatter across octaves but pitch classes hold and the
+  // SELECTION itself is never rewritten
+  out.spread = await page.evaluate(() => {
+    const before = window.MonadVoicing.getCustomNotes().slice();
+    window.MonadVoicing.setOctaveSpread(1);
+    const pcs = new Set(before.map(m => m % 12));
+    const seen = new Set(); let badPc = 0, outOfRange = 0;
+    for (let i = 0; i < 120; i++) {
+      const m = window.MonadVoicing.nextNote();
+      seen.add(m);
+      if (!pcs.has(m % 12)) badPc++;
+      if (m < 24 || m > 95) outOfRange++;
+    }
+    window.MonadVoicing.setOctaveSpread(0);
+    return { badPc, outOfRange, distinct: seen.size, poolSize: before.length,
+             selectionIntact: JSON.stringify(before) === JSON.stringify(window.MonadVoicing.getCustomNotes()) };
+  });
+  if (out.spread.badPc) errors.push('spread strikes left the picked pitch classes');
+  if (out.spread.outOfRange) errors.push('spread strikes escaped the six-octave range');
+  if (out.spread.distinct <= out.spread.poolSize) errors.push('spread 1 produced no octave variety');
+  if (!out.spread.selectionIntact) errors.push('octave spread mutated the selection');
 
   // preset round-trip
   out.preset = await page.evaluate(() => {

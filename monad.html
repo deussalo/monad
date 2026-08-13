@@ -394,6 +394,27 @@ Monad is a live instrument and cannot run without it. The page you are looking a
    */
   var _customNotes = [];
 
+  /* Octave scatter at impact: 0 = notes sound in their picked octaves;
+   * rising values make offsets of ±1..±3 octaves increasingly likely
+   * (geometric falloff, spread^|offset|, so far octaves always stay rarer
+   * than near ones). Applied per-strike in nextNote(), custom mode only. */
+  var _octaveSpread = 0;
+
+  function _scatterOctave(m) {
+    if (_octaveSpread <= 0) return m;
+    var total = 0, w = [], o;
+    for (o = -3; o <= 3; o++) {
+      var wi = Math.pow(_octaveSpread, Math.abs(o));
+      w.push(wi); total += wi;
+    }
+    var r = Math.random() * total, pick = 0;
+    for (o = 0; o < w.length; o++) { r -= w[o]; if (r <= 0) { pick = o - 3; break; } }
+    m += 12 * pick;
+    while (m < 24) m += 12;   // fold back into the keyboard's six octaves
+    while (m > 95) m -= 12;
+    return m;
+  }
+
   function _shuffledBag(src) {
     var bag = src.slice();
     for (var i = bag.length - 1; i > 0; i--) {
@@ -497,7 +518,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
         _stack = _shuffledBag(_customNotes);
         _idx = 0;
       }
-      return _stack[_idx++];
+      return _scatterOctave(_stack[_idx++]);
     }
     var mode = _modeById(_currentId);
     if (!mode) return 52;
@@ -628,6 +649,8 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     setMode:        setMode,
     setCustomNotes: setCustomNotes,
     getCustomNotes: getCustomNotes,
+    get octaveSpread() { return _octaveSpread; },
+    setOctaveSpread: function (v) { _octaveSpread = Math.max(0, Math.min(1, +v || 0)); },
     nextNote:      nextNote,
     tick:          tick,
     constellation: constellation,
@@ -1842,7 +1865,8 @@ function buildPreset(){
     },
     voicing:{
       mode:window.MonadVoicing?window.MonadVoicing.current:'quintal',
-      custom:window.MonadVoicing?window.MonadVoicing.getCustomNotes():[]
+      custom:window.MonadVoicing?window.MonadVoicing.getCustomNotes():[],
+      octave_spread:window.MonadVoicing?window.MonadVoicing.octaveSpread:0
     },
     scene:{
       coordinate_space:'normalized',
@@ -1932,6 +1956,12 @@ function applyPresetObject(p){
       noteSel.set=new Set(window.MonadVoicing.getCustomNotes());
     }
     if(typeof p.voicing.mode==='string')window.MonadVoicing.setMode(p.voicing.mode);
+    if(Number.isFinite(+p.voicing.octave_spread)){
+      const v=clamp(+p.voicing.octave_spread,0,1);
+      window.MonadVoicing.setOctaveSpread(v);
+      octSpreadInput.value=v;
+      octSpreadInput.dispatchEvent(new Event('input',{bubbles:false}));   // repaint the rotary
+    }
   }
   const colour=p.colour||p.color||{};
   importPalette(colour.palette);
@@ -3433,7 +3463,7 @@ let activeKnobRelease=null;
 addEventListener('blur',()=>{if(activeKnobRelease){activeKnobRelease();activeKnobRelease=null}});
 
 function makeKnob(spec){
-  const input=spec.el?$(spec.el):bindingInput(spec.obj,spec.key);
+  const input=spec.input||(spec.el?$(spec.el):bindingInput(spec.obj,spec.key));
   const inner=sv('g',null,'node bloom'),g=wrapNode(inner);
   if(!input)return{g,el:inner,paint(){},cx:0,cy:0};
   const min=+input.min,max=+input.max,step=+input.step||.001;
@@ -3705,19 +3735,12 @@ function noteSelShiftOct(d){
   noteSel.oct=clamp(noteSel.oct+d,0,NOTESEL_OCTS-1);
   paintNoteSelGroup();
 }
-function noteSelScatter(){
-  const pcs=new Set([...noteSel.set].map(m=>m%12));
-  if(!pcs.size)return;
-  noteSel.set.clear();
-  for(const pc of pcs){
-    // each picked pitch class lands in one or two random octaves
-    const n=Math.random()<.45?2:1,used=new Set();
-    while(used.size<n)used.add(Math.floor(Math.random()*NOTESEL_OCTS));
-    for(const o of used)noteSel.set.add(NOTESEL_BASE+o*12+pc);
-  }
-  noteSelSync();paintNoteSelGroup();
-  if(window.MonadVoicing)window.MonadVoicing.audition('custom',auditionStrike,performance.now());
-}
+// Octave-spread knob: scatter happens AT IMPACT, per strike, in the engine —
+// the picked notes themselves are never rewritten. A detached range input
+// carries the value so makeKnob can drive it like any other rotary.
+const octSpreadInput=document.createElement('input');
+octSpreadInput.type='range';octSpreadInput.min=0;octSpreadInput.max=1;octSpreadInput.step=.001;octSpreadInput.value=0;
+octSpreadInput.addEventListener('input',()=>{if(window.MonadVoicing)window.MonadVoicing.setOctaveSpread(+octSpreadInput.value)});
 // item order matters: layout addresses whites 0-6, blacks 7-11, controls 12-15
 const NOTESEL={id:'notesel',icon:'hubKeys',span:168,items:[
   ...[0,2,4,5,7,9,11].map(pc=>({t:'key',pc})),
@@ -3725,7 +3748,7 @@ const NOTESEL={id:'notesel',icon:'hubKeys',span:168,items:[
   {t:'action',icon:()=>'kMinus',run:()=>noteSelShiftOct(-1),a:'octave down',small:true},
   {t:'octind'},
   {t:'action',icon:()=>'kPlus',run:()=>noteSelShiftOct(1),a:'octave up',small:true},
-  {t:'action',icon:()=>'kScatter',run:()=>noteSelScatter(),a:'scatter across octaves',small:true}
+  {t:'knob',input:octSpreadInput,icon:'kScatter',a:'octave spread'}
 ],layout(nodes){
   // whites fan the standard arc; blacks sit inset at the piano's gaps
   // (C#,D# between C-D-E; F#,G#,A# between F-G-A-B). Controls are a
