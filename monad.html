@@ -1624,7 +1624,7 @@ const motion={
   playStart:0
 };
 
-const SOURCE={wave:'sine',attack:.039,decay:6,level:.19,sizeRing:1,maxVoices:55};
+const SOURCE={wave:'sine',attack:.012,decay:6,level:.19,sizeRing:1,maxVoices:55};
 const R={input:.55,dry:.82,wet:.687,output:.85,predelay:51.7,size:2.3399,decay:49.6322,feedback:29.1,lowRatio:.9698,highRatio:.05,lowCross:102.804,highCross:6380.1304,damping:16000,diffusion:.82,modRate:.0706,modDepth:6,drift:.8,outHP:79,outLP:7736,delays:[83.1,96.8,113.9,132.9,154.2,178.1,205.3,236.9]};
 // Delay lengths are near-geometric (ratio ~1.16, jittered off simple fractions).
 // The previous set had two near-duplicate pairs (114.5/113.9, 132.9/138.3):
@@ -2085,8 +2085,8 @@ const VOICE_POOL_SIZE=64;
 // while 64+54 was not).
 const WARM_VOICES=LOW_POWER?32:VOICE_POOL_SIZE;
 const WARM_MODAL=MAX_MODAL_EVENTS;   // one voice per slot; the array is the warm pool
-const voices=Array.from({length:VOICE_POOL_SIZE},()=>({
-  busy:false,osc:null,gain:null,start:0,peak:0,end:0,amp:0,stolen:false
+const voices=Array.from({length:VOICE_POOL_SIZE},(_,i)=>({
+  busy:false,osc:null,gain:null,start:0,peak:0,end:0,amp:0,stolen:false,slot:i
 }));
 const modalEvents=Array.from({length:MAX_MODAL_EVENTS},()=>({
   busy:false,panner:null,gain:null,osc:null,end:0
@@ -2188,7 +2188,7 @@ function initAudio(){
       v.osc.connect(v.gain);
       v.osc.start();
     }
-    v.end=0;v.peak=0;v.amp=0;v.busy=false;
+    v.slot=i;v.end=0;v.peak=0;v.amp=0;v.busy=false;
   }
 
   // ONE voice per modal slot. Three sine partials per hit was the dial-up
@@ -2501,7 +2501,6 @@ function chooseFreeVoice(){
     // the cursor only advanced on silent slots — one voice thrashed
     // every 4ms while 54 sat untouched.
     if((v.stolen&&now<v.start)||now<v.peak){
-      stealBlocked++;
       const remain=Math.max(0,((v.stolen&&now<v.start)?v.start:v.peak)-now);
       if(remain<fallbackRemain){fallbackRemain=remain;fallback=v;fallbackI=i}
       continue;
@@ -2514,6 +2513,7 @@ function chooseFreeVoice(){
   const pick=best||fallback,pickI=best?bestI:fallbackI;
   if(pick){
     pick.stolen=true;voiceSteals++;
+    if(!best)stealBlocked++;   // had to take an in-fade/attack fallback
     if(pickI>=0)nextVoiceSearch=(pickI+1)%limit;
   }
   return pick;
@@ -2686,28 +2686,32 @@ function strikeNow(o,impact,physical=true,massScale=1,pitch=null){
   // WARM PATH: no allocation, no start/stop, no onended. Retune + ramps only.
   const g=v.gain.gain;
   const freq=v.osc.frequency;
+  const det=v.osc.detune;
   let t0=t;
   if(v.stolen){
     // Fade the residue to zero linearly from its HELD value, then retune at
-    // silence. Cancel BOTH gain and frequency — a re-entrant steal used to
-    // leave the previous setValueAtTime(hz, t0) armed mid-fade (chirp).
+    // silence. Cancel gain, frequency, AND detune — leftover automations
+    // mid-fade are the chirp.
     if(g.cancelAndHoldAtTime)g.cancelAndHoldAtTime(t);else g.cancelScheduledValues(t);
     if(freq.cancelAndHoldAtTime)freq.cancelAndHoldAtTime(t);else freq.cancelScheduledValues(t);
+    if(det.cancelAndHoldAtTime)det.cancelAndHoldAtTime(t);else det.cancelScheduledValues(t);
     g.linearRampToValueAtTime(0,t+.006);
     t0=t+.006;
     g.setValueAtTime(0,t0);
   }else{
     g.cancelScheduledValues(t);
     freq.cancelScheduledValues(t);
+    det.cancelScheduledValues(t);
     g.setValueAtTime(0,t);
   }
   // type assign can click on a running osc; only at the silent instant
   if(v.osc.type!==SOURCE.wave)v.osc.type=SOURCE.wave;
   freq.setValueAtTime(hz(snote),t0);                    // retune happens at zero gain
+  det.setValueAtTime(((v.slot*17)%13-6)*1.2,t0);        // ±7.2¢ static; breaks unison beating
 
   const sizeNorm=clamp((o.r-MIN_R)/(MAX_R-MIN_R),0,1);
   const ring=Math.max(.03,SOURCE.decay*(1+SOURCE.sizeRing*sizeNorm));
-  const attack=Math.max(.001,SOURCE.attack);
+  const attack=Math.max(.008,SOURCE.attack);
   const peak=t0+attack;
   const end=peak+ring;
   const stop=end+.012;
@@ -3563,7 +3567,7 @@ function makeKnob(spec){
     let x=fromN(v);
     x=Math.round(x/step)*step;
     input.value=clamp(x,min,max);
-    fire(input);requestPaint(paint);
+    fire(input);   // input listener paints the arc this turn — no extra rAF
   }
   // A rotary answers only to the pointer that grabbed it: on a touch screen a
   // second finger landing on the same control would otherwise drive it too.
@@ -3600,7 +3604,7 @@ function makeKnob(spec){
     if(k==='ArrowUp'||k==='ArrowRight')  {nudge(.02);e.preventDefault()}
     if(k==='ArrowDown'||k==='ArrowLeft') {nudge(-.02);e.preventDefault()}
   });
-  input.addEventListener('input',()=>requestPaint(paint));
+  input.addEventListener('input',paint);
   node.paint=paint;paint();
   return node;
 }
