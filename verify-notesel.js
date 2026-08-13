@@ -77,15 +77,17 @@ const path = require('path');
     !!document.querySelector('.bloom.in .hitpad[aria-label="octave spread"]'));
   if (!out.spreadKnob) errors.push('octave spread knob missing');
 
-  // spread 0: the pool is what the music generates from — 40 draws stay in it
+  // Orbs are MIDI triggers: every REAL strike asks the engine for its note at
+  // impact. Spread 0: 40 strikes through the actual strike path stay in the
+  // pool. (Audio must be armed — the earlier key taps' auditions did that.)
   out.draws = await page.evaluate(() => {
     window.MonadVoicing.setOctaveSpread(0);
     const pool = new Set(window.MonadVoicing.getCustomNotes());
     let bad = 0;
-    for (let i = 0; i < 40; i++) if (!pool.has(window.MonadVoicing.nextNote())) bad++;
+    for (let i = 0; i < 40; i++) if (!pool.has(window.__monadTest.strike())) bad++;
     return bad;
   });
-  if (out.draws) errors.push(out.draws + ' nextNote() draws left the custom pool at spread 0');
+  if (out.draws) errors.push(out.draws + ' strikes left the custom pool at spread 0');
 
   // spread 1: strikes scatter across octaves but pitch classes hold and the
   // SELECTION itself is never rewritten
@@ -95,7 +97,7 @@ const path = require('path');
     const pcs = new Set(before.map(m => m % 12));
     const seen = new Set(); let badPc = 0, outOfRange = 0;
     for (let i = 0; i < 120; i++) {
-      const m = window.MonadVoicing.nextNote();
+      const m = window.__monadTest.strike();
       seen.add(m);
       if (!pcs.has(m % 12)) badPc++;
       if (m < 24 || m > 95) outOfRange++;
