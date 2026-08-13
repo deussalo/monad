@@ -6,6 +6,10 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#17130d">
+<!-- The page is already dark. Without this, Android force-dark (Brave/Chrome
+     "darken websites") INVERTS the near-black fills — black piano keys
+     rendered glowing white. -->
+<meta name="color-scheme" content="dark">
 <title>Monad</title>
 <style>
 /* ============================================================
@@ -3731,7 +3735,9 @@ const NOTESEL={id:'notesel',icon:'hubKeys',span:168,items:[
   const at=(nd,ang,rad)=>{const a=ang*Math.PI/180;place(nd,rootX+rad*Math.cos(a),rootY+rad*Math.sin(a))};
   for(let i=0;i<7;i++)at(nodes[i],start+step*i,ringR);
   const gaps=[0,1,3,4,5];   // white-pair indices that carry a black key
-  const rb=ringR-Math.min(34,ringR*.23);   // proportional inset keeps blacks apart on tiny rings
+  // blacks ABOVE the whites — the piano's back row. Proportional offset so
+  // the widest black (C#, 200°) stays on a narrow phone.
+  const rb=ringR+Math.min(28,ringR*.2);
   for(let i=0;i<5;i++)at(nodes[7+i],start+step*(gaps[i]+.5),rb);
   const cr=Math.max(52,ringR*.4);
   at(nodes[12],270-46,cr);           // octave down, left
