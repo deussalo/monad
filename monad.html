@@ -80,7 +80,7 @@ body.fluid #vignette{display:none}
 #shell svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
 /* A soft pool of shade under the ring so line-work stays legible over a bright
    atmosphere. Anchored to the glyph, never dims the upper stage. */
-#scrim{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .45s ease;
+#scrim{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .12s ease;
   background:radial-gradient(58% 42% at 50% 100%,rgba(8,5,2,.62),rgba(8,5,2,.28) 45%,transparent 72%)}
 #shell.open #scrim{opacity:1}
 .node{pointer-events:auto;cursor:pointer;transform-box:fill-box;transform-origin:center}
@@ -94,11 +94,11 @@ body.fluid #vignette{display:none}
 /* bloom choreography */
 /* pointer-events must follow opacity: a faded-out node is fully inert */
 .bloom{opacity:0;pointer-events:none;transform:scale(.34);
-  transition:opacity .34s cubic-bezier(.16,1,.3,1),transform .42s cubic-bezier(.16,1,.3,1)}
+  transition:opacity .09s cubic-bezier(.16,1,.3,1),transform .11s cubic-bezier(.16,1,.3,1)}
 .bloom.in{opacity:1;transform:scale(1)}
 .bloom.in .hitpad{pointer-events:auto}
 .bloom .hitpad{pointer-events:none}
-#root-glyph{transition:opacity .5s ease}
+#root-glyph{transition:opacity .12s ease}
 @keyframes breathe{0%,100%{opacity:.36}50%{opacity:.66}}
 #root-glyph.resting{animation:breathe 7s ease-in-out infinite}
 #root-glyph.open{opacity:1}
@@ -1316,22 +1316,30 @@ Monad is a live instrument and cannot run without it. The page you are looking a
 
   function resize(cssW, cssH, ratio) {
     if (!gl) return;
-    // Fill rate is the whole cost here. A phone panel is 3x; the atmosphere is
-    // a soft blurred field, so 1x is visually identical and far cheaper.
-    dpr = Math.min(ratio || 1, cssW < 700 ? 1 : 1.5);
+    // Display composite is independent of quality. Softness lives in the sim
+    // (blurred dye), never as a stretched thumbnail of the whole ground.
+    // Phone: 2× of a 3× panel — bilinear upsample of a blurred field at 2×
+    // still reads soft; 1× × qScale 0.40 does not. Desktop keeps the 1.5 cap.
+    dpr = Math.min(ratio || 1, cssW < 700 ? 2 : 1.5);
     cssWLast = cssW; cssHLast = cssH;
-    dispW = Math.max(1, Math.round(cssW * dpr * qScale));
-    dispH = Math.max(1, Math.round(cssH * dpr * qScale));
+    dispW = Math.max(1, Math.round(cssW * dpr));
+    dispH = Math.max(1, Math.round(cssH * dpr));
     canvas.width = dispW; canvas.height = dispH;
-    // Half resolution, capped; quarter on small screens. This is the budget.
-    // Much lower than before. Blurring at sim resolution means a small buffer
-    // reads as soft atmosphere rather than as visible cells, and fill rate is
-    // the entire cost on a phone.
+    // Sim only. Cap 256 phone / 512 desktop, then apply qScale. Floor the
+    // long edge at 128 so a quality step cannot collapse the field into a
+    // 64px thumbnail — but 160 flattened phone steps 0 and -1 to the same
+    // buffer, so the governor shed work that wasn't there.
     var cap = cssW < 700 ? 256 : 512;
     var long = Math.max(cssW, cssH);
-    var scale = Math.min(0.5, cap / Math.max(1, long));
+    var scale = Math.min(0.5, cap / Math.max(1, long)) * qScale;
     var nw = Math.max(16, Math.round(cssW * scale));
     var nh = Math.max(16, Math.round(cssH * scale));
+    var simLong = Math.max(nw, nh);
+    if (simLong < 128) {
+      var boost = 128 / Math.max(1, simLong);
+      nw = Math.max(16, Math.round(nw * boost));
+      nh = Math.max(16, Math.round(nh * boost));
+    }
     if (nw !== simW || nh !== simH || !vel || !dye) {
       simW = nw; simH = nh;
       // A failed reallocation used to leave ok=true with null targets, so the
@@ -1448,10 +1456,8 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     if (typeof o.bloom === 'boolean') qBloom = o.bloom;
     if (typeof o.scale === 'number' && o.scale !== qScale) {
       qScale = Math.max(0.4, Math.min(1, o.scale));
-      // dispW/dpr still has the PREVIOUS qScale baked in, so feeding it back
-      // multiplied the scales together: 1.0 -> 0.7 -> 0.55 landed at 0.385, not
-      // 0.55, and every further step compounded again. Measured live: a 412px
-      // screen at scale 0.55 produced a 158px buffer instead of 227.
+      // qScale now only resizes sim/blur/vel. cssWLast is the true CSS size
+      // (never quality-scaled), so feeding it back cannot compound.
       if (canvas) resize(cssWLast || (dispW / dpr), cssHLast || (dispH / dpr), dpr);
     }
     return { bloom: qBloom, scale: qScale };
@@ -1581,7 +1587,7 @@ function boot(){
 }
 setTimeout(boot,0);
 const LOW_POWER=(function(){try{return matchMedia('(pointer:coarse)').matches||innerWidth<760}catch(e){return innerWidth<760}})();
-const MIN_R=12,MAX_R=92,FIELD_SCALE=.35,FIELD_INTERVAL=1000/24,HIT_BATCH_MS=10,ORB_REFRACTORY_MS=3;   // 20ms silently ate every consecutive-frame hit at 60fps
+const MIN_R=12,MAX_R=92,FIELD_SCALE=.35,FIELD_INTERVAL=1000/24,HIT_BATCH_MS=0,ORB_REFRACTORY_MS=3;   // hits flush on the next rAF; 20ms ate consecutive-frame hits at 60fps
 const MOTION_HZ=30,MOTION_SAMPLE_MS=1000/MOTION_HZ,MOTION_SEAM_RATIO=.12;
 const STAT_INTERVAL_MS=250,MAX_SYMPATHETIC_TARGETS=3;   // no minimum-frame gate: render every rAF tick
 let W=1,H=1,DPR=1,FW=1,FH=1,last=performance.now(),lastSimFrame=0,lastField=0,lastStat=0,fieldDirty=true,paletteTarget='orb',selected=null,background='#221202';
@@ -1604,7 +1610,7 @@ function admitOrb(o){
   return o;
 }
 let contacts=new Set(),previousContacts=new Set();
-let hitTimer=0,nextOrbId=1;
+let nextOrbId=1;
 const motion={
   recording:false,
   active:false,
@@ -2061,11 +2067,13 @@ let ac=null,master=null,dryBus=null,wetBus=null,revIn=null,wetOut=null,voiceMix=
 // how every phone shipped silent.
 window.__monadAudio=function(){return ac?ac.state:'none'};
 let voiceDrops=0,modalDrops=0,collisionCount=0,strikeCount=0,contactEvents=0;
+let voiceSteals=0,stealBlocked=0;
 window.__monadAudioStats=function(){return{
   state:ac?ac.state:'none',
   voices:activeVoiceCount(),
   modals:activeModalCount(),
   voiceDrops:voiceDrops,modalDrops:modalDrops,collisionCount:collisionCount,strikeCount:strikeCount,contactEvents:contactEvents,
+  steals:voiceSteals,stealBlocked:stealBlocked,lastPolyNorm:lastPolyNorm,
   baseLatency:ac&&ac.baseLatency?+(ac.baseLatency*1000).toFixed(1):null,
   sampleRate:ac?ac.sampleRate:null
 }};
@@ -2078,7 +2086,7 @@ const VOICE_POOL_SIZE=64;
 const WARM_VOICES=LOW_POWER?32:VOICE_POOL_SIZE;
 const WARM_MODAL=MAX_MODAL_EVENTS;   // one voice per slot; the array is the warm pool
 const voices=Array.from({length:VOICE_POOL_SIZE},()=>({
-  busy:false,osc:null,gain:null,start:0,peak:0,end:0,amp:0
+  busy:false,osc:null,gain:null,start:0,peak:0,end:0,amp:0,stolen:false
 }));
 const modalEvents=Array.from({length:MAX_MODAL_EVENTS},()=>({
   busy:false,panner:null,gain:null,osc:null,end:0
@@ -2117,11 +2125,14 @@ function initAudio(){
   master.gain.value=.68;
 
   const limiter=ac.createDynamicsCompressor();
-  limiter.threshold.value=-3;
-  limiter.knee.value=2;
-  limiter.ratio.value=10;
-  limiter.attack.value=.003;
-  limiter.release.value=.16;
+  // Ceiling only: a 10 ms flush train must not chug. Old brickwall
+  // (thresh -3 / ratio 10 / attack 3ms / release 160ms) pumped at 100 Hz
+  // under storms. Softer grab, slower attack, longer release.
+  limiter.threshold.value=-10;
+  limiter.knee.value=8;
+  limiter.ratio.value=3.5;
+  limiter.attack.value=.015;
+  limiter.release.value=.30;
 
   dryBus=ac.createGain();
   wetBus=ac.createGain();
@@ -2460,13 +2471,12 @@ function activeVoiceCount(){
   return n;
 }
 
-function updatePolyHeadroom(t){
-  if(!voiceMix)return;
-  const count=activeVoiceCount();
-  const norm=count<=8?1:Math.sqrt(8/count);
-  if(Math.abs(norm-lastPolyNorm)<.002)return;
-  lastPolyNorm=norm;
-  voiceMix.gain.setTargetAtTime(norm,t,.025);
+function polyHeadroomScale(){
+  // Per-strike only — never automate the shared voiceMix bus.
+  return Math.sqrt(8/Math.max(8,activeVoiceCount()+1));
+}
+function updatePolyHeadroom(){
+  lastPolyNorm=polyHeadroomScale();
 }
 
 // Always returns a voice: a silent one when available, else the quietest
@@ -2482,16 +2492,31 @@ function chooseFreeVoice(){
     const i=(nextVoiceSearch+n)%limit,v=voices[i];
     if(now>=v.end){nextVoiceSearch=(i+1)%limit;v.stolen=false;return v}
   }
-  let best=null,bestScore=Infinity;
+  let best=null,bestI=-1,bestScore=Infinity;
+  let fallback=null,fallbackI=-1,fallbackRemain=Infinity;
   for(let n=0;n<limit;n++){
-    const v=voices[(nextVoiceSearch+n)%limit];
+    const i=(nextVoiceSearch+n)%limit,v=voices[i];
+    // Mid-fade (gain not yet 0) or still attacking: retune is a chirp.
+    // Equal scores used to always pick voices[nextVoiceSearch] because
+    // the cursor only advanced on silent slots — one voice thrashed
+    // every 4ms while 54 sat untouched.
+    if((v.stolen&&now<v.start)||now<v.peak){
+      stealBlocked++;
+      const remain=Math.max(0,((v.stolen&&now<v.start)?v.start:v.peak)-now);
+      if(remain<fallbackRemain){fallbackRemain=remain;fallback=v;fallbackI=i}
+      continue;
+    }
     const span=Math.max(.001,v.end-v.peak);
     const fade=clamp((now-v.peak)/span,0,1);
     const score=v.amp*(1-fade);
-    if(score<bestScore){bestScore=score;best=v}
+    if(score<bestScore){bestScore=score;best=v;bestI=i}
   }
-  if(best)best.stolen=true;
-  return best;
+  const pick=best||fallback,pickI=best?bestI:fallbackI;
+  if(pick){
+    pick.stolen=true;voiceSteals++;
+    if(pickI>=0)nextVoiceSearch=(pickI+1)%limit;
+  }
+  return pick;
 }
 
 
@@ -2630,7 +2655,7 @@ function excitePhysicalEcosystem(o,impact){
 }
 
 function strikeNow(o,impact,physical=true,massScale=1,pitch=null){
-  const amp=impactAmplitude(impact)*massScale;
+  let amp=impactAmplitude(impact)*massScale;
   if(physical)excitePhysicalEcosystem(o,impact);
   if(!ac||ac.state!=='running'||amp<=0)return;
 
@@ -2652,21 +2677,33 @@ function strikeNow(o,impact,physical=true,massScale=1,pitch=null){
   const v=chooseFreeVoice();
   if(!v||!v.osc){voiceDrops++;return}   // cannot happen with a warm pool, but never throw from the hot path
 
+  // Density on the NEW voice only. Ringing notes keep their envelopes;
+  // a shared-bus duck was pumping the whole dry+wet send every strike.
+  const poly=polyHeadroomScale();
+  amp*=poly;
+  lastPolyNorm=poly;
+
   // WARM PATH: no allocation, no start/stop, no onended. Retune + ramps only.
   const g=v.gain.gain;
+  const freq=v.osc.frequency;
   let t0=t;
   if(v.stolen){
     // Fade the residue to zero linearly from its HELD value, then retune at
-    // silence. ~6ms added latency on steals only; zero discontinuity.
+    // silence. Cancel BOTH gain and frequency — a re-entrant steal used to
+    // leave the previous setValueAtTime(hz, t0) armed mid-fade (chirp).
     if(g.cancelAndHoldAtTime)g.cancelAndHoldAtTime(t);else g.cancelScheduledValues(t);
+    if(freq.cancelAndHoldAtTime)freq.cancelAndHoldAtTime(t);else freq.cancelScheduledValues(t);
     g.linearRampToValueAtTime(0,t+.006);
     t0=t+.006;
+    g.setValueAtTime(0,t0);
   }else{
     g.cancelScheduledValues(t);
+    freq.cancelScheduledValues(t);
     g.setValueAtTime(0,t);
   }
-  if(v.osc.type!==SOURCE.wave)v.osc.type=SOURCE.wave;   // property set; only when the user changed waveform
-  v.osc.frequency.setValueAtTime(hz(snote),t0);         // retune happens at zero gain
+  // type assign can click on a running osc; only at the silent instant
+  if(v.osc.type!==SOURCE.wave)v.osc.type=SOURCE.wave;
+  freq.setValueAtTime(hz(snote),t0);                    // retune happens at zero gain
 
   const sizeNorm=clamp((o.r-MIN_R)/(MAX_R-MIN_R),0,1);
   const ring=Math.max(.03,SOURCE.decay*(1+SOURCE.sizeRing*sizeNorm));
@@ -2681,7 +2718,7 @@ function strikeNow(o,impact,physical=true,massScale=1,pitch=null){
 
   v.busy=true;v.start=t0;v.peak=peak;v.end=stop;v.amp=amp;
   strikeCount++;
-  updatePolyHeadroom(t);
+  updatePolyHeadroom();
   o.hit=clamp(impact/120,0,1);
   fieldDirty=true;
 }
@@ -2708,7 +2745,7 @@ $('#audio').addEventListener('click',async()=>{
   }
 });
 
-// 10 ms collision coalescing + 20 ms per-orb refractory period.
+// Frame-coalesced collisions + 3 ms per-orb refractory period.
 function queueHit(o,impact,physical=true,pitch=null){
   collisionCount++;   // every attempt, before any gate: the honest denominator
   const now=performance.now();
@@ -2725,12 +2762,12 @@ function queueHit(o,impact,physical=true,pitch=null){
 
   pendingHits.set(o,{impact,physical,pitch});
   o.lastStrikeQueued=now;
-
-  if(!hitTimer)hitTimer=setTimeout(flushHits,HIT_BATCH_MS);
+  // Flushed from the frame loop (same tick as the contact) — a 10ms
+  // setTimeout was up to a frame of extra pointer-to-strike latency
+  // and drifted off vsync. Mass-norm still sees the whole frame's pile.
 }
 
 function flushHits(){
-  hitTimer=0;
   if(!pendingHits.size)return;
 
   const now=performance.now();
@@ -3944,7 +3981,7 @@ function showRing(nodes,on){
     // invisible controls before reaching anything on screen
     e.querySelectorAll('.hitpad').forEach(h=>h.setAttribute('tabindex',on?'0':'-1'));
     if(on){
-      e.style.transitionDelay=(i*26)+'ms';
+      e.style.transitionDelay=(i*6)+'ms';
       // Flush the freshly-appended element's initial style synchronously so the
       // transition still runs from scale(.34). Deferring the class to rAF raced
       // with any hide that landed first: the hide removed .in, then the queued
@@ -3952,7 +3989,7 @@ function showRing(nodes,on){
       if(!e._primed){e._primed=true;e.getBoundingClientRect()}
       e.classList.add('in');
     }else{
-      e.style.transitionDelay=((nodes.length-i)*12)+'ms';
+      e.style.transitionDelay=((nodes.length-i)*4)+'ms';
       e.classList.remove('in');
     }
   });
@@ -4132,6 +4169,7 @@ function frame(now){
   const t=now/1000;
   for(let i=0;i<orbs.length;i++)integrate(orbs[i],dt,t,now);
   for(let p=0;p<3;p++)collide(dt/3,p);
+  flushHits();   // this frame's contacts sound this frame
 
   const oldPrevious=previousContacts;previousContacts=contacts;contacts=oldPrevious;
 
