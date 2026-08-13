@@ -30,6 +30,7 @@ const path = require('path');
     const R = window.__monadTest.R;
     R.feedback = 100; R.decay = 120; R.lowRatio = 4; R.highRatio = 2;
     R.damping = 20000; R.diffusion = .86; R.wet = 1.2; R.input = 1.2;
+    R.size = 2.3; R.predelay = 52;
     window.__monadTest.applyReverb();
 
     const an = ac.createAnalyser();
@@ -104,6 +105,7 @@ const path = require('path');
   const decayResult = await page.evaluate(() => new Promise(res => {
     const B = window.__monadBuses, ac = B.ac, R = window.__monadTest.R;
     R.feedback = 60; R.decay = 2; R.lowRatio = 1; R.highRatio = .3;
+    R.size = 2.3; R.predelay = 52; R.damping = 8000; R.wet = .7; R.input = .55;
     window.__monadTest.applyReverb();
     const an = ac.createAnalyser(); an.fftSize = 8192;
     B.wetBus.connect(an);

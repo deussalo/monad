@@ -14,6 +14,14 @@ const path = require('path');
 
   await page.goto('file://' + path.join(__dirname, 'monad.html'));
   await page.waitForTimeout(900);
+  const factory = await page.evaluate(() => ({
+    mode: window.MonadVoicing && window.MonadVoicing.current,
+    custom: window.MonadVoicing ? window.MonadVoicing.getCustomNotes().length : 0,
+    orbs: window.__monadTest ? window.__monadTest.orbNotes.length : 0
+  }));
+  if (factory.mode !== 'custom') errors.push('factory voicing is ' + factory.mode + ', expected custom');
+  if (factory.custom !== 18) errors.push('factory custom pool is ' + factory.custom + ', expected 18');
+  if (factory.orbs !== 18) errors.push('factory scene has ' + factory.orbs + ' orbs, expected 18');
 
   const clickPad = async (label, nth = 0) => {
     const box = await page.evaluate(([l, n]) => {
@@ -41,6 +49,13 @@ const path = require('path');
   await clickPad('custom note palette');
   out.noteselItems = await page.evaluate(() => document.querySelectorAll('#shellSvg .bloom.in').length);
   if (out.noteselItems !== 15) errors.push('expected 15 notesel nodes, got ' + out.noteselItems);
+
+  // Factory ships a custom pool. The editor checks below still build a
+  // palette from an empty set — same toggle / octave / spread / retune
+  // / round-trip semantics as when custom started empty.
+  await page.evaluate(() => {
+    window.__monadTest.applyPresetObject({voicing:{custom:[],mode:'quintal'}});
+  });
 
   // no visible node may sit off-screen
   out.offscreen = await page.evaluate(() => {

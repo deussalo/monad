@@ -16,6 +16,12 @@ const FILE = process.argv[2] || ('file://' + path.join(__dirname, 'monad.html'))
   await p.touchscreen.tap(195,800); await p.waitForTimeout(400);
   const has = await p.evaluate(()=>window.__monadAudioStats().contactEvents!==undefined);
   if (!has) { console.log('stats counters absent (pre-patch build) - reporting drops only'); }
+  // Isolate from the factory scene (18 orbs). This harness measures
+  // "new contacts become strikes" on a known sparse world, then adds 12.
+  await p.evaluate(()=>window.__monadTest.applyPresetObject({scene:{orbs:[
+    {x:.30,y:.40,radius:.06},{x:.50,y:.45,radius:.06},{x:.70,y:.40,radius:.06},
+    {x:.35,y:.60,radius:.06},{x:.55,y:.65,radius:.06},{x:.65,y:.55,radius:.06}
+  ]}}));
   // storm: many bodies, max wind, minimal drag
   await p.evaluate(()=>{const set=(i,v)=>{const e=document.querySelector(i);e.value=v;e.dispatchEvent(new Event('input',{bubbles:true}))};
     set('#wind','1'); set('#drag','0.02');});

@@ -247,8 +247,8 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     <label class="control"><span class="line"><span>NOTE</span><span id="selection" class="mono">E B F♯ G D A</span></span><select id="note"></select></label>
     <label class="control"><span class="line"><span>DRAG</span><span id="dragV" class="mono">0.06</span></span><input id="drag" type="range" min="0.01" max="0.8" step="0.01" value="0.06"></label>
     <label class="control"><span class="line"><span>WIND</span><span id="windV" class="mono">36%</span></span><input id="wind" type="range" min="0" max="1" step="0.01" value="0.36"></label>
-    <label class="control"><span class="line"><span>MODAL BODY</span><span id="modalV" class="mono">66%</span></span><input id="modalMix" type="range" min="0" max="1" step="0.01" value="0.66"></label>
-    <label class="control"><span class="line"><span>SYMPATHY</span><span id="sympathyV" class="mono">62%</span></span><input id="sympathy" type="range" min="0" max="1" step="0.01" value="0.62"></label>
+    <label class="control"><span class="line"><span>MODAL BODY</span><span id="modalV" class="mono">32%</span></span><input id="modalMix" type="range" min="0" max="1" step="0.01" value="0.32"></label>
+    <label class="control"><span class="line"><span>SYMPATHY</span><span id="sympathyV" class="mono">73%</span></span><input id="sympathy" type="range" min="0" max="1" step="0.01" value="0.73"></label>
     <label class="control"><span class="line"><span>PRESSURE</span><span id="pressureV" class="mono">47%</span></span><input id="pressure" type="range" min="0" max="1" step="0.01" value="0.47"></label>
     <label class="control"><span class="line"><span>ATMOSPHERE</span><span id="atmoV" class="mono">3.4×</span></span><input id="atmo" type="range" min="1" max="6" step="0.05" value="3.4"></label>
     <label class="control"><span class="line"><span>BLUR</span><span id="blurV" class="mono">30px</span></span><input id="blur" type="range" min="0" max="100" step="1" value="30"></label>
@@ -382,7 +382,6 @@ Monad is a live instrument and cannot run without it. The page you are looking a
   ];
 
   /* ── Internal playback state ───────────────────────────────────────────── */
-  var _currentId = 'quintal';
   var _stack = [];
   var _idx = 0;
 
@@ -391,8 +390,10 @@ Monad is a live instrument and cannot run without it. The page you are looking a
    * mode is 'custom', nextNote() walks a shuffled bag of this pool — every
    * note appears once per pass, no immediate repeats across the reshuffle
    * seam. Empty pool = 'custom' is not selectable.
+   * Factory default is a C-minor-ish stack across six octaves (see DEFAULT_PRESET).
    */
-  var _customNotes = [];
+  var _customNotes = [26,36,48,51,55,56,60,63,67,68,72,75,79,80,84,87,91,92];
+  var _currentId = 'custom';
 
   /* Octave scatter at impact: 0 = notes sound in their true octaves; rising
    * values make offsets of ±1..±3 octaves increasingly likely (geometric
@@ -1624,8 +1625,8 @@ const motion={
   playStart:0
 };
 
-const SOURCE={wave:'sine',attack:.012,decay:6,level:.19,sizeRing:1,maxVoices:55};
-const R={input:.55,dry:.82,wet:.687,output:.85,predelay:51.7,size:2.3399,decay:49.6322,feedback:29.1,lowRatio:.9698,highRatio:.05,lowCross:102.804,highCross:6380.1304,damping:16000,diffusion:.82,modRate:.0706,modDepth:6,drift:.8,outHP:79,outLP:7736,delays:[83.1,96.8,113.9,132.9,154.2,178.1,205.3,236.9]};
+const SOURCE={wave:'sine',attack:.039,decay:6,level:.234,sizeRing:1.68,maxVoices:55};
+const R={input:.55,dry:1,wet:1.011,output:.85,predelay:249.9,size:3.89,decay:24.2,feedback:73.8,lowRatio:.9698,highRatio:.05,lowCross:102.804,highCross:6380.1304,damping:767,diffusion:.82,modRate:.0706,modDepth:6,drift:.8,outHP:79,outLP:7736,delays:[83.1,96.8,113.9,132.9,154.2,178.1,205.3,236.9]};
 // Delay lengths are near-geometric (ratio ~1.16, jittered off simple fractions).
 // The previous set had two near-duplicate pairs (114.5/113.9, 132.9/138.3):
 // twin lines double the modal density at the same comb spacing, which is the
@@ -1636,7 +1637,7 @@ const R={input:.55,dry:.82,wet:.687,output:.85,predelay:51.7,size:2.3399,decay:4
 // 1) each colour is a material with its own inharmonic modes and damping
 // 2) nearby bodies exchange energy when their modal spectra overlap
 // 3) real impacts launch visible pressure fronts that physically push other bodies
-const PHYS={modalMix:.66,sympathy:.62,pressure:.47,waveSpeed:520};
+const PHYS={modalMix:.32,sympathy:.73,pressure:.47,waveSpeed:520};
 function materialFor(o){
   const key=((o&&o.color)||'#C39A61').toUpperCase();
   if(o&&o._materialKey===key&&o._material)return o._material;
@@ -3744,7 +3745,7 @@ function auditionStrike(midi,amp,delaySec){
 // classes across random octaves. Any non-empty pool switches the voicing
 // engine to 'custom' — the pool becomes what the music is generated from.
 const NOTESEL_OCTS=6,NOTESEL_BASE=24;
-const noteSel={oct:2,set:new Set()};   // oct 2 => base C3, mid register
+const noteSel={oct:2,set:new Set([26,36,48,51,55,56,60,63,67,68,72,75,79,80,84,87,91,92])};   // oct 2 => base C3, mid register
 function noteSelSync(){
   const MV=window.MonadVoicing;if(!MV)return;
   const arr=[...noteSel.set].sort((a,b)=>a-b);
@@ -4268,19 +4269,46 @@ function perfTick(now,frameMs){
     'buffer '+(F&&F.info?F.info():'-');
 }
 
+// Factory instrument. applyPresetObject is the one loader — seed is just
+// "load this preset into an empty world". Optimizations in the dump are
+// diagnostic; the live engine keeps HIT_BATCH_MS=0 (flush on rAF).
+const DEFAULT_PRESET={
+  format:'monad-preset',version:1,
+  resonant_ecosystem:{modal_body_mix:.32,sympathetic_coupling:.73,acoustic_pressure_feedback:.47,pressure_wave_speed_px_s:520},
+  source:{waveform:'sine',attack_s:.039,decay_s:6,level:.234,size_ring:1.68,max_voices:55},
+  reverb:{
+    input:.55,dry:1,wet:1.011,output:.85,predelay_ms:249.9,size:3.89,decay_s:24.2,
+    feedback_percent:73.8,final_highpass_hz:79,final_lowpass_24db_hz:7736,
+    low_decay_ratio:.9698,high_decay_ratio:.05,low_cross_hz:102.804,high_cross_hz:6380.1304,
+    loop_damping_hz:767,diffusion:.82,modulation_rate_hz:.0706,modulation_depth_ms:6,
+    random_drift:.8,delays_ms:[83.1,96.8,113.9,132.9,154.2,178.1,205.3,236.9]
+  },
+  environment:{drag:.06,wind:.36,atmosphere:3.4,blur_px:30,field_strength:.84,over_light:.25,mix:'screen'},
+  colour:{background:'#221202',palette:['#221202','#3A280D','#556979','#77807D','#878D80','#AB7F48','#C39A61','#E8C882']},
+  voicing:{mode:'custom',custom:[26,36,48,51,55,56,60,63,67,68,72,75,79,80,84,87,91,92],octave_spread:0},
+  scene:{coordinate_space:'normalized',orbs:[
+    {x:0.589848,y:0.922568,radius:0.071202,note:48,colour:'#AB7F48',vx:0.054417,vy:0.011424},
+    {x:0.2473,y:0.904469,radius:0.134508,note:48,colour:'#221202',vx:0.020756,vy:-0.006961},
+    {x:0.330656,y:0.261376,radius:0.107685,note:48,colour:'#C39A61',vx:0.04907,vy:-0.033829},
+    {x:0.887222,y:0.67679,radius:0.057173,note:48,colour:'#AB7F48',vx:0.004506,vy:-0.026723},
+    {x:0.564439,y:0.644477,radius:0.033333,note:55,colour:'#C39A61',vx:0.031957,vy:-0.02762},
+    {x:0.911108,y:0.019852,radius:0.033333,note:51,colour:'#221202',vx:0.11551,vy:-0.077186},
+    {x:0.966667,y:0.974175,radius:0.033333,note:63,colour:'#AB7F48',vx:-0.00007,vy:-0.004379},
+    {x:0.855587,y:0.246513,radius:0.086446,note:26,colour:'#77807D',vx:0.005976,vy:-0.051427},
+    {x:0.803445,y:0.928994,radius:0.033333,note:51,colour:'#878D80',vx:-0.048127,vy:-0.001568},
+    {x:0.128769,y:0.638573,radius:0.086714,note:26,colour:'#3A280D',vx:0.012302,vy:-0.016591},
+    {x:0.940365,y:0.721372,radius:0.033333,note:48,colour:'#77807D',vx:-0.003487,vy:-0.021402},
+    {x:0.8588,y:0.976943,radius:0.033333,note:56,colour:'#3A280D',vx:-0.009292,vy:-0.002713},
+    {x:0.161624,y:0.468002,radius:0.033333,note:63,colour:'#C39A61',vx:0.047543,vy:-0.03357},
+    {x:0.2342,y:0.415911,radius:0.033333,note:48,colour:'#556979',vx:0.045427,vy:-0.031929},
+    {x:0.050304,y:0.91557,radius:0.033333,note:60,colour:'#AB7F48',vx:0.021364,vy:-0.016884},
+    {x:0.177615,y:0.296764,radius:0.033333,note:51,colour:'#77807D',vx:0.035336,vy:-0.024584},
+    {x:0.966606,y:0.806901,radius:0.033333,note:55,colour:'#3A280D',vx:0.00728,vy:-0.018038},
+    {x:0.934183,y:0.396595,radius:0.033333,note:26,colour:'#3A280D',vx:0.007493,vy:-0.034074}
+  ]}
+};
 function seedWorld(){
-  const n=clamp(Math.round(Math.min(W,H)/132),4,7);
-  const minDim=Math.min(W,H);
-  for(let i=0;i<n;i++){
-    const a=(i/n)*Math.PI*2+Math.random()*.9;
-    const rad=minDim*(.17+.15*Math.random());
-    const o=makeOrb(
-      clamp(W*.5+Math.cos(a)*rad*1.35,MAX_R,Math.max(MAX_R,W-MAX_R)),
-      clamp(H*.44+Math.sin(a)*rad,MAX_R,Math.max(MAX_R,H-MAX_R)),
-      MIN_R+Math.random()*(MAX_R-MIN_R)*.5);
-    o.vx=(Math.random()*2-1)*16;o.vy=(Math.random()*2-1)*16;
-    admitOrb(o);
-  }
+  applyPresetObject(DEFAULT_PRESET);
   fieldDirty=true;refreshPresetBox();
 }
 boot();
