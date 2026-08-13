@@ -339,14 +339,9 @@ Monad is a live instrument and cannot run without it. The page you are looking a
       rootWeights: [1, 4.4, 3.2],
       drift: false
     },
-    {
-      id: 'dorian',
-      // R M2 m3 P4 P5 M6.  Similar span to natural_minor but the raised 6th
-      // shifts the last dot right — two clusters with a notable central gap.
-      semitones: [0, 2, 3, 5, 7, 9],
-      rootWeights: [1, 4.4, 3.2],
-      drift: false
-    },
+    // (dorian was here — dropped to make ring room for the custom-palette
+    // entry; it was natural_minor with one raised note, the least distinct
+    // mode in the catalogue. setMode('dorian') from an old preset is a no-op.)
     {
       id: 'egyptian',
       // Egyptian suspended pentatonic + octave: R M2 P4 P5 m7 Oct.
@@ -3782,9 +3777,9 @@ const GROUPS=[
 // entry: a + that turns the ring into one octave of a radial keyboard.
 if(window.MonadVoicing){
   for(const m of window.MonadVoicing.modes)GROUPS[3].items.push({t:'voicing',mode:m});
-  GROUPS[3].items.push({t:'action',icon:()=>'hubKeys',
+  GROUPS[3].items.push({t:'action',icon:()=>'kPlus',
     tint:()=>window.MonadVoicing.current==='custom'?'var(--accent)':'',
-    run:()=>openGroup('notesel'),a:'custom note palette',small:true});
+    run:()=>openGroup('notesel'),a:'custom note palette'});
 }
 // palette group is built from PALETTE + target toggle + photo import
 for(let i=0;i<8;i++)GROUPS[4].items.push({t:'swatch',i});
