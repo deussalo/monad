@@ -33,9 +33,14 @@ const path = require('path');
   await page.waitForTimeout(500);
   await clickPad('voicing');
   out.voicingItems = await page.evaluate(() => document.querySelectorAll('#shellSvg .bloom.in').length);
+  if (out.voicingItems !== 10) errors.push('expected 10 voicing nodes (8 modes + plus + spread knob), got ' + out.voicingItems);
+  // spread knob lives on the SCALE ring, not inside the keyboard editor
+  out.spreadOnVoicing = await page.evaluate(() =>
+    !!document.querySelector('.bloom.in .hitpad[aria-label="octave spread"]'));
+  if (!out.spreadOnVoicing) errors.push('octave spread knob missing from the voicing ring');
   await clickPad('custom note palette');
   out.noteselItems = await page.evaluate(() => document.querySelectorAll('#shellSvg .bloom.in').length);
-  if (out.noteselItems !== 16) errors.push('expected 16 notesel nodes, got ' + out.noteselItems);
+  if (out.noteselItems !== 15) errors.push('expected 15 notesel nodes, got ' + out.noteselItems);
 
   // no visible node may sit off-screen
   out.offscreen = await page.evaluate(() => {
@@ -71,11 +76,6 @@ const path = require('path');
   await clickPad('note', 0);
   out.afterUntoggle = await page.evaluate(() => window.MonadVoicing.getCustomNotes().length);
   if (out.afterUntoggle !== 3) errors.push('untoggle failed, ' + out.afterUntoggle + ' notes');
-
-  // octave-spread knob exists on the ring
-  out.spreadKnob = await page.evaluate(() =>
-    !!document.querySelector('.bloom.in .hitpad[aria-label="octave spread"]'));
-  if (!out.spreadKnob) errors.push('octave spread knob missing');
 
   // Orbs are MIDI triggers: every REAL strike asks the engine for its note at
   // impact. Spread 0: 40 strikes through the actual strike path stay in the

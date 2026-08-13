@@ -3780,14 +3780,13 @@ function noteSelShiftOct(d){
 const octSpreadInput=document.createElement('input');
 octSpreadInput.type='range';octSpreadInput.min=0;octSpreadInput.max=1;octSpreadInput.step=.001;octSpreadInput.value=0;
 octSpreadInput.addEventListener('input',()=>{if(window.MonadVoicing)window.MonadVoicing.setOctaveSpread(+octSpreadInput.value)});
-// item order matters: layout addresses whites 0-6, blacks 7-11, controls 12-15
+// item order matters: layout addresses whites 0-6, blacks 7-11, controls 12-14
 const NOTESEL={id:'notesel',icon:'hubKeys',span:168,items:[
   ...[0,2,4,5,7,9,11].map(pc=>({t:'key',pc})),
   ...[1,3,6,8,10].map(pc=>({t:'key',pc,black:true})),
   {t:'action',icon:()=>'kMinus',run:()=>noteSelShiftOct(-1),a:'octave down',small:true},
   {t:'octind'},
-  {t:'action',icon:()=>'kPlus',run:()=>noteSelShiftOct(1),a:'octave up',small:true},
-  {t:'knob',input:octSpreadInput,icon:'kScatter',a:'octave spread'}
+  {t:'action',icon:()=>'kPlus',run:()=>noteSelShiftOct(1),a:'octave up',small:true}
 ],layout(nodes){
   // whites fan the standard arc; blacks sit inset at the piano's gaps
   // (C#,D# between C-D-E; F#,G#,A# between F-G-A-B). Controls are a
@@ -3805,7 +3804,6 @@ const NOTESEL={id:'notesel',icon:'hubKeys',span:168,items:[
   at(nodes[12],270-46,cr);           // octave down, left
   at(nodes[13],270,cr);              // octave dots, centre
   at(nodes[14],270+46,cr);           // octave up, right — mirror of minus
-  at(nodes[15],270,cr+36);           // scatter, straight above the dots
 }};
 function groupById(id){return GROUPS.find(g=>g.id===id)||(id==='notesel'?NOTESEL:null)}
 
@@ -3854,6 +3852,10 @@ if(window.MonadVoicing){
   GROUPS[3].items.push({t:'action',icon:()=>'kPlus',
     tint:()=>window.MonadVoicing.current==='custom'?'var(--accent)':'',
     run:()=>openGroup('notesel'),a:'custom note palette'});
+  // octave spread lives with the scales — it reshapes every strike, whatever
+  // the mode, so it sits beside them rather than inside the keyboard editor
+  GROUPS[3].items.push({t:'knob',input:octSpreadInput,icon:'kScatter',a:'octave spread'});
+  GROUPS[3].span=176;   // ten items breathe a little wider than the stock arc
 }
 // palette group is built from PALETTE + target toggle + photo import
 for(let i=0;i<8;i++)GROUPS[4].items.push({t:'swatch',i});
