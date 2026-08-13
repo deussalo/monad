@@ -1125,23 +1125,6 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     '  outColor = vec4(c, 1.0);\n' +
     '}\n';
 
-  var FRAG_BLOOM =
-    '#version 300 es\nprecision highp float;\n' +
-    'in vec2 vUv; out vec4 outColor;\n' +
-    'uniform sampler2D uDye; uniform vec2 uTexel;\n' +
-    'void main(){\n' +
-    '  vec3 c = texture(uDye, vUv).rgb * 4.0; float w = 4.0;\n' +
-    '  c += texture(uDye, vUv + vec2( 1.0, 0.0)*uTexel*2.5).rgb;\n' +
-    '  c += texture(uDye, vUv + vec2(-1.0, 0.0)*uTexel*2.5).rgb;\n' +
-    '  c += texture(uDye, vUv + vec2( 0.0, 1.0)*uTexel*2.5).rgb;\n' +
-    '  c += texture(uDye, vUv + vec2( 0.0,-1.0)*uTexel*2.5).rgb;\n' +
-    '  c += texture(uDye, vUv + vec2( 1.0, 1.0)*uTexel*1.8).rgb;\n' +
-    '  c += texture(uDye, vUv + vec2(-1.0, 1.0)*uTexel*1.8).rgb;\n' +
-    '  c += texture(uDye, vUv + vec2( 1.0,-1.0)*uTexel*1.8).rgb;\n' +
-    '  c += texture(uDye, vUv + vec2(-1.0,-1.0)*uTexel*1.8).rgb;\n' +
-    '  outColor = vec4(c/(w+8.0), 1.0);\n' +
-    '}\n';
-
   /* Composite: the visual identity. Three texture taps and one hash — no
      loops, no noise, nothing that scales with screen area beyond the fetches. */
   var FRAG_COMP =

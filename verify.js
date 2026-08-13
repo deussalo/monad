@@ -44,6 +44,14 @@ const path = require('path');
     out.shellNodes = shell.querySelectorAll('.node').length;
     out.rootGlyph = !!document.getElementById('root-glyph');
     out.stageFullScreen = (() => { const r = document.getElementById('stage').getBoundingClientRect(); return Math.round(r.width) + 'x' + Math.round(r.height); })();
+    // Fluid liveness. A shader that fails to compile makes init() return false:
+    // the page still parses, throws nothing, and keeps animating on the 2D
+    // path, so console-clean tells you nothing. Only the buffer sizes do.
+    // (Learned the hard way: a regex tidy-up once deleted the live Gaussian
+    // shader and every other check in this file still passed.)
+    const F = window.MonadFluid;
+    out.fluid = F && F.available ? (F.info ? F.info() : 'available') : 'UNAVAILABLE (2D fallback)';
+    out.fluidDegenerate = /(^|[^0-9])1x1/.test(out.fluid || '');
     return out;
   });
 
@@ -101,5 +109,7 @@ const path = require('path');
 
   console.log(JSON.stringify({ audit, interaction, fps: +fps.toFixed(1), errors, warnings: warnings.slice(0,5), logs: logs.slice(0,10) }, null, 2));
   await browser.close();
-  process.exit(errors.length ? 1 : 0);
+  const fluidBad = audit.fluidDegenerate || /UNAVAILABLE/.test(audit.fluid || '');
+  if (fluidBad) console.error('FLUID CHECK FAILED:', audit.fluid);
+  process.exit(errors.length || fluidBad ? 1 : 0);
 })().catch(e => { console.error('HARNESS FAIL', e); process.exit(2); });
