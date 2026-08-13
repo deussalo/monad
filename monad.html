@@ -507,6 +507,26 @@ Monad is a live instrument and cannot run without it. The page you are looking a
   function getCustomNotes() { return _customNotes.slice(); }
 
   /**
+   * Every note the current mode can actually produce, sorted ascending.
+   * Custom: the picked pool. Catalogue modes: union of roots × offsets.
+   * This is the quantization target for orbs already on the canvas.
+   */
+  function noteSet() {
+    if (_currentId === 'custom') return _customNotes.slice();
+    var mode = _modeById(_currentId);
+    if (!mode) return [];
+    var seen = {}, out = [];
+    for (var r = 0; r < ROOTS.length; r++) {
+      for (var i = 0; i < mode.semitones.length; i++) {
+        var m = Math.round(ROOTS[r] + mode.semitones[i]);
+        if (!seen[m]) { seen[m] = 1; out.push(m); }
+      }
+    }
+    out.sort(function (a, b) { return a - b; });
+    return out;
+  }
+
+  /**
    * Drop-in replacement for monad.html nextNote().
    * Same stack-then-advance semantics; weighted root selection per-mode.
    * Returns a MIDI integer. Notes stay in 28..81 range across all modes.
@@ -651,6 +671,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     getCustomNotes: getCustomNotes,
     get octaveSpread() { return _octaveSpread; },
     setOctaveSpread: function (v) { _octaveSpread = Math.max(0, Math.min(1, +v || 0)); },
+    noteSet:        noteSet,
     nextNote:      nextNote,
     tick:          tick,
     constellation: constellation,
@@ -1695,6 +1716,24 @@ function nextNote(){
 }
 function randomColour(){return PALETTE[Math.floor(Math.random()*PALETTE.length)]}
 
+// Changing the voicing retunes the world, not just future orbs: every body on
+// the canvas quantizes to the nearest note the new voicing can produce (ties
+// resolve downward). Runs on mode pick, keyboard edits, and preset import.
+function retuneOrbs(){
+  const MV=window.MonadVoicing;if(!MV)return;
+  const set=MV.noteSet();if(!set.length)return;
+  for(const o of orbs){
+    let best=set[0],bd=Infinity;
+    for(const n of set){
+      const d=Math.abs(n-o.note);
+      if(d<bd||(d===bd&&n<best)){bd=d;best=n}
+    }
+    o.note=best;
+  }
+  if(selected)selectOrb(selected);
+  refreshPresetBox();
+}
+
 const names=['C','C♯','D','E♭','E','F','F♯','G','A♭','A','B♭','B'],noteName=m=>names[m%12]+(Math.floor(m/12)-1);
 for(let m=24;m<=84;m++){const o=document.createElement('option');o.value=m;o.textContent=noteName(m);$('#note').append(o)}
 function selectOrb(o){selected=o;if(!devVisible())return;if(o){$('#selection').textContent=noteName(o.note)+' · '+modeLabel(o);$('#note').value=o.note;$('#orbColor').value=o.color;$('#orbHex').textContent=o.color}else{$('#selection').textContent='E B F♯ G D A';$('#orbHex').textContent='—'}}
@@ -1962,6 +2001,9 @@ function applyPresetObject(p){
       octSpreadInput.value=v;
       octSpreadInput.dispatchEvent(new Event('input',{bubbles:false}));   // repaint the rotary
     }
+    // presets without a scene keep the current orbs — quantize them to the
+    // imported voicing (a scene, if present, overwrites notes right below)
+    retuneOrbs();
   }
   const colour=p.colour||p.color||{};
   importPalette(colour.palette);
@@ -3637,6 +3679,7 @@ function makeVoicingNode(mode){
   function pick(){
     const MV=window.MonadVoicing;if(!MV)return;
     MV.setMode(mode.id);
+    retuneOrbs();
     MV.audition(mode.id,auditionStrike,performance.now());
     itemNodes.forEach(n=>n.paint&&n.paint());
   }
@@ -3671,6 +3714,7 @@ function noteSelSync(){
   const arr=[...noteSel.set].sort((a,b)=>a-b);
   MV.setCustomNotes(arr);
   if(arr.length)MV.setMode('custom');
+  retuneOrbs();
   refreshPresetBox();
 }
 function paintNoteSelGroup(){if(activeGroup==='notesel')itemNodes.forEach(n=>n.paint&&n.paint())}
@@ -4202,7 +4246,7 @@ function seedWorld(){
 }
 boot();
 // verify-*.js harness hook (dev tooling only; nothing in the instrument reads it)
-window.__monadTest={buildPreset,applyPresetObject,R,applyReverb:()=>{if(ac)applyReverb()}};
+window.__monadTest={buildPreset,applyPresetObject,R,applyReverb:()=>{if(ac)applyReverb()},get orbNotes(){return orbs.map(o=>o.note)}};
 })();
 </script>
 </body>

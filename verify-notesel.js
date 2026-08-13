@@ -109,6 +109,17 @@ const path = require('path');
   if (out.spread.distinct <= out.spread.poolSize) errors.push('spread 1 produced no octave variety');
   if (!out.spread.selectionIntact) errors.push('octave spread mutated the selection');
 
+  // voicing changes retune the whole canvas: every existing orb quantizes to
+  // the nearest note the active voicing can produce
+  out.retune = await page.evaluate(() => {
+    const pool = window.MonadVoicing.getCustomNotes();
+    const notes = window.__monadTest.orbNotes;
+    const inPool = notes.every(n => pool.includes(n));
+    return { orbCount: notes.length, inPool, pool };
+  });
+  if (!out.retune.orbCount) errors.push('no orbs seeded — retune test is vacuous');
+  if (!out.retune.inPool) errors.push('existing orbs were not quantized to the keyboard pool');
+
   // preset round-trip
   out.preset = await page.evaluate(() => {
     const p = window.__monadTest.buildPreset();
