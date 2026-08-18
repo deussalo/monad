@@ -291,7 +291,6 @@ Monad is a live instrument and cannot run without it. The page you are looking a
 /* MonadVoicing — voicing engine for monad.html
  * Exposes window.MonadVoicing — plain IIFE, no imports, no external deps.
  * Drop-in replacement for makeStack()/nextNote() in monad.html.
- * tick(nowMs) must be called each animation frame for drift mode.
  */
 (function (global) {
   'use strict';
@@ -328,57 +327,44 @@ Monad is a live instrument and cannot run without it. The page you are looking a
       drift: false
     },
     {
-      id: 'jazz',
-      // Maj7/9 shell: root M3 P5 M7 M9 M10.
-      // Dense upper cluster; rootWeights tilted high for brighter register.
-      semitones: [0, 4, 7, 11, 14, 16],
-      rootWeights: [1, 3.8, 4.2],
-      drift: false
-    },
-    {
-      id: 'natural_minor',
-      // Aeolian hexatonic: R M2 m3 P4 P5 m7.
-      // Compact span (10 st) — small constellation tightly clustered left.
-      semitones: [0, 2, 3, 5, 7, 10],
-      rootWeights: [1, 4.4, 3.2],
-      drift: false
-    },
-    // (dorian was here — dropped to make ring room for the custom-palette
-    // entry; it was natural_minor with one raised note, the least distinct
-    // mode in the catalogue. setMode('dorian') from an old preset is a no-op.)
-    {
-      id: 'egyptian',
-      // Egyptian suspended pentatonic + octave: R M2 P4 P5 m7 Oct.
-      // Three clear pairs with equal-ish gaps — very open sound.
-      semitones: [0, 2, 5, 7, 10, 12],
+      id: 'maj9',
+      // The quintal's major twin — Kenny Barron voicing, major form:
+      // LH R 5 9, RH 3 7 9.  Steps +7 +7 +2 +7 +3.  Same stacked-fifth
+      // foundation, but the M3/M7 colour turns the cluster warm instead
+      // of shadowed.  E B F# G# D# F#.
+      semitones: [0, 7, 14, 16, 23, 26],
       rootWeights: [1, 4.4, 3.2],
       drift: false
     },
     {
-      id: 'hirajoshi',
-      // Japanese: R M2 m3 P5 m6 Oct.
-      // Two tight clusters (0-2-3 and 7-8) with a large gap between — the most
-      // visually distinctive constellation (two blobs separated by void).
-      semitones: [0, 2, 3, 7, 8, 12],
-      rootWeights: [1, 4.0, 3.6],
-      drift: false
-    },
-    {
-      id: 'double_harmonic',
-      // Double harmonic (Arabic / Hijaz-like hexatonic): R m2 M3 P4 P5 m6.
-      // Three pairs of close intervals — dense, exotic clustering.
-      semitones: [0, 1, 4, 5, 7, 8],
+      id: 'lydian',
+      // Maj9#11 spread: R 5 9 #11 7 3.  Steps +7 +7 +4 +5 +5.  The raised
+      // 11th floats the whole chord — bright without resolving anywhere.
+      // E B F# A# D# G#.
+      semitones: [0, 7, 14, 18, 23, 28],
       rootWeights: [1, 4.4, 3.2],
       drift: false
     },
     {
-      id: 'drift',
-      // Starts as quintal; tick() slowly lerps toward random non-drift targets.
-      // semitones here are kept in sync with _ds.current (rounded integers).
-      semitones: [0, 7, 14, 15, 22, 29],
+      id: 'minor9',
+      // Spread m9 (drop-2 colour): R 5 b7 b3 5 9.  Steps +7 +3 +5 +4 +7.
+      // The b7-under-b3 gap is what makes a piano m9 melt.  E B D G B F#.
+      semitones: [0, 7, 10, 15, 19, 26],
       rootWeights: [1, 4.4, 3.2],
-      drift: true
+      drift: false
+    },
+    {
+      id: 'six_nine',
+      // 6/9 across three octaves: fifths at the bottom, fourths on top —
+      // R 5 3 6 9 5.  Steps +7 +9 +5 +5 +5.  The widest, most radiant
+      // major in the catalogue.  E B G# C# F# B.
+      semitones: [0, 7, 16, 21, 26, 31],
+      rootWeights: [1, 4.4, 3.2],
+      drift: false
     }
+    // (jazz / natural_minor / dorian / egyptian / hirajoshi / double_harmonic
+    // / drift were here — the scales read as rows of notes, not voicings, and
+    // drift's stack duplicated quintal's.  setMode() of any old id is a no-op.)
   ];
 
   /* ── Internal playback state ───────────────────────────────────────────── */
@@ -430,15 +416,20 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     return bag;
   }
 
-  /* ── Drift engine state ────────────────────────────────────────────────── */
-  var _ds = {
-    current:       [0, 7, 14, 15, 22, 29].slice(),  // float intervals
-    target:        [0, 7, 14, 15, 22, 29].slice(),
-    currentW:      [1, 4.4, 3.2].slice(),            // float rootWeights
-    targetW:       [1, 4.4, 3.2].slice(),
-    nextShiftMs:   0,    // set on first tick
-    lastTickMs:    0
-  };
+  /* ── Transpose ─────────────────────────────────────────────────────────────
+   * Signed semitone shift applied to every note the engine produces —
+   * catalogue roots and custom pool alike.  The tone wheel feeds this with
+   * -5..+6 so progressions voice-lead around the home register instead of
+   * marching upward (V is a fourth down, not a fifth up).
+   */
+  var _transpose = 0;
+
+  function _xp(m) {
+    m += _transpose;
+    if (m < 12) m += 12;
+    if (m > 108) m -= 12;
+    return m;
+  }
 
   /* ── Helpers ───────────────────────────────────────────────────────────── */
   function _weightedRoot(weights) {
@@ -456,7 +447,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     var root = _weightedRoot(rootWeights);
     var s = [];
     for (var i = 0; i < semitones.length; i++) {
-      s.push(Math.round(root + semitones[i]));
+      s.push(_xp(Math.round(root + semitones[i])));
     }
     return s;
   }
@@ -514,13 +505,20 @@ Monad is a live instrument and cannot run without it. The page you are looking a
    * This is the quantization target for orbs already on the canvas.
    */
   function noteSet() {
-    if (_currentId === 'custom') return _customNotes.slice();
+    var seen = {}, out = [], m, i;
+    if (_currentId === 'custom') {
+      for (i = 0; i < _customNotes.length; i++) {
+        m = _xp(_customNotes[i]);
+        if (!seen[m]) { seen[m] = 1; out.push(m); }
+      }
+      out.sort(function (a, b) { return a - b; });
+      return out;
+    }
     var mode = _modeById(_currentId);
     if (!mode) return [];
-    var seen = {}, out = [];
     for (var r = 0; r < ROOTS.length; r++) {
-      for (var i = 0; i < mode.semitones.length; i++) {
-        var m = Math.round(ROOTS[r] + mode.semitones[i]);
+      for (i = 0; i < mode.semitones.length; i++) {
+        m = _xp(Math.round(ROOTS[r] + mode.semitones[i]));
         if (!seen[m]) { seen[m] = 1; out.push(m); }
       }
     }
@@ -537,7 +535,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     if (_currentId === 'custom') {
       if (!_customNotes.length) return 52;
       if (!_stack.length || _idx >= _stack.length) {
-        _stack = _shuffledBag(_customNotes);
+        _stack = _shuffledBag(_customNotes.map(_xp));
         _idx = 0;
       }
       return _stack[_idx++];
@@ -552,48 +550,38 @@ Monad is a live instrument and cannot run without it. The page you are looking a
   }
 
   /**
-   * Call each animation frame with performance.now().
-   * Only does work in drift mode; safe to call in all modes.
+   * Set the signed transpose in semitones (clamped to -11..11); resets the
+   * walking stack so the shift is heard immediately, not a bag later.
    */
-  function tick(nowMs) {
-    if (_ds.lastTickMs === 0) {
-      _ds.lastTickMs = nowMs;
-      _ds.nextShiftMs = nowMs + 30000; // first drift after 30 s
-      return;
+  function setTranspose(semis) {
+    var t = Math.round(+semis);
+    if (!isFinite(t)) return;
+    if (t < -11) t = -11;
+    if (t > 11) t = 11;
+    if (t === _transpose) return;
+    _transpose = t;
+    _stack = [];
+    _idx = 0;
+  }
+
+  /**
+   * The current voicing as one playable chord, low to high, transposed.
+   * Catalogue modes: the stack on a fixed E3 root so the chord always lands
+   * mid-register regardless of the weighted-root dice. Custom: the middle
+   * six of the pool (a hand's worth), which keeps huge pools playable.
+   */
+  function chordNotes() {
+    var out = [], i;
+    if (_currentId === 'custom') {
+      if (!_customNotes.length) return out;
+      var lo = Math.max(0, ((_customNotes.length - 6) / 2) | 0);
+      for (i = lo; i < Math.min(_customNotes.length, lo + 6); i++) out.push(_xp(_customNotes[i]));
+      return out;
     }
-
-    var dt = nowMs - _ds.lastTickMs;
-    _ds.lastTickMs = nowMs;
-
-    if (_currentId !== 'drift') return;
-
-    // Pick a new target mode when timer fires
-    if (nowMs >= _ds.nextShiftMs) {
-      var candidates = [];
-      for (var k = 0; k < MODES.length; k++) {
-        if (!MODES[k].drift) candidates.push(MODES[k]);
-      }
-      var t = candidates[Math.floor(Math.random() * candidates.length)];
-      _ds.target  = t.semitones.slice().map(Number);
-      _ds.targetW = t.rootWeights.slice();
-      // Next shift in 60–120 s
-      _ds.nextShiftMs = nowMs + 60000 + Math.random() * 60000;
-    }
-
-    // Exponential approach — 120 s time constant (≈63 % of distance in 2 min)
-    var alpha = 1 - Math.exp(-dt / 120000);
-    var i;
-    for (i = 0; i < 6; i++) {
-      _ds.current[i] += (_ds.target[i] - _ds.current[i]) * alpha;
-    }
-    for (i = 0; i < 3; i++) {
-      _ds.currentW[i] += (_ds.targetW[i] - _ds.currentW[i]) * alpha;
-    }
-
-    // Sync the drift mode def so callers that read MODES[].semitones stay current
-    var driftDef = _modeById('drift');
-    for (i = 0; i < 6; i++) driftDef.semitones[i] = Math.round(_ds.current[i]);
-    for (i = 0; i < 3; i++) driftDef.rootWeights[i] = _ds.currentW[i];
+    var mode = _modeById(_currentId);
+    if (!mode) return out;
+    for (i = 0; i < mode.semitones.length; i++) out.push(_xp(52 + mode.semitones[i]));
+    return out;
   }
 
   /**
@@ -602,16 +590,13 @@ Monad is a live instrument and cannot run without it. The page you are looking a
    * dots: array of 6 {a: 0..1} where a is the normalized linear position.
    *       dot spacing = intervals (larger gap → further apart visually).
    * span: total semitone span; pass to drawing code as scale hint so the
-   *       caller can compare modes on a common axis (e.g. span/29 * 34 px).
-   *
-   * Drift returns the current float state so icons animate smoothly as it morphs.
+   *       caller can compare modes on a common axis (e.g. span/31 * 34 px).
    */
   function constellation(id) {
     var mode = _modeById(id);
     if (!mode) return { dots: [], span: 0 };
 
-    // Use float current for drift so the icon animates continuously
-    var raw = (id === 'drift') ? _ds.current : mode.semitones;
+    var raw = mode.semitones;
     var first = raw[0];
     var last  = raw[raw.length - 1];
     var span  = last - first;
@@ -652,7 +637,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     var AMP_DECAY = 0.82;
 
     for (var i = 0; i < mode.semitones.length; i++) {
-      var midi = mode.semitones[i] + ROOT;
+      var midi = _xp(mode.semitones[i] + ROOT);
       if (midi < 0) midi = 0;
       if (midi > 127) midi = 127;
       strike(midi, amp, i * SPACING);
@@ -673,10 +658,12 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     getCustomNotes: getCustomNotes,
     get octaveSpread() { return _octaveSpread; },
     setOctaveSpread: function (v) { _octaveSpread = Math.max(0, Math.min(1, +v || 0)); },
+    get transpose() { return _transpose; },
+    setTranspose:   setTranspose,
+    chordNotes:     chordNotes,
     scatterNote:    _scatterOctave,
     noteSet:        noteSet,
     nextNote:      nextNote,
-    tick:          tick,
     constellation: constellation,
     audition:      audition
   };
@@ -1897,7 +1884,8 @@ function buildPreset(){
     voicing:{
       mode:window.MonadVoicing?window.MonadVoicing.current:'quintal',
       custom:window.MonadVoicing?window.MonadVoicing.getCustomNotes():[],
-      octave_spread:window.MonadVoicing?window.MonadVoicing.octaveSpread:0
+      octave_spread:window.MonadVoicing?window.MonadVoicing.octaveSpread:0,
+      transpose:window.MonadVoicing?window.MonadVoicing.transpose:0
     },
     scene:{
       coordinate_space:'normalized',
@@ -1987,6 +1975,7 @@ function applyPresetObject(p){
       noteSel.set=new Set(window.MonadVoicing.getCustomNotes());
     }
     if(typeof p.voicing.mode==='string')window.MonadVoicing.setMode(p.voicing.mode);
+    if(Number.isFinite(+p.voicing.transpose))window.MonadVoicing.setTranspose(+p.voicing.transpose);
     if(Number.isFinite(+p.voicing.octave_spread)){
       const v=clamp(+p.voicing.octave_spread,0,1);
       window.MonadVoicing.setOctaveSpread(v);
@@ -3683,7 +3672,7 @@ function makeSwatch(i){
 // spacing IS the interval structure, and whose overall length is the mode's
 // span. Dots closer than the dot diameter are merged into one larger mark —
 // otherwise quintal's +1 semitone pair renders as an illegible smudge.
-const CONST_LEN=32,CONST_MAXSPAN=29,MERGE_PX=3.4;
+const CONST_LEN=32,CONST_MAXSPAN=31,MERGE_PX=3.4;
 function makeVoicingNode(mode){
   const inner=sv('g',null,'node bloom'),g=wrapNode(inner);
   inner.appendChild(sv('circle',{r:24},'plate'));
@@ -3717,11 +3706,12 @@ function makeVoicingNode(mode){
     const MV=window.MonadVoicing;if(!MV)return;
     MV.setMode(mode.id);
     retuneOrbs();
-    MV.audition(mode.id,auditionStrike,performance.now());
+    chordStrike();   // the chord builder: this voicing on the held wheel tone
     itemNodes.forEach(n=>n.paint&&n.paint());
   }
-  pad.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation()});
-  pad.addEventListener('click',e=>{e.stopPropagation();pick()});
+  // pointerdown, matching the tone wheel: chords land when the finger does
+  pad.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();pick()});
+  pad.addEventListener('click',e=>{e.stopPropagation()});
   pad.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){pick();e.preventDefault()}});
   node.paint=paint;paint();
   return node;
@@ -3735,6 +3725,55 @@ function auditionStrike(midi,amp,delaySec){
       color:PALETTE[5]||'#C39A61',hit:0,resonance:0,energy:0};
     strikeNow(ghost,10+58*clamp(amp,0,1),false,1,ghost.note);   // auditions pin their pitch
   },Math.max(0,delaySec*1000));
+}
+// The chord builder's voice: the active voicing on the active wheel tone as
+// one gesture — a fast low-to-high strum, not the editor's slow arpeggio.
+// Fired by every tone press and every voicing press, so walking either ring
+// plays a progression.
+function chordStrike(){
+  const MV=window.MonadVoicing;if(!MV)return;
+  const notes=MV.chordNotes();
+  let amp=.72;
+  notes.forEach((m,i)=>{auditionStrike(m,amp,i*.028);amp*=.9});
+}
+// ---- tone wheel ----
+// Eight transposition roots on an inner wheel inside the voicing ring:
+// I ii iii IV V bVI vi bVII of the home key. Tones above the fifth shift
+// DOWN (V is -5, not +7) so a progression voice-leads around the home
+// register instead of climbing out of it. Hold a tone (pointerdown sets it
+// instantly) and tap a voicing — or keep a voicing and walk the tones —
+// either way each press builds and sounds the full chord and retunes the
+// world to it.
+const WHEEL_TONES=[0,2,4,5,-5,-4,-3,-2];
+function makeToneNode(t){
+  const inner=sv('g',null,'node bloom'),g=wrapNode(inner);
+  const face=sv('circle',{r:9.5});inner.appendChild(face);
+  const home=t===0?sv('circle',{r:2.6,style:'fill:var(--ink)'}):null;   // home key carries a mark
+  if(home)inner.appendChild(home);
+  const pad=sv('circle',{r:COARSE?15:13,tabindex:'-1','aria-label':'tone'},'hitpad');inner.appendChild(pad);
+  const node={g,el:inner,cx:0,cy:0};
+  function paint(){
+    const MV=window.MonadVoicing,on=MV&&MV.transpose===t;
+    face.setAttribute('fill',on?'var(--accent)':'rgba(239,231,215,.14)');
+    face.setAttribute('stroke',on?'var(--accent)':'rgba(239,231,215,.45)');
+    face.setAttribute('stroke-width',on?1.5:1);
+    if(home)home.setAttribute('opacity',on?.9:.55);
+  }
+  function pick(){
+    const MV=window.MonadVoicing;if(!MV)return;
+    MV.setTranspose(t);
+    retuneOrbs();
+    chordStrike();
+    itemNodes.forEach(n=>n.paint&&n.paint());
+  }
+  // pointerdown, not click: the wheel is an instrument — the root must be
+  // live the instant the finger lands, so hold-tone-press-voicing works as
+  // a two-finger gesture with no release ordering to get wrong.
+  pad.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();pick()});
+  pad.addEventListener('click',e=>{e.stopPropagation()});
+  pad.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){pick();e.preventDefault()}});
+  node.paint=paint;paint();
+  return node;
 }
 
 // ---- custom note palette (radial keyboard) ----
@@ -3894,10 +3933,20 @@ if(window.MonadVoicing){
   GROUPS[3].items.push({t:'action',icon:()=>'kPlus',
     tint:()=>window.MonadVoicing.current==='custom'?'var(--accent)':'',
     run:()=>openGroup('notesel'),a:'custom note palette'});
-  // octave spread lives with the scales — it reshapes every strike, whatever
+  // octave spread lives with the voicings — it reshapes every strike, whatever
   // the mode, so it sits beside them rather than inside the keyboard editor
   GROUPS[3].items.push({t:'knob',input:octSpreadInput,icon:'kScatter',a:'octave spread'});
-  GROUPS[3].span=176;   // ten items breathe a little wider than the stock arc
+  const OUTER=GROUPS[3].items.length;   // voicings + custom + spread on the arc
+  for(const t of WHEEL_TONES)GROUPS[3].items.push({t:'tone',tone:t});
+  GROUPS[3].span=176;
+  GROUPS[3].layout=nodes=>{
+    // voicings on the main arc; the tone wheel nested inside it
+    const at=(nd,ang,rad)=>{const a=ang*Math.PI/180;place(nd,rootX+rad*Math.cos(a),rootY+rad*Math.sin(a))};
+    const start=270-GROUPS[3].span/2,step=GROUPS[3].span/(OUTER-1);
+    for(let i=0;i<OUTER;i++)at(nodes[i],start+step*i,ringR);
+    const rt=Math.max(64,ringR*.58),tspan=192,tstart=270-tspan/2,tstep=tspan/(WHEEL_TONES.length-1);
+    for(let i=0;i<WHEEL_TONES.length;i++)at(nodes[OUTER+i],tstart+tstep*i,rt);
+  };
 }
 // palette group is built from PALETTE + target toggle + photo import
 for(let i=0;i<8;i++)GROUPS[4].items.push({t:'swatch',i});
@@ -3930,7 +3979,7 @@ const hubNodes=GROUPS.map(gr=>{
   return node;
 });
 
-let shellState=0,activeGroup=null,itemNodes=[],lastVoicingPaint=0;
+let shellState=0,activeGroup=null,itemNodes=[];
 // Each group is built exactly once and kept. Rebuilding on every open leaked a
 // listener onto the bound <input> per rotary per open, each pinning a detached
 // SVG node. Hidden groups are inert anyway (.bloom sets pointer-events:none).
@@ -3943,6 +3992,7 @@ function itemsFor(gr){
       if(spec.t==='choice')return makeChoice(spec);
       if(spec.t==='swatch')return makeSwatch(spec.i);
       if(spec.t==='voicing')return makeVoicingNode(spec.mode);
+      if(spec.t==='tone')return makeToneNode(spec.tone);
       if(spec.t==='key')return makeKeyNode(spec);
       if(spec.t==='octind')return makeOctIndicator();
       return makeAction(spec);
@@ -4178,9 +4228,6 @@ function frame(now){
 
   const oldPrevious=previousContacts;previousContacts=contacts;contacts=oldPrevious;
 
-  if(window.MonadVoicing)window.MonadVoicing.tick(now);
-  // shell-scoped state: unreachable if the shell failed to build
-  try{if(activeGroup==='voicing'&&now-lastVoicingPaint>420){lastVoicingPaint=now;itemNodes.forEach(n=>n.paint&&n.paint())}}catch(err){}
   captureMotionSample(now);
   updateVoiceStat(now);
   draw();
@@ -4285,7 +4332,7 @@ const DEFAULT_PRESET={
   },
   environment:{drag:.06,wind:.36,atmosphere:3.4,blur_px:30,field_strength:.84,over_light:.25,mix:'screen'},
   colour:{background:'#221202',palette:['#221202','#3A280D','#556979','#77807D','#878D80','#AB7F48','#C39A61','#E8C882']},
-  voicing:{mode:'custom',custom:[26,36,48,51,55,56,60,63,67,68,72,75,79,80,84,87,91,92],octave_spread:0},
+  voicing:{mode:'custom',custom:[26,36,48,51,55,56,60,63,67,68,72,75,79,80,84,87,91,92],octave_spread:0,transpose:0},
   scene:{coordinate_space:'normalized',orbs:[
     {x:0.589848,y:0.922568,radius:0.071202,note:48,colour:'#AB7F48',vx:0.054417,vy:0.011424},
     {x:0.2473,y:0.904469,radius:0.134508,note:48,colour:'#221202',vx:0.020756,vy:-0.006961},

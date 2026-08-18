@@ -41,7 +41,7 @@ const path = require('path');
   await page.waitForTimeout(500);
   await clickPad('voicing');
   out.voicingItems = await page.evaluate(() => document.querySelectorAll('#shellSvg .bloom.in').length);
-  if (out.voicingItems !== 10) errors.push('expected 10 voicing nodes (8 modes + plus + spread knob), got ' + out.voicingItems);
+  if (out.voicingItems !== 16) errors.push('expected 16 voicing nodes (6 voicings + plus + spread knob + 8 wheel tones), got ' + out.voicingItems);
   // spread knob lives on the SCALE ring, not inside the keyboard editor
   out.spreadOnVoicing = await page.evaluate(() =>
     !!document.querySelector('.bloom.in .hitpad[aria-label="octave spread"]'));
