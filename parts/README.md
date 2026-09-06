@@ -16,3 +16,12 @@ in `monad.html`.
 | `fluid2.js` | A proposed replacement engine. **Evaluated and NOT adopted** — the shipped engine was already verified, measured and deployed, and swapping it wholesale traded known-good for unknown with no demonstrated gain. Its header calls itself a "drop-in replacement"; it is not pending work. One genuine bug it identified (compounding quality scale) was extracted and fixed in `12aef97`. |
 | `audio-patch.md`, `strike-patch.md` | Patch specs, applied by hand. Historical record of intent. |
 | `*-test.html`, `*-test.js`, `fluid-harness.html` | Scratch harnesses from development. The maintained tests are `verify*.js` in the repo root. |
+
+## Maintained tests (repo root)
+
+`verify.js` (shell/wordless audit) · `verify-audio.js` (gesture activation) ·
+`verify-storm.js` (collision storm) · `verify-strikes.js` (every impact sounds)
+· `verify-nodepool.js` (warm-pool zero-allocation invariant)
+
+Run with:
+`LD_LIBRARY_PATH=/srv/rig/rig/webapp/scripts/playwright-libs/lib node verify.js`
