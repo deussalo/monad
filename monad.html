@@ -1613,7 +1613,7 @@ const motion={
 };
 
 const SOURCE={wave:'sine',attack:.039,decay:6,level:.234,sizeRing:1.68,maxVoices:55};
-const R={input:.55,dry:1,wet:1.011,output:.85,predelay:249.9,size:3.89,decay:24.2,feedback:73.8,lowRatio:.9698,highRatio:.05,lowCross:102.804,highCross:6380.1304,damping:767,diffusion:.82,modRate:.0706,modDepth:6,drift:.8,outHP:79,outLP:7736,delays:[83.1,96.8,113.9,132.9,154.2,178.1,205.3,236.9]};
+const R={input:.55,dry:1,wet:.92,output:.85,predelay:55,size:3.89,decay:20,feedback:73.8,lowRatio:.6,highRatio:.18,lowCross:102.804,highCross:6380.1304,damping:2800,diffusion:.82,modRate:.0706,modDepth:6,drift:.8,outHP:110,outLP:9000,delays:[83.1,96.8,113.9,132.9,154.2,178.1,205.3,236.9]};
 // Delay lengths are near-geometric (ratio ~1.16, jittered off simple fractions).
 // The previous set had two near-duplicate pairs (114.5/113.9, 132.9/138.3):
 // twin lines double the modal density at the same comb spacing, which is the
@@ -1762,7 +1762,7 @@ function updateSettings(){
       workers:false,
       audio_worklet:false,
       persistent_gain_pool:true,
-      fresh_zero_phase_oscillator_per_strike:true,
+      fresh_zero_phase_oscillator_per_strike:false,
       static_reverb_graph:true,
       voice_stealing:false,
       polyphony_headroom:true,
@@ -1841,7 +1841,7 @@ function buildPreset(){
     version:1,
     optimizations:{
       standalone_file:true,workers:false,audio_worklet:false,persistent_gain_pool:true,
-      fresh_zero_phase_oscillator_per_strike:true,static_reverb_graph:true,
+      fresh_zero_phase_oscillator_per_strike:false,static_reverb_graph:true,
       voice_stealing:false,polyphony_headroom:true,collision_batch_ms:HIT_BATCH_MS,
       orb_refractory_ms:ORB_REFRACTORY_MS,cached_atmosphere_sprites:true,cached_hot_loop_controls:true,
       numeric_collision_keys:true,contact_set_swap:true,cached_mass_powers:true,pooled_modal_event_nodes:true,source_voice_reuse:'warm pool, clock-based',
@@ -2384,11 +2384,11 @@ function applyReverb(){
     const gl=t60Gain(sec,lowT);
     const gh=t60Gain(sec,highT);
     const loop=clamp(gm*trim,0,.9993);
-    // A shelf BOOST multiplies the loop gain in its band. Unbounded, a long
-    // low decay ratio pushed band gain past unity — self-oscillation at the
-    // crossover until the limiter slammed. Cap boosts so no band ever
-    // exceeds the same .9993 ceiling the broadband loop obeys.
     const maxBoost=20*Math.log10(.9993/Math.max(loop,.0001));
+    const shelves=[clamp(20*Math.log10(Math.max(.0001,gl/gm)),-18,12),
+      clamp(20*Math.log10(Math.max(.0001,gh/gm)),-36,6)];
+    const totalBoost=shelves.reduce((sum,gain)=>sum+Math.max(0,gain),0);
+    const boostScale=totalBoost>maxBoost?maxBoost/totalBoost:1;
 
     fdn.delays[i].delayTime.setTargetAtTime(sec,t,.12);
     fdn.gains[i].gain.setTargetAtTime(loop,t,.07);
@@ -2396,16 +2396,10 @@ function applyReverb(){
     fdn.low[i].frequency.setTargetAtTime(R.lowCross,t,.06);
     fdn.high[i].frequency.setTargetAtTime(R.highCross,t,.06);
 
-    fdn.low[i].gain.setTargetAtTime(
-      clamp(20*Math.log10(Math.max(.0001,gl/gm)),-18,Math.min(12,maxBoost)),
-      t,
-      .06
-    );
-    fdn.high[i].gain.setTargetAtTime(
-      clamp(20*Math.log10(Math.max(.0001,gh/gm)),-36,Math.min(6,maxBoost)),
-      t,
-      .06
-    );
+    [fdn.low[i],fdn.high[i]].forEach((shelf,band)=>{
+      const gain=shelves[band];
+      shelf.gain.setTargetAtTime(gain>0?gain*boostScale:gain,t,.06);
+    });
 
     fdn.damp[i].frequency.setTargetAtTime(R.damping,t,.06);
 
@@ -2519,7 +2513,6 @@ function chooseFreeModalEvent(){
     const slot=modalEvents[s];
     if(slot.osc&&now>=slot.end)return slot;
   }
-  return null;
   return null;
 }
 
@@ -2673,7 +2666,6 @@ function strikeNow(o,impact,physical=true,massScale=1,pitch=null){
   amp*=poly;
   lastPolyNorm=poly;
 
-  // WARM PATH: no allocation, no start/stop, no onended. Retune + ramps only.
   const g=v.gain.gain;
   const freq=v.osc.frequency;
   const det=v.osc.detune;
@@ -2694,10 +2686,17 @@ function strikeNow(o,impact,physical=true,massScale=1,pitch=null){
     det.cancelScheduledValues(t);
     g.setValueAtTime(0,t);
   }
-  // type assign can click on a running osc; only at the silent instant
-  if(v.osc.type!==SOURCE.wave)v.osc.type=SOURCE.wave;
-  freq.setValueAtTime(hz(snote),t0);                    // retune happens at zero gain
-  det.setValueAtTime(((v.slot*17)%13-6)*1.2,t0);        // ±7.2¢ static; breaks unison beating
+  if(v.osc.type!==SOURCE.wave){
+    const previous=v.osc;
+    v.osc=ac.createOscillator();
+    v.osc.type=SOURCE.wave;
+    v.osc.connect(v.gain);
+    v.osc.start(t0);
+    previous.stop(t0);
+    previous.onended=()=>previous.disconnect();
+  }
+  v.osc.frequency.setValueAtTime(hz(snote),t0);
+  v.osc.detune.setValueAtTime(((v.slot*17)%13-6)*1.2,t0);
 
   const sizeNorm=clamp((o.r-MIN_R)/(MAX_R-MIN_R),0,1);
   const ring=Math.max(.03,SOURCE.decay*(1+SOURCE.sizeRing*sizeNorm));
@@ -4324,10 +4323,10 @@ const DEFAULT_PRESET={
   resonant_ecosystem:{modal_body_mix:.32,sympathetic_coupling:.73,acoustic_pressure_feedback:.47,pressure_wave_speed_px_s:520},
   source:{waveform:'sine',attack_s:.039,decay_s:6,level:.234,size_ring:1.68,max_voices:55},
   reverb:{
-    input:.55,dry:1,wet:1.011,output:.85,predelay_ms:249.9,size:3.89,decay_s:24.2,
-    feedback_percent:73.8,final_highpass_hz:79,final_lowpass_24db_hz:7736,
-    low_decay_ratio:.9698,high_decay_ratio:.05,low_cross_hz:102.804,high_cross_hz:6380.1304,
-    loop_damping_hz:767,diffusion:.82,modulation_rate_hz:.0706,modulation_depth_ms:6,
+    input:.55,dry:1,wet:.92,output:.85,predelay_ms:55,size:3.89,decay_s:20,
+    feedback_percent:73.8,final_highpass_hz:110,final_lowpass_24db_hz:9000,
+    low_decay_ratio:.6,high_decay_ratio:.18,low_cross_hz:102.804,high_cross_hz:6380.1304,
+    loop_damping_hz:2800,diffusion:.82,modulation_rate_hz:.0706,modulation_depth_ms:6,
     random_drift:.8,delays_ms:[83.1,96.8,113.9,132.9,154.2,178.1,205.3,236.9]
   },
   environment:{drag:.06,wind:.36,atmosphere:3.4,blur_px:30,field_strength:.84,over_light:.25,mix:'screen'},
