@@ -4543,14 +4543,21 @@ function frame(now){
 // rate, so the instrument measures itself and sheds work until it does.
 //   3 full | 2 no bloom | 1..-1 no bloom, smaller aura buffer. Bodies stay native.
 // ---------------------------------------------------------------------------
-let qLevel=3,qSlow=0,qLastChange=0;
-// The frame budget tracks the panel, not a fixed 50 fps floor. panelMs is the
-// fastest interval ever observed (~= refresh period: 16.7 on 60 Hz, 8.3 on
-// 120 Hz). Work is shed when frames run over ~1.45x the panel period, so a
-// ProMotion phone sheds until it actually holds high refresh instead of
-// sitting "close enough" at a juddery 70.
-let panelMs=16.7;
+// Work is shed when frames run over ~1.45x the panel period, so a ProMotion
+// phone sheds until it holds high refresh instead of sitting at a juddery 70,
+// and comes back up after ~6 s comfortably inside the budget.
+// The panel period is learned from the frames: the 20th-percentile interval of
+// each 60-frame window, keeping the fastest window. A stray short frame cannot
+// tighten the budget and frames that miss vsync cannot loosen it. The refresh
+// rate can change when the page returns to view or the window moves screens,
+// so both start the learning again.
+let qLevel=3,qSlow=0,qLastChange=0,qLastUp=-1e9,qGoodSince=0,qUpWait=8000,qSizeKey='';
+const FRAME_WINDOW=60,frameWindow=new Float64Array(FRAME_WINDOW),frameSorted=new Float64Array(FRAME_WINDOW);
+let frameCount=0,panelMs=Infinity;
 function frameBudgetMs(){return Math.max(11,panelMs*1.45)}
+function relearnPanel(){panelMs=Infinity;frameCount=0;qSlow=0;qGoodSince=0}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)relearnPanel()});
+function windowPercentile(p){frameSorted.set(frameWindow);frameSorted.sort();return frameSorted[Math.floor(p*(FRAME_WINDOW-1))]}
 // The 2D atmosphere measured ~1.7x the WebGL cost on a phone, so falling back
 // to 2D is for absent WebGL2, never for performance.
 const QUALITY_STEPS=[
@@ -4565,15 +4572,26 @@ function applyQuality(){
   const F=window.MonadAura;
   const step=QUALITY_STEPS[clamp(qLevel+1,0,QUALITY_STEPS.length-1)];
   if(F&&F.quality){try{F.quality(step)}catch(err){}}
-  if(!auraOn&&qLevel<=0)fieldHaze=0;   // only the 2D path needs this
+  if(!auraOn)fieldHaze=qLevel<=0?0:+elHazeAmt.value;   // only the 2D path needs this
   qTransitions.push(qLevel);
   if(qTransitions.length>8)qTransitions.shift();
 }
 function adaptQuality(now,frameMs){
-  if(frameMs>4&&frameMs<panelMs)panelMs=Math.max(4,frameMs);
+  if(qSizeKey!==lastSizeKey){qSizeKey=lastSizeKey;relearnPanel()}
+  if(!(frameMs>0&&frameMs<250))return;
+  frameWindow[frameCount++%FRAME_WINDOW]=frameMs;
+  if(frameCount%FRAME_WINDOW===0){
+    panelMs=Math.min(panelMs,windowPercentile(.2));
+    if(windowPercentile(.9)<frameBudgetMs()*.75){
+      if(!qGoodSince)qGoodSince=now;
+      if(qLevel<3&&now-qGoodSince>=6000&&now-qLastChange>=qUpWait){qLevel++;qLastChange=qLastUp=now;qGoodSince=0;applyQuality()}
+    }else qGoodSince=0;
+  }
+  if(panelMs===Infinity)return;
   if(frameMs>frameBudgetMs())qSlow++;else qSlow=Math.max(0,qSlow-2);
   if(qSlow>45&&qLevel>-1&&now-qLastChange>2500){
-    qLevel--;qSlow=0;qLastChange=now;applyQuality();
+    if(now-qLastUp<15000)qUpWait=Math.min(64000,qUpWait*2);
+    qLevel--;qSlow=0;qGoodSince=0;qLastChange=now;applyQuality();
   }
 }
 
@@ -4660,6 +4678,7 @@ window.__monadTest={buildPreset,applyPresetObject,R,SPACE,spaceMessage,setEngine
   get orbs(){return orbs},applyReverb:()=>{if(ac)applyReverb()},
   get orbNotes(){return orbs.map(o=>o.note)},
   get lastStrikeMidi(){return lastStrikeMidi},
+  get quality(){return qLevel},
   strike(imp=60,i=0){const o=orbs[i%Math.max(1,orbs.length)];if(o)strikeNow(o,imp,false);return lastStrikeMidi}};
 })();
 </script>
