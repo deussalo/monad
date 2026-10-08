@@ -575,12 +575,12 @@ let BG,FG,DIM,FAINT,SEL,BAD,HOT,READ,PAD;
 function readPalette(){[BG,FG,DIM,FAINT,SEL,BAD,HOT,READ,PAD]=['bg','fg','dim','faint','sel','bad','hot','read','pad'].map(k=>css('--'+k))}
 readPalette();
 const glow=t=>t==null||clock.view<t?0:Math.exp(-(clock.view-t)/.12);
-function hot(t,base){const e=glow(t);if(e<=.03)return base;cx.globalAlpha=.35+.65*e;return HOT}
+function hot(t,base,g=cx){const e=glow(t);if(e<=.03)return base;g.globalAlpha=.35+.65*e;return HOT}
 const isSel=o=>sel&&sel.o===o;
 function line(x1,y1,x2,y2){cx.beginPath();cx.moveTo(x1,y1);cx.lineTo(x2,y2);cx.stroke()}
 function circle(x,y,r,fill){cx.beginPath();cx.arc(x,y,r,0,TAU);fill?cx.fill():cx.stroke()}
 function draw(){
-  cx.setTransform(1,0,0,1,0,0);cx.fillStyle=BG;cx.fillRect(0,0,cv.width,cv.height);
+  cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;cx.fillStyle=BG;cx.fillRect(0,0,cv.width,cv.height);
   const z=S.zoom*dpr,px=1/S.zoom;
   cx.setTransform(z,0,0,z,dpr*CW/2-view.x*z,dpr*CH/2-view.y*z);
   cx.lineWidth=px;
@@ -647,7 +647,7 @@ function newCog(p,disc){
     c.x=x0;c.y=y0;if(!axle)snap(c);solve();
   };
   place(null);
-  return {move:place,up:()=>{place(null);changed(true)}};
+  return {move:place,up:()=>{place(null);changed(true)},cancel:removeSel};
 }
 const TOOLS={
   select(p,e){
@@ -672,24 +672,23 @@ const TOOLS={
     const c=pickCog(p);if(!c)return null;
     const a={id:W.next++,cog:c,a:0,r0:0,len:4};W.arms.push(a);select('arm',a);
     const set=q=>{a.a=wrap(Math.atan2(q.y-c.y,q.x-c.x)-renderTh(c));a.len=Math.max(4,Math.hypot(q.x-c.x,q.y-c.y))};
-    set(p);return {move:set,up:()=>changed(true)};
+    set(p);return {move:set,up:()=>changed(true),cancel:removeSel};
   },
   pad(p){
     const o={id:W.next++,x:p.x,y:p.y,r:12,voice:makeVoice('kick'),hits:0,lastV:0};W.pads.push(o);select('pad',o);
-    return {move:q=>{const r=Math.hypot(q.x-p.x,q.y-p.y);if(r>4)o.r=r},up:()=>changed(true)};
+    return {move:q=>{const r=Math.hypot(q.x-p.x,q.y-p.y);if(r>4)o.r=r},up:()=>changed(true),cancel:removeSel};
   },
   reader(p){
     const o={id:W.next++,x1:p.x,y1:p.y,x2:p.x,y2:p.y,voice:makeVoice('modal'),hits:0,lastV:0};W.readers.push(o);select('reader',o);
-    return {move:q=>{o.x2=q.x;o.y2=q.y},up:()=>{if(Math.hypot(o.x2-o.x1,o.y2-o.y1)<4)removeSel();changed(true)}};
+    return {move:q=>{o.x2=q.x;o.y2=q.y},cancel:removeSel,up:()=>{if(Math.hypot(o.x2-o.x1,o.y2-o.y1)<4)removeSel();changed(true)}};
   },
   dot(p){
     const c=pickCog(p,c=>c.track);if(!c)return null;
     const t=c.track,d=Math.hypot(p.x-c.x,p.y-c.y),r=radius(c);
     const ring=t.rings>1?clamp(Math.round((d/r-.25)/.65*(t.rings-1)),0,t.rings-1):0;
     const step=TAU/t.div,a=wrap(Math.round(wrap(Math.atan2(p.y-c.y,p.x-c.x)-renderTh(c))/step)*step);
-    const i=t.dots.findIndex(o=>o.ring===ring&&Math.abs(wrap(o.a-a+Math.PI)-Math.PI)<1e-6);
-    if(i>=0)t.dots.splice(i,1);else t.dots.push({ring,a});
-    select('cog',c);changed();return null;
+    const on=dotAt(t,ring,a)<0;setDot(t,{ring,a},on);
+    select('cog',c);changed();return {move(){},up(){},cancel:()=>{setDot(t,{ring,a},!on);changed()}};
   }
 };
 function removeSel(){
@@ -697,6 +696,67 @@ function removeSel(){
   if(sel.type==='cog'){W.cogs=W.cogs.filter(c=>c!==o);W.arms=W.arms.filter(a=>a.cog!==o)}
   else W[sel.type+'s']=W[sel.type+'s'].filter(x=>x!==o);
   select(null);changed(true);
+}
+
+const dotAt=(t,ring,a)=>t.dots.findIndex(o=>o.ring===ring&&Math.abs(wrap(o.a-a+Math.PI)-Math.PI)<1e-6);
+function setDot(t,cell,on){const i=dotAt(t,cell.ring,cell.a);if(on&&i<0)t.dots.push(cell);else if(!on&&i>=0)t.dots.splice(i,1)}
+
+/* ---------- roll: the disc unwrapped into a strip, time left to right ---------- */
+const NOTE_NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const noteName=m=>NOTE_NAMES[m%12]+(Math.floor(m/12)-1);
+const ROLL_LABEL=30,ROLL_ROW=11;
+let roll=null;
+const rollDir=c=>c.w<0?-1:1;
+const rollU=(c,a)=>wrap(-rollDir(c)*a)/TAU;
+function readerPlayheads(c){
+  const R=ringR(c,Math.floor((c.track.rings-1)/2)),th=renderTh(c),out=[];
+  for(const rd of W.readers){
+    const dx=rd.x2-rd.x1,dy=rd.y2-rd.y1,fx=rd.x1-c.x,fy=rd.y1-c.y,A=dx*dx+dy*dy,B=2*(fx*dx+fy*dy),disc=B*B-4*A*(fx*fx+fy*fy-R*R);
+    if(!A||disc<0)continue;
+    for(const s of [(-B-Math.sqrt(disc))/(2*A),(-B+Math.sqrt(disc))/(2*A)])
+      if(s>=0&&s<=1)out.push({rd,u:rollU(c,Math.atan2(fy+dy*s,fx+dx*s)-th)});
+  }
+  return out;
+}
+function rollGeom(){const t=roll.c.track,cw=Math.max(6,Math.floor((roll.box.clientWidth-ROLL_LABEL)/t.div));return {cw,W:ROLL_LABEL+cw*t.div,H:ROLL_ROW*t.rings}}
+function rollCell(e){
+  const t=roll.c.track,g=rollGeom(),r=roll.cv.getBoundingClientRect();
+  const col=Math.floor((e.clientX-r.left-ROLL_LABEL)/g.cw),row=Math.floor((e.clientY-r.top)/ROLL_ROW);
+  if(col<0||col>=t.div||row<0||row>=t.rings)return null;
+  return {ring:t.rings-1-row,a:wrap(-rollDir(roll.c)*col*TAU/t.div)};
+}
+function drawRoll(){
+  if(!roll||!roll.cv.isConnected)return;
+  const c=roll.c,t=c.track,g=rollGeom(),cv2=roll.cv,x=cv2.getContext('2d'),gw=g.cw*t.div;
+  if(cv2.width!==g.W*dpr||cv2.height!==g.H*dpr){cv2.width=g.W*dpr;cv2.height=g.H*dpr;cv2.style.width=g.W+'px';cv2.style.height=g.H+'px'}
+  x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle=BG;x.fillRect(0,0,g.W,g.H);
+  x.font='9px monospace';x.textBaseline='middle';
+  for(let row=0;row<t.rings;row++){
+    const note=ringNote(t,t.rings-1-row),y=row*ROLL_ROW;
+    x.fillStyle=DIM;x.fillText(noteName(note),2,y+ROLL_ROW/2);
+    if(note%12===t.base%12){x.fillStyle=PAD;x.fillRect(ROLL_LABEL,y,gw,ROLL_ROW)}
+  }
+  x.lineWidth=1;
+  for(let k=0;k<=t.div;k++){x.strokeStyle=k%4?FAINT:DIM;x.beginPath();x.moveTo(ROLL_LABEL+k*g.cw+.5,0);x.lineTo(ROLL_LABEL+k*g.cw+.5,g.H);x.stroke()}
+  x.strokeStyle=FAINT;
+  for(let r=0;r<=t.rings;r++){x.beginPath();x.moveTo(ROLL_LABEL,r*ROLL_ROW+.5);x.lineTo(ROLL_LABEL+gw,r*ROLL_ROW+.5);x.stroke()}
+  for(const d of t.dots){
+    if(d.ring>=t.rings)continue;
+    x.fillStyle=hot(d.flash,FG,x);x.fillRect(ROLL_LABEL+rollU(c,d.a)*gw+1,(t.rings-1-d.ring)*ROLL_ROW+1,g.cw-1,ROLL_ROW-1);x.globalAlpha=1;
+  }
+  x.lineWidth=2;
+  for(const p of readerPlayheads(c)){x.strokeStyle=hot(p.rd.flash,READ,x);x.beginPath();x.moveTo(ROLL_LABEL+p.u*gw,0);x.lineTo(ROLL_LABEL+p.u*gw,g.H);x.stroke();x.globalAlpha=1}
+}
+function rollSection(f,c){
+  const t=c.track,cv2=el('canvas'),box=el('div',{},cv2);
+  box.style.cssText='overflow-x:auto;margin:4px 0';cv2.style.cssText='display:block;touch-action:none;cursor:crosshair';
+  roll={cv:cv2,box,c};let paint=null;
+  cv2.onpointerdown=e=>{const cell=rollCell(e);if(!cell)return;cv2.setPointerCapture(e.pointerId);paint=dotAt(t,cell.ring,cell.a)<0;setDot(t,cell,paint)};
+  cv2.onpointermove=e=>{if(paint===null)return;const cell=rollCell(e);if(cell)setDot(t,cell,paint)};
+  cv2.onpointerup=cv2.onpointercancel=()=>{if(paint!==null){paint=null;changed()}};
+  const shift=k=>()=>{const s=rollDir(c)*TAU/t.div;for(const d of t.dots)d.a=wrap(d.a-k*s);changed()};
+  f.append(box,el('button',{textContent:'shift <',onclick:shift(-1)}),el('button',{textContent:'shift >',onclick:shift(1)}));
+  for(const rd of new Set(readerPlayheads(c).map(p=>p.rd)))f.append(el('button',{textContent:'reader '+rd.id+' patch',onclick:()=>select('reader',rd)}));
 }
 
 /* ---------- persistence ---------- */
@@ -811,6 +871,7 @@ function buildInspector(){
   if(!inspector)return;
   for(const r of inspectorReadouts){const i=readouts.indexOf(r);if(i>=0)readouts.splice(i,1)}
   const before=readouts.length;
+  roll=null;
   inspector.replaceChildren(el('legend',{textContent:sel?`${sel.type} ${sel.o.id}`:'selection'}));
   const o=sel&&sel.o,f=inspector;
   if(sel&&sel.type==='cog'){
@@ -832,7 +893,7 @@ function buildInspector(){
       selRow(f,'scale',Object.keys(SCALES),()=>t.scale,v=>{t.scale=v;changed()});
       numRow(f,'div',1,96,1,...bind(t,'div',changed));
       roRow(f,'dots',()=>t.dots.length);
-      roRow(f,'notes',()=>Array.from({length:t.rings},(_,i)=>ringNote(t,i)).join(' '));
+      rollSection(f,o);
       f.append(el('button',{textContent:'clear dots',onclick:()=>{t.dots=[];changed()}}),
         el('button',{textContent:'drop track',onclick:()=>{o.track=null;buildInspector();changed()}}));
     }else f.append(el('button',{textContent:'add track',onclick:()=>{o.track={rings:12,base:48,scale:'pentatonic',div:16,dots:[]};buildInspector();changed()}}));
@@ -860,12 +921,37 @@ function buildInspector(){
 function refreshInspector(){syncRows()}
 
 /* ---------- input ---------- */
-function toWorld(e){const r=cv.getBoundingClientRect();return {x:(e.clientX-r.left-CW/2)/S.zoom+view.x,y:(e.clientY-r.top-CH/2)/S.zoom+view.y}}
-cv.addEventListener('pointerdown',e=>{if(draft)return;cv.setPointerCapture(e.pointerId);draft=TOOLS[tool](toWorld(e),e)});
-cv.addEventListener('pointermove',e=>{if(draft)draft.move(toWorld(e),e)});
-const endDrag=e=>{if(!draft)return;const d=draft;draft=null;d.up(toWorld(e),e)};
-cv.addEventListener('pointerup',endDrag);cv.addEventListener('pointercancel',endDrag);
-cv.addEventListener('wheel',e=>{e.preventDefault();S.zoom=clamp(S.zoom*Math.exp(-e.deltaY*.001),.25,4);syncRows()},{passive:false});
+const local=e=>{const r=cv.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top}};
+const screenToWorld=s=>({x:(s.x-CW/2)/S.zoom+view.x,y:(s.y-CH/2)/S.zoom+view.y});
+const toWorld=e=>screenToWorld(local(e));
+function zoomAt(s,zoom,anchor){S.zoom=clamp(zoom,.25,4);view.x=anchor.x-(s.x-CW/2)/S.zoom;view.y=anchor.y-(s.y-CH/2)/S.zoom;syncRows()}
+const fingers=new Map();let pinch=null;
+function pinchNow(){const[a,b]=[...fingers.values()];return {mid:{x:(a.x+b.x)/2,y:(a.y+b.y)/2},d:Math.hypot(a.x-b.x,a.y-b.y)||1}}
+cv.addEventListener('pointerdown',e=>{
+  cv.setPointerCapture(e.pointerId);fingers.set(e.pointerId,local(e));
+  if(fingers.size===2){
+    if(draft){const d=draft;draft=null;d.cancel?d.cancel():d.up(toWorld(e),e)}
+    const p=pinchNow();pinch={...p,zoom:S.zoom,anchor:screenToWorld(p.mid)};return;
+  }
+  if(fingers.size===1&&!pinch&&!draft)draft=TOOLS[tool](toWorld(e),e);
+});
+cv.addEventListener('pointermove',e=>{
+  if(fingers.has(e.pointerId))fingers.set(e.pointerId,local(e));
+  if(pinch){if(fingers.size>=2){const p=pinchNow();zoomAt(p.mid,pinch.zoom*p.d/pinch.d,pinch.anchor)}return}
+  if(draft)draft.move(toWorld(e),e);
+});
+const endPointer=e=>{
+  fingers.delete(e.pointerId);
+  if(pinch){if(!fingers.size){pinch=null;changed()}return}
+  if(draft){const d=draft;draft=null;d.up(toWorld(e),e)}
+};
+cv.addEventListener('pointerup',endPointer);cv.addEventListener('pointercancel',endPointer);
+// Trackpad pinch arrives as wheel with ctrlKey; two-finger trackpad drag as plain wheel.
+cv.addEventListener('wheel',e=>{
+  e.preventDefault();const s=local(e);
+  if(e.ctrlKey)zoomAt(s,S.zoom*Math.exp(-e.deltaY*.01),screenToWorld(s));
+  else{view.x+=e.deltaX/S.zoom;view.y+=e.deltaY/S.zoom}
+},{passive:false});
 document.addEventListener('pointerup',initAudio);
 document.addEventListener('keydown',e=>{
   initAudio();
@@ -886,7 +972,7 @@ function frame(){
   syncClock();
   if(!clock.paused)clock.view=nowSec()-clock.off;
   if(meter){meter.getFloatTimeDomainData(meterBuf);let m=0;for(const x of meterBuf)m=Math.max(m,Math.abs(x));peak=Math.max(m,peak*.95)}
-  draw();
+  draw();drawRoll();
   const now=performance.now();
   if(now-roAt>250){roAt=now;readPalette();for(const[b,fn]of readouts)b.textContent=fn()}
   requestAnimationFrame(frame);
