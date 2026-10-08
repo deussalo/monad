@@ -1575,8 +1575,10 @@ class Space{
     this.hpIn=0;this.shift=new PitchShifter(fs);this.shimLp=0;this.shimOut=0;
     this.eqL=[new Svf(),new Svf()];this.eqR=[new Svf(),new Svf()];
     this.duckEnv=0;this.denorm=1e-18;this.energy=0;
-    this.target=Object.assign({},space);this.cur=Object.assign({},space);
+    this.keys=Object.keys(space).filter(k=>typeof space[k]==='number');
+    this.target={};this.cur={};this.assign(space);
     this.holdBlocks=Math.ceil((fs*.52+this.size)/BLOCK);
+    this.glide=1-Math.exp(-BLOCK/(fs*.05));this.sizeGlide=1-Math.exp(-BLOCK/(fs*.35));
     this.retune(true);
   }
   clear(space){
@@ -1585,14 +1587,19 @@ class Space{
     for(const f of [...this.eqL,...this.eqR]){f.s1=0;f.s2=0}
     for(const d of this.diffusers)d.buf.fill(0);
     this.hpIn=0;this.shimLp=0;this.shimOut=0;this.duckEnv=0;this.energy=0;
-    Object.assign(this.target,space);Object.assign(this.cur,space);this.retune(true);
+    this.assign(space);this.retune(true);
   }
+  assign(space){for(const k of this.keys)this.target[k]=this.cur[k]=space[k]}
   set(p){for(const k in p)if(k in this.target&&Number.isFinite(+p[k]))this.target[k]=+p[k]}
+  // Settings are derived only on the blocks where smoothing still moves a value.
   retune(snap){
-    const t=this.target,c=this.cur,fs=this.fs;
-    const k=snap?1:1-Math.exp(-BLOCK/(fs*.05)),ks=snap?1:1-Math.exp(-BLOCK/(fs*.35));
-    for(const key in t){if(key==='size')c.size+=(t.size-c.size)*ks;else if(key==='freeze'||key==='shimmerPitch')c[key]=t[key];else c[key]+=(t[key]-c[key])*k}
-    const N=this.N,size=Math.max(.2,Math.min(3,c.size)),frozen=c.freeze>=.5;
+    const t=this.target,c=this.cur,fs=this.fs,N=this.N;
+    const k=snap?1:this.glide,ks=snap?1:this.sizeGlide;
+    let moved=snap;
+    for(const key of this.keys){const was=c[key];if(key==='size')c.size+=(t.size-c.size)*ks;else if(key==='freeze'||key==='shimmerPitch')c[key]=t[key];else c[key]+=(t[key]-c[key])*k;if(c[key]!==was)moved=true}
+    for(let i=0;i<N;i++){const n=Math.hypot(this.mc[i],this.ms[i]);this.mc[i]/=n;this.ms[i]/=n}
+    if(!moved)return;
+    const size=Math.max(.2,Math.min(3,c.size)),frozen=c.freeze>=.5;
     const T=Math.max(.1,c.decay),TL=T*Math.max(.05,c.lowMult),TH=T*Math.max(.02,c.highMult);
     const cap=frozen?.99999:.9999;
     for(let i=0;i<N;i++){
@@ -1604,7 +1611,6 @@ class Space{
       const hz=c.modRate*(.62+.76*i/(N-1)),w=TAU*hz/fs;
       this.mrc[i]=Math.cos(w);this.mrs[i]=Math.sin(w);
       this.mdepth[i]=c.modDepth*fs/1000*(.55+.45*((i*7)%N)/(N-1));
-      const n=Math.hypot(this.mc[i],this.ms[i]);this.mc[i]/=n;this.ms[i]/=n;
     }
     this.a1=1-Math.exp(-TAU*Math.min(c.lowCross,c.highCross*.8)/fs);
     this.a2=1-Math.exp(-TAU*c.highCross/fs);
