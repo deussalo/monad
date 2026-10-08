@@ -3920,7 +3920,7 @@ function makeKnob(spec){
     let x=fromN(v);
     x=Math.round(x/step)*step;
     input.value=clamp(x,min,max);
-    fire(input);   // input listener paints the arc this turn — no extra rAF
+    fire(input);
   }
   // A rotary answers only to the pointer that grabbed it: on a touch screen a
   // second finger landing on the same control would otherwise drive it too.
@@ -3957,7 +3957,7 @@ function makeKnob(spec){
     if(k==='ArrowUp'||k==='ArrowRight')  {nudge(.02);e.preventDefault()}
     if(k==='ArrowDown'||k==='ArrowLeft') {nudge(-.02);e.preventDefault()}
   });
-  input.addEventListener('input',paint);
+  input.addEventListener('input',()=>requestPaint(paint));
   node.paint=paint;paint();
   return node;
 }
