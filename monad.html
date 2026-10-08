@@ -869,11 +869,48 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     });
   }
 
+  function oklab(hex) {
+    var c = hexToRgb(hex).map(function (x) { x /= 255; return x <= 0.04045 ? x/12.92 : Math.pow((x + 0.055)/1.055, 2.4); });
+    var l = Math.cbrt(0.4122214708*c[0] + 0.5363325363*c[1] + 0.0514459929*c[2]);
+    var m = Math.cbrt(0.2119034982*c[0] + 0.6806995451*c[1] + 0.1073969566*c[2]);
+    var s = Math.cbrt(0.0883024619*c[0] + 0.2817188376*c[1] + 0.6299787005*c[2]);
+    return [0.2104542553*l + 0.7936177850*m - 0.0040720468*s,
+            1.9779984951*l - 2.4285922050*m + 0.4505937099*s,
+            0.0259040371*l + 0.7827717662*m - 0.8086757660*s];
+  }
+
+  function oklabHex(L, a, b) {
+    var l = Math.pow(L + 0.3963377774*a + 0.2158037573*b, 3);
+    var m = Math.pow(L - 0.1055613458*a - 0.0638541728*b, 3);
+    var s = Math.pow(L - 0.0894841775*a - 1.2914855480*b, 3);
+    return rgbToHex([4.0767416621*l - 3.3077115913*m + 0.2309699292*s,
+                     -1.2684380046*l + 2.6097574011*m - 0.3413193965*s,
+                     -0.0041960863*l - 0.7034186147*m + 1.7076147010*s].map(function (x) {
+      x = Math.max(0, Math.min(1, x));
+      return Math.round(255*(x <= 0.0031308 ? x*12.92 : 1.055*Math.pow(x, 1/2.4) - 0.055));
+    })).toUpperCase();
+  }
+
+  /* The world's ground: base in the palette's mean hue, accent in its most chromatic swatch's hue. */
+  function ground(hexes) {
+    var sa = 0, sb = 0, ta = 0, tb = 0, top = -1;
+    hexes.map(oklab).forEach(function (lab) {
+      var c = Math.hypot(lab[1], lab[2]);
+      sa += lab[1]; sb += lab[2];
+      if (c > top) { top = c; ta = lab[1]; tb = lab[2]; }
+    });
+    var h = Math.atan2(sb, sa), c = Math.min(0.07, Math.max(0.03, Math.hypot(sa, sb)/hexes.length));
+    var ha = Math.atan2(tb, ta), ca = top*0.5;
+    return { base: oklabHex(0.23, c*Math.cos(h), c*Math.sin(h)), accent: oklabHex(0.31, ca*Math.cos(ha), ca*Math.sin(ha)) };
+  }
+
   /* ── Export ────────────────────────────────────────────────────────────── */
   global.MonadPalette = {
     fromImage:        fromImage,
     attachDropTarget: attachDropTarget,
-    harmonize:        harmonize
+    harmonize:        harmonize,
+    oklab:            oklab,
+    ground:           ground
   };
 
 }(window));
@@ -901,15 +938,15 @@ Monad is a live instrument and cannot run without it. The page you are looking a
   var FRAG_GROUND =
     '#version 300 es\nprecision highp float;\n' +
     'in vec2 vUv; out vec4 outColor;\n' +
-    'uniform vec3 uBg; uniform float uTime; uniform vec2 uRes;\n' + HASH +
+    'uniform vec3 uBgA, uBgB; uniform float uTime; uniform vec2 uRes;\n' + HASH +
     'float vnoise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);\n' +
     ' return mix(mix(hash(i),hash(i+vec2(1,0)),f.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x), f.y); }\n' +
     'void main(){\n' +
     '  vec2 q = vUv*vec2(uRes.x/uRes.y,1.0);\n' +
     '  float n = 0.62*vnoise(q*1.4+vec2(uTime*0.010,-uTime*0.007)) + 0.38*vnoise(q*3.3-vec2(uTime*0.013,uTime*0.009));\n' +
-    '  vec3 c = uBg*(0.78+0.48*n);\n' +
+    '  vec3 c = mix(uBgA, uBgB, smoothstep(0.3, 0.8, n));\n' +
     '  vec2 vd = (vUv-vec2(0.5,0.52))*vec2(1.12,1.0);\n' +
-    '  c *= 1.0 - smoothstep(0.10,0.62,dot(vd,vd))*0.5;\n' +
+    '  c *= 1.0 - smoothstep(0.10,0.62,dot(vd,vd))*0.3;\n' +
     '  outColor = vec4(c,1.0);\n' +
     '}\n';
 
@@ -1060,15 +1097,8 @@ Monad is a live instrument and cannot run without it. The page you are looking a
   }
   function hexLab(hex) {
     var v = labCache.get(hex);
-    if (v) return v;
-    var c = hexRgb(hex).map(function (x) { return x <= 0.04045 ? x/12.92 : Math.pow((x + 0.055)/1.055, 2.4); });
-    var l = Math.cbrt(0.4122214708*c[0] + 0.5363325363*c[1] + 0.0514459929*c[2]);
-    var m = Math.cbrt(0.2119034982*c[0] + 0.6806995451*c[1] + 0.1073969566*c[2]);
-    var s = Math.cbrt(0.0883024619*c[0] + 0.2817188376*c[1] + 0.6299787005*c[2]);
-    v = [0.2104542553*l + 0.7936177850*m - 0.0040720468*s,
-         1.9779984951*l - 2.4285922050*m + 0.4505937099*s,
-         0.0259040371*l + 0.7827717662*m - 0.8086757660*s];
-    labCache.set(hex, v); return v;
+    if (!v) { v = global.MonadPalette.oklab(hex); labCache.set(hex, v); }
+    return v;
   }
 
   function compile(vs, fs) {
@@ -1331,7 +1361,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
 
   function drawFull() { gl.drawArrays(gl.TRIANGLES, 0, 3); }
 
-  /* scene: {orbs, spawn, selected, waves:[{x,y,r,fade}], links:[{a,b,alpha}], background, look:{atmo,blur,strength,haze,mix,wind}} */
+  /* scene: {orbs, spawn, selected, waves:[{x,y,r,fade}], links:[{a,b,alpha}], background, groundAccent, look:{atmo,blur,strength,haze,mix,wind}} */
   function frame(scene, dt) {
     if (!ok || !gl) return;
     time += Math.min(0.05, Math.max(0, dt));
@@ -1344,13 +1374,14 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     // ground: very low frequency, so it is rendered small and a few times a second
     gl.disable(gl.BLEND);
     groundAge += dt;
-    if (groundAge > 0.2 || scene.background !== frame.bg) {
-      groundAge = 0; frame.bg = scene.background;
+    if (groundAge > 0.2 || scene.background !== frame.bg || scene.groundAccent !== frame.bgAccent) {
+      groundAge = 0; frame.bg = scene.background; frame.bgAccent = scene.groundAccent;
       gl.bindFramebuffer(gl.FRAMEBUFFER, ground.fb);
       gl.viewport(0, 0, ground.w, ground.h);
       gl.useProgram(progGround.p);
-      var bg = hexRgb(scene.background);
-      gl.uniform3f(progGround.u.uBg, bg[0], bg[1], bg[2]);
+      var bg = hexRgb(scene.background), accent = hexRgb(scene.groundAccent);
+      gl.uniform3f(progGround.u.uBgA, bg[0], bg[1], bg[2]);
+      gl.uniform3f(progGround.u.uBgB, accent[0], accent[1], accent[2]);
       gl.uniform1f(progGround.u.uTime, time);
       gl.uniform2f(progGround.u.uRes, cssW, cssH);
       gl.bindVertexArray(vaoFull);
@@ -1833,7 +1864,7 @@ const LOW_POWER=(function(){try{return matchMedia('(pointer:coarse)').matches||i
 const MIN_R=12,MAX_R=92,FIELD_SCALE=.35,FIELD_INTERVAL=1000/24,HIT_BATCH_MS=0,ORB_REFRACTORY_MS=3;   // hits flush on the next rAF; 20ms ate consecutive-frame hits at 60fps
 const MOTION_HZ=30,MOTION_SAMPLE_MS=1000/MOTION_HZ,MOTION_SEAM_RATIO=.12;
 const STAT_INTERVAL_MS=250,MAX_SYMPATHETIC_TARGETS=3;   // no minimum-frame gate: render every rAF tick
-let W=1,H=1,DPR=1,FW=1,FH=1,last=performance.now(),lastSimFrame=0,lastField=0,lastStat=0,fieldDirty=true,paletteTarget='orb',selected=null,background='#221202';
+let W=1,H=1,DPR=1,FW=1,FH=1,last=performance.now(),lastSimFrame=0,lastField=0,lastStat=0,fieldDirty=true,paletteTarget='orb',selected=null,background='#221202',groundAccent='#221202';
 let dragValue=.06,windValue=.36,fieldAtmo=3.4,fieldStrength=.84,fieldHaze=.25,fieldMix='screen',fieldBlurPx=10.5;
 const orbs=[],pendingHits=new Map(),pointer={id:null,down:false,orb:null,spawn:null,gx:0,gy:0};
 // Collision resolution is O(n^2) across 3 passes per frame, so the world has a
@@ -2221,6 +2252,12 @@ function importPalette(values){
     el.dataset.c=PALETTE[i];el.style.background=PALETTE[i];
   });
   spriteCache.clear();PALETTE.forEach(makeSprite);
+  const g=window.MonadPalette.ground(PALETTE);
+  groundAccent=g.accent;setBackground(g.base);
+}
+function setBackground(c){
+  background=c.toUpperCase();
+  $('#bgColor').value=background;$('#bgHex').textContent=background;stage.style.background=background;fieldDirty=true;
 }
 function applyPresetObject(p){
   if(!p||typeof p!=='object')throw new Error('Preset must be a JSON object');
@@ -2286,8 +2323,7 @@ function applyPresetObject(p){
   const colour=p.colour||p.color||{};
   importPalette(colour.palette);
   if(typeof colour.background==='string'&&/^#[0-9a-f]{6}$/i.test(colour.background)){
-    background=colour.background.toUpperCase();
-    $('#bgColor').value=background;$('#bgHex').textContent=background;stage.style.background=background;
+    setBackground(colour.background);
   }
 
   // A shared scene intentionally replaces the current world. Old/simple presets
@@ -3382,9 +3418,9 @@ function applyLoopAttractor(o,dt,now){
 // PALETTE
 function setTarget(t){paletteTarget=t;$('#orbTarget').classList.toggle('active',t==='orb');$('#bgTarget').classList.toggle('active',t==='bg')}
 $('#orbTarget').addEventListener('click',()=>setTarget('orb'));$('#bgTarget').addEventListener('click',()=>setTarget('bg'));
-document.querySelectorAll('.swatch').forEach(s=>s.addEventListener('click',()=>{const c=s.dataset.c;if(paletteTarget==='bg'){background=c;$('#bgColor').value=c;$('#bgHex').textContent=c;stage.style.background=c;updateSettings()}else if(selected){selected.color=c;selected._materialKey='';$('#orbColor').value=c;$('#orbHex').textContent=c;$('#selection').textContent=noteName(selected.note)+' · '+modeLabel(selected);fieldDirty=true;updateSettings()}}));
+document.querySelectorAll('.swatch').forEach(s=>s.addEventListener('click',()=>{const c=s.dataset.c;if(paletteTarget==='bg'){setBackground(c);updateSettings()}else if(selected){selected.color=c;selected._materialKey='';$('#orbColor').value=c;$('#orbHex').textContent=c;$('#selection').textContent=noteName(selected.note)+' · '+modeLabel(selected);fieldDirty=true;updateSettings()}}));
 $('#orbColor').addEventListener('input',e=>{if(selected){selected.color=e.target.value;selected._materialKey='';$('#orbHex').textContent=selected.color;$('#selection').textContent=noteName(selected.note)+' · '+modeLabel(selected);fieldDirty=true}});
-$('#bgColor').addEventListener('input',e=>{background=e.target.value;$('#bgHex').textContent=background;stage.style.background=background;fieldDirty=true;updateSettings()});
+$('#bgColor').addEventListener('input',e=>{setBackground(e.target.value);updateSettings()});
 
 // COLOUR FIELD — cached atmosphere sprites
 const spriteCache=new Map();
@@ -3453,7 +3489,7 @@ function paintFieldLabels(){
   $('#fieldV').textContent=Math.round(fieldStrength*100)+'%';$('#hazeV').textContent=Math.round(fieldHaze*100)+'%';
 }
 devPainters.push(paintFieldLabels);
-['atmo','blur','fieldStrength','hazeAmt','mix'].forEach(id=>{$('#'+id).addEventListener('input',fieldLook);$('#'+id).addEventListener('change',fieldLook)});fieldLook();stage.style.background=background;
+['atmo','blur','fieldStrength','hazeAmt','mix'].forEach(id=>{$('#'+id).addEventListener('input',fieldLook);$('#'+id).addEventListener('change',fieldLook)});fieldLook();
 
 // PHYSICS
 function mass(r){return Math.pow(r/26,1.65)}
@@ -3699,7 +3735,7 @@ function initAura(){
   return true;
 }
 // Orb ring levels come from the engine; they ease so the visuals breathe with the sound.
-const auraScene={orbs,spawn:null,selected:null,waves:pressureWaves,links:resonanceLinks,background,look:{}};
+const auraScene={orbs,spawn:null,selected:null,waves:pressureWaves,links:resonanceLinks,background,groundAccent,look:{}};
 function auraFrame(dt){
   const ease=Math.min(1,dt*14),measured=engineKind==='worklet';
   for(const o of orbs){
@@ -3708,7 +3744,7 @@ function auraFrame(dt){
   }
   for(const w of pressureWaves)w.fade=pressureWaveStrength(w);
   for(const l of resonanceLinks)l.alpha=(l.a.deleted||l.b.deleted)?0:clamp(l.life/l.maxLife,0,1)*l.strength;
-  auraScene.spawn=pointer.spawn;auraScene.selected=selected;auraScene.background=background;
+  auraScene.spawn=pointer.spawn;auraScene.selected=selected;auraScene.background=background;auraScene.groundAccent=groundAccent;
   const k=auraScene.look;k.atmo=fieldAtmo;k.blur=+elBlur.value;k.strength=fieldStrength;k.haze=fieldHaze;k.mix=fieldMix;k.wind=windValue;
   window.MonadAura.frame(auraScene,dt);
 }
@@ -3968,7 +4004,7 @@ function makeAction(spec){
 function makeSwatch(i){
   const inner=sv('g',null,'node bloom'),g=wrapNode(inner);
   const ring=sv('circle',{r:17,fill:'none',stroke:'var(--ink)','stroke-width':1.2,opacity:0});inner.appendChild(ring);
-  // Light rim, not dark: the ground is near-black and the darkest swatches
+  // Light rim, not dark: the ground is dark and the darkest swatches
   // would otherwise be invisible circles.
   const dot=sv('circle',{r:12.5,stroke:'rgba(239,231,215,.34)','stroke-width':1});inner.appendChild(dot);
   const pad=sv('circle',{r:HIT_SWATCH,tabindex:'-1','aria-label':'colour'},'hitpad');inner.appendChild(pad);
@@ -4462,10 +4498,8 @@ function applyPhotoPalette(hexes,at){
   const MP=window.MonadPalette;
   const list=(MP&&MP.harmonize)?MP.harmonize(hexes):hexes;
   importPalette(list);
-  // darkest swatch becomes the ground
-  const bgEl=$('#bgColor');bgEl.value=list[0];fire(bgEl);
   if(auraOn)window.MonadAura.burst(list,at);
-  fieldDirty=true;paintPaletteGroup();
+  paintPaletteGroup();updateSettings();
 }
 
 if(window.MonadPalette)window.MonadPalette.attachDropTarget(stage,(hex,at)=>applyPhotoPalette(hex,at));
@@ -4645,7 +4679,7 @@ const DEFAULT_PRESET={
     random_drift:.8,delays_ms:[83.1,96.8,113.9,132.9,154.2,178.1,205.3,236.9]
   },
   environment:{drag:.06,wind:.36,atmosphere:3.4,blur_px:30,field_strength:.84,over_light:.25,mix:'screen'},
-  colour:{background:'#221202',palette:['#221202','#3A280D','#556979','#77807D','#878D80','#AB7F48','#C39A61','#E8C882']},
+  colour:{palette:['#221202','#3A280D','#556979','#77807D','#878D80','#AB7F48','#C39A61','#E8C882']},
   voicing:{mode:'barron_m11',custom:[40,47,54,55,62,64,66,67,69,71,74,76,78,79,83,86,88,90],octave_spread:0,transpose:0},
   scene:{coordinate_space:'normalized',orbs:[
     {x:0.589848,y:0.922568,radius:0.071202,colour:'#AB7F48',vx:0.054417,vy:0.011424},
