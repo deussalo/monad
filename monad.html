@@ -979,9 +979,11 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     'out vec2 vLocal; flat out vec4 vA; flat out vec4 vB; flat out vec4 vC; flat out vec4 vD; out float vT;\n' +
     'void main(){\n' +
     '  vA=iA; vB=iB; vC=iC; vD=iD; vec2 world; vT=0.0;\n' +
-    '  if (iA.w < 1.5) {\n' +
-    '    float ext = iA.w < 0.5 ? iA.z*1.2 + 26.0 : iA.z + iB.x + 3.0;\n' +
-    '    vLocal = aPos*ext; world = iA.xy + vLocal;\n' +
+    '  if (iA.w < 0.5) {\n' +
+    '    vLocal = aPos*(iA.z*1.2 + 26.0); world = iA.xy + vLocal;\n' +
+    '  } else if (iA.w < 1.5) {\n' +
+    '    float m = length(aPos), reach = iB.x*0.5 + 2.0;\n' +
+    '    vLocal = m < 0.75 ? aPos/m*max(0.0, iA.z - reach) : aPos*(iA.z + reach); world = iA.xy + vLocal;\n' +
     '  } else {\n' +
     '    vec2 d = iB.xy - iA.xy; float len = max(length(d), 0.001); vec2 t = d/len, n = vec2(-t.y, t.x);\n' +
     '    float hw = iA.z + 2.0;\n' +
@@ -1093,12 +1095,14 @@ Monad is a live instrument and cannot run without it. The page you are looking a
   var gl = null, canvas = null, ok = false, listening = false;
   var progGround, progShape, progSplat, progBlur, progResolve, progCopy, progComp;
   var quadBuf = null, fullBuf = null, shapeBuf = null, splatBuf = null, vaoShape = null, vaoSplat = null, vaoFull = null;
+  var annulusBuf = null, ringBuf = null, vaoRing = null;
   var acc = null, blurA = null, blurB = null, ground = null, groundAge = 1e9, GROUND_W = 160;
   var cssW = 1, cssH = 1, dpr = 1, renderScale = 1, bloom = true, lowPower = false;
   var dispW = 1, dispH = 1, auraW = 1, auraH = 1;
   var time = 0;
   var SHAPE_FLOATS = 16, SPLAT_FLOATS = 8, MAX_SHAPES = 512, MAX_SPLATS = 1024;
-  var shapeData = new Float32Array(MAX_SHAPES*SHAPE_FLOATS), splatData = new Float32Array(MAX_SPLATS*SPLAT_FLOATS);
+  var MAX_RINGS = 16, RING_SEGMENTS = 64;
+  var shapeData = new Float32Array(MAX_SHAPES*SHAPE_FLOATS), ringData = new Float32Array(MAX_RINGS*SHAPE_FLOATS), splatData = new Float32Array(MAX_SPLATS*SPLAT_FLOATS);
   var swarms = new Map(), motes = [], MAX_MOTES = 120;
   var labCache = new Map(), rgbCache = new Map();
 
@@ -1154,9 +1158,9 @@ Monad is a live instrument and cannot run without it. The page you are looking a
   }
   function dropTarget(t) { if (t) { gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fb); } }
 
-  function instanced(prog, buf, stride, names) {
+  function instanced(prog, geometry, buf, stride, names) {
     var v = gl.createVertexArray(); gl.bindVertexArray(v);
-    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+    gl.bindBuffer(gl.ARRAY_BUFFER, geometry);
     var ap = gl.getAttribLocation(prog.p, 'aPos');
     gl.enableVertexAttribArray(ap); gl.vertexAttribPointer(ap, 2, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -1211,8 +1215,18 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     gl.bufferData(gl.ARRAY_BUFFER, shapeData.byteLength, gl.DYNAMIC_DRAW);
     splatBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, splatBuf);
     gl.bufferData(gl.ARRAY_BUFFER, splatData.byteLength, gl.DYNAMIC_DRAW);
-    vaoShape = instanced(progShape, shapeBuf, SHAPE_FLOATS, ['iA', 'iB', 'iC', 'iD']);
-    vaoSplat = instanced(progSplat, splatBuf, SPLAT_FLOATS, ['iP', 'iL']);
+    ringBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, ringBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, ringData.byteLength, gl.DYNAMIC_DRAW);
+    var strip = new Float32Array((RING_SEGMENTS + 1)*4), circumscribe = 1/Math.cos(Math.PI/RING_SEGMENTS);
+    for (var i = 0; i <= RING_SEGMENTS; i++) {
+      var a = i/RING_SEGMENTS*2*Math.PI, c = Math.cos(a), sn = Math.sin(a);
+      strip.set([c*0.5, sn*0.5, c*circumscribe, sn*circumscribe], i*4);
+    }
+    annulusBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, annulusBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, strip, gl.STATIC_DRAW);
+    vaoShape = instanced(progShape, quadBuf, shapeBuf, SHAPE_FLOATS, ['iA', 'iB', 'iC', 'iD']);
+    vaoRing = instanced(progShape, annulusBuf, ringBuf, SHAPE_FLOATS, ['iA', 'iB', 'iC', 'iD']);
+    vaoSplat = instanced(progSplat, quadBuf, splatBuf, SPLAT_FLOATS, ['iP', 'iL']);
     ok = true; api.available = true;
     if (cssW > 1) resize(cssW, cssH, dpr);
     return true;
@@ -1355,8 +1369,8 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     splatData[b+4] = lab[0]; splatData[b+5] = lab[1]; splatData[b+6] = lab[2]; splatData[b+7] = glow;
     return n + 1;
   }
-  function pushShape(n, ax, ay, ar, kind, b0, b1, b2, b3, rgb, c3, d0, d1) {
-    if (n >= MAX_SHAPES) return n;
+  function pushShape(shapeData, n, ax, ay, ar, kind, b0, b1, b2, b3, rgb, c3, d0, d1) {
+    if (n*SHAPE_FLOATS >= shapeData.length) return n;
     var b = n*SHAPE_FLOATS;
     shapeData[b] = ax; shapeData[b+1] = ay; shapeData[b+2] = ar; shapeData[b+3] = kind;
     shapeData[b+4] = b0; shapeData[b+5] = b1; shapeData[b+6] = b2; shapeData[b+7] = b3;
@@ -1400,19 +1414,19 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     gl.uniform1i(progCopy.u.uSrc, 0);
     drawFull();
 
-    // bodies, rings, links
-    var n = 0;
+    // rings, then links and bodies
+    var nr = 0, n = 0;
     for (var w = 0; w < scene.waves.length; w++) {
       var wv = scene.waves[w];
-      n = pushShape(n, wv.x, wv.y, wv.r, 1, 1 + wv.fade*1.4, 0, Math.min(0.18, 0.16*wv.fade), 0, WHITE, 0, 0, 0);
+      nr = pushShape(ringData, nr, wv.x, wv.y, wv.r, 1, 1 + wv.fade*1.4, 0, Math.min(0.18, 0.16*wv.fade), 0, WHITE, 0, 0, 0);
     }
     for (var l = 0; l < scene.links.length; l++) {
       var ln = scene.links[l];
-      n = pushShape(n, ln.a.x, ln.a.y, 0.7 + ln.alpha*0.8, 2, ln.b.x, ln.b.y, 0.025 + 0.16*ln.alpha, 0, WHITE, 0, 0, 0);
+      n = pushShape(shapeData, n, ln.a.x, ln.a.y, 0.7 + ln.alpha*0.8, 2, ln.b.x, ln.b.y, 0.025 + 0.16*ln.alpha, 0, WHITE, 0, 0, 0);
     }
     for (var i = 0; i < all.length; i++) {
       var o = all[i];
-      n = pushShape(n, o.x, o.y, o.r, 0, o.ring || 0, o.resonance || 0, o === scene.selected ? 1 : 0, o.lobes || 3,
+      n = pushShape(shapeData, n, o.x, o.y, o.r, 0, o.ring || 0, o.resonance || 0, o === scene.selected ? 1 : 0, o.lobes || 3,
         hexRgb(o.color), 0, o.hit || 0, (o.uid*2.399) % 6.2832);
     }
     gl.enable(gl.BLEND);
@@ -1421,6 +1435,12 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     gl.uniform2f(progShape.u.uView, cssW, cssH);
     gl.uniform1f(progShape.u.uPx, dispW/cssW);
     gl.uniform1f(progShape.u.uTime, time);
+    if (nr) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, ringBuf);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, ringData, 0, nr*SHAPE_FLOATS);
+      gl.bindVertexArray(vaoRing);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, (RING_SEGMENTS + 1)*2, nr);
+    }
     gl.bindBuffer(gl.ARRAY_BUFFER, shapeBuf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, shapeData, 0, n*SHAPE_FLOATS);
     gl.bindVertexArray(vaoShape);
