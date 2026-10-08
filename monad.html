@@ -1361,7 +1361,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
 
   function drawFull() { gl.drawArrays(gl.TRIANGLES, 0, 3); }
 
-  /* scene: {orbs, spawn, selected, waves:[{x,y,r,fade}], links:[{a,b,alpha}], background, groundAccent, look:{atmo,blur,strength,haze,mix,wind}} */
+  /* scene: {orbs, spawn, selection:Set, waves:[{x,y,r,fade}], links:[{a,b,alpha}], background, groundAccent, look:{atmo,blur,strength,haze,mix,wind}} */
   function frame(scene, dt) {
     if (!ok || !gl) return;
     time += Math.min(0.05, Math.max(0, dt));
@@ -1464,7 +1464,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     }
     for (var i = 0; i < all.length; i++) {
       var o = all[i];
-      n = pushShape(shapeData, n, o.x, o.y, o.r, 0, o.ring || 0, o.resonance || 0, o === scene.selected ? 1 : 0, o.lobes || 3,
+      n = pushShape(shapeData, n, o.x, o.y, o.r, 0, o.ring || 0, o.resonance || 0, scene.selection.has(o) ? 1 : 0, o.lobes || 3,
         hexRgb(o.color), 0, o.hit || 0, (o.uid*2.399) % 6.2832);
     }
     gl.enable(gl.BLEND);
@@ -1864,9 +1864,9 @@ const LOW_POWER=(function(){try{return matchMedia('(pointer:coarse)').matches||i
 const MIN_R=12,MAX_R=92,FIELD_SCALE=.35,FIELD_INTERVAL=1000/24,HIT_BATCH_MS=0,ORB_REFRACTORY_MS=3;   // hits flush on the next rAF; 20ms ate consecutive-frame hits at 60fps
 const MOTION_HZ=30,MOTION_SAMPLE_MS=1000/MOTION_HZ,MOTION_SEAM_RATIO=.12;
 const STAT_INTERVAL_MS=250,MAX_SYMPATHETIC_TARGETS=3;   // no minimum-frame gate: render every rAF tick
-let W=1,H=1,DPR=1,FW=1,FH=1,last=performance.now(),lastSimFrame=0,lastField=0,lastStat=0,fieldDirty=true,paletteTarget='orb',selected=null,background='#221202',groundAccent='#221202';
+let W=1,H=1,DPR=1,FW=1,FH=1,last=performance.now(),lastSimFrame=0,lastField=0,lastStat=0,fieldDirty=true,paletteTarget='orb',background='#221202',groundAccent='#221202';
 let dragValue=.06,windValue=.36,fieldAtmo=3.4,fieldStrength=.84,fieldHaze=.25,fieldMix='screen',fieldBlurPx=10.5;
-const orbs=[],pendingHits=new Map(),pointer={id:null,down:false,orb:null,spawn:null,gx:0,gy:0};
+const orbs=[],selection=new Set(),pendingHits=new Map(),pointer={id:null,down:false,grab:[],spawn:null,from:null,moved:false};
 // Collision resolution is O(n^2) across 3 passes per frame, so the world has a
 // capacity. At the cap the eldest body makes way for the new one rather than
 // the instrument silently refusing to respond.
@@ -1878,7 +1878,7 @@ function admitOrb(o){
   while(orbs.length>cap){
     const old=orbs.shift();
     old.deleted=true;
-    if(selected===old)selectOrb(null);
+    if(selection.delete(old))paintSelection();
   }
   fieldDirty=true;
   return o;
@@ -2027,14 +2027,22 @@ function retuneOrbs(){
     }
     o.note=best;
   }
-  if(selected)selectOrb(selected);
+  paintSelection();
   refreshPresetBox();
 }
 
 const names=['C','C♯','D','E♭','E','F','F♯','G','A♭','A','B♭','B'],noteName=m=>names[m%12]+(Math.floor(m/12)-1);
 for(let m=24;m<=84;m++){const o=document.createElement('option');o.value=m;o.textContent=noteName(m);$('#note').append(o)}
-function selectOrb(o){selected=o;if(!devVisible())return;if(o){$('#selection').textContent=noteName(o.note)+' · '+modeLabel(o);$('#note').value=o.note;$('#orbColor').value=o.color;$('#orbHex').textContent=o.color}else{$('#selection').textContent='E B F♯ G D A';$('#orbHex').textContent='—'}}
-$('#note').addEventListener('change',()=>{if(!selected)return;selected.note=+$('#note').value;selected._hzNote=null;$('#selection').textContent=noteName(selected.note)+' · '+modeLabel(selected);queueHit(selected,72,false,selected.note)});
+function selectOnly(o){selection.clear();if(o)selection.add(o);paintSelection()}
+function toggleSelected(o){if(!selection.delete(o))selection.add(o);paintSelection()}
+function leadOrb(){let lead=null;for(const o of selection)lead=o;return lead}
+function paintSelection(){
+  paintPaletteGroup();
+  const o=leadOrb();if(!devVisible())return;
+  if(o){$('#selection').textContent=(selection.size>1?selection.size+' orbs · ':'')+noteName(o.note)+' · '+modeLabel(o);$('#note').value=o.note;$('#orbColor').value=o.color;$('#orbHex').textContent=o.color}else{$('#selection').textContent='E B F♯ G D A';$('#orbHex').textContent='—'}
+}
+function recolourSelection(c){for(const o of selection){o.color=c;o._materialKey=''}fieldDirty=true;paintSelection()}
+$('#note').addEventListener('change',()=>{for(const o of selection){o.note=+$('#note').value;o._hzNote=null;queueHit(o,72,false,o.note)}paintSelection()});
 
 const controlBindings=[];
 function sliderControl(obj,key,label,min,max,step,suffix,onChange){const l=document.createElement('label');l.className='control';const line=document.createElement('span');line.className='line';const n=document.createElement('span');n.textContent=label;const v=document.createElement('span');v.className='mono';const input=document.createElement('input');input.type='range';input.min=min;input.max=max;input.step=step;input.value=obj[key];const paint=()=>{const x=+input.value;v.textContent=(step>=1?x.toFixed(0):step>=.1?x.toFixed(1):step>=.01?x.toFixed(2):x.toFixed(3))+(suffix||'')};paint();input.addEventListener('input',()=>{obj[key]=+input.value;paint();if(onChange)onChange();updateSettings()});line.append(n,v);l.append(line,input);controlBindings.push({obj,key,input,paint,onChange});return l}
@@ -2329,7 +2337,7 @@ function applyPresetObject(p){
   // A shared scene intentionally replaces the current world. Old/simple presets
   // without a scene only alter synthesis/physics and leave the current orbs alone.
   if(p.scene&&Array.isArray(p.scene.orbs)){
-    selected=null;orbs.length=0;clearPressureWaves();resonanceLinks.length=0;
+    selection.clear();orbs.length=0;clearPressureWaves();resonanceLinks.length=0;
     motion.recording=false;motion.active=false;motion.targets=[];motion.tracks.clear();
     motion.duration=0;motion.seamDuration=0;motion.period=0;
     $('#motionRec').textContent='RECORD MOTION';$('#motionRec').classList.remove('recording');
@@ -2345,7 +2353,7 @@ function applyPresetObject(p){
       if(Number.isFinite(+spec.vy))o.vy=+spec.vy*H;
       admitOrb(o);
     }
-    selectOrb(orbs[0]||null);
+    selectOnly(orbs[0]||null);
   }
 
   // Keep the three ecosystem sliders and dynamically-created DSP controls in sync.
@@ -3418,8 +3426,8 @@ function applyLoopAttractor(o,dt,now){
 // PALETTE
 function setTarget(t){paletteTarget=t;$('#orbTarget').classList.toggle('active',t==='orb');$('#bgTarget').classList.toggle('active',t==='bg')}
 $('#orbTarget').addEventListener('click',()=>setTarget('orb'));$('#bgTarget').addEventListener('click',()=>setTarget('bg'));
-document.querySelectorAll('.swatch').forEach(s=>s.addEventListener('click',()=>{const c=s.dataset.c;if(paletteTarget==='bg'){setBackground(c);updateSettings()}else if(selected){selected.color=c;selected._materialKey='';$('#orbColor').value=c;$('#orbHex').textContent=c;$('#selection').textContent=noteName(selected.note)+' · '+modeLabel(selected);fieldDirty=true;updateSettings()}}));
-$('#orbColor').addEventListener('input',e=>{if(selected){selected.color=e.target.value;selected._materialKey='';$('#orbHex').textContent=selected.color;$('#selection').textContent=noteName(selected.note)+' · '+modeLabel(selected);fieldDirty=true}});
+document.querySelectorAll('.swatch').forEach(s=>s.addEventListener('click',()=>{const c=s.dataset.c;if(paletteTarget==='bg'){setBackground(c);updateSettings()}else if(selection.size){recolourSelection(c);updateSettings()}}));
+$('#orbColor').addEventListener('input',e=>recolourSelection(e.target.value));
 $('#bgColor').addEventListener('input',e=>{setBackground(e.target.value);updateSettings()});
 
 // COLOUR FIELD — cached atmosphere sprites
@@ -3654,20 +3662,46 @@ function draw(){
       bctx.lineWidth=.7+o.resonance;bctx.strokeStyle=`rgba(255,255,255,${.05+.16*o.resonance})`;bctx.stroke();
     }
     bctx.beginPath();bctx.arc(o.x,o.y,rr,0,Math.PI*2);bctx.fillStyle=o.color;bctx.fill();
-    if(o===selected){bctx.beginPath();bctx.arc(o.x,o.y,rr+4,0,Math.PI*2);bctx.strokeStyle='rgba(255,255,255,.72)';bctx.stroke()}
+    if(selection.has(o)){bctx.beginPath();bctx.arc(o.x,o.y,rr+4,0,Math.PI*2);bctx.strokeStyle='rgba(255,255,255,.72)';bctx.stroke()}
   };
   orbs.forEach(d);if(pointer.spawn)d(pointer.spawn);
 }
-body.addEventListener('pointerdown',e=>{e.preventDefault();const p=pt(e);pointer.id=e.pointerId;pointer.down=true;try{if(body.setPointerCapture)body.setPointerCapture(e.pointerId)}catch(err){}const o=hit(p.x,p.y);if(o){selectOrb(o);pointer.orb=o;pointer.spawn=null;pointer.gx=p.x-o.x;pointer.gy=p.y-o.y;o.held=true;o.tx=o.x;o.ty=o.y;body.style.cursor='grabbing';beginHold(o,p)}else{selectOrb(null);pointer.spawn=makeOrb(p.x,p.y,MIN_R);pointer.orb=null;if(devVisible()){$('#note').value=pointer.spawn.note;$('#selection').textContent=noteName(pointer.spawn.note)}fieldDirty=true}});
-body.addEventListener('pointermove',e=>{if(!pointer.down||e.pointerId!==pointer.id)return;const p=pt(e);if(holdFrom&&Math.hypot(p.x-holdFrom.x,p.y-holdFrom.y)>HOLD_SLOP)cancelHold();if(pointer.orb){pointer.orb.tx=p.x-pointer.gx;pointer.orb.ty=p.y-pointer.gy}else if(pointer.spawn){setOrbRadius(pointer.spawn,clamp(Math.hypot(p.x-pointer.spawn.x,p.y-pointer.spawn.y),MIN_R,MAX_R));fieldDirty=true}});
-function end(e){cancelHold();if(!pointer.down||e.pointerId!==pointer.id)return;if(pointer.orb)pointer.orb.held=false;else if(pointer.spawn){pointer.spawn.note=noteForSize(pointer.spawn.r);admitOrb(pointer.spawn);selectOrb(pointer.spawn);refreshPresetBox()}pointer.id=null;pointer.down=false;pointer.orb=null;pointer.spawn=null;body.style.cursor='crosshair';fieldDirty=true}
+const multiKey=e=>e.ctrlKey||e.metaKey;
+function grab(list,p){pointer.grab=list.map(o=>{o.held=true;o.tx=o.x;o.ty=o.y;return{o,gx:p.x-o.x,gy:p.y-o.y}})}
+function releaseGrab(){for(const g of pointer.grab)g.o.held=false;pointer.grab=[]}
+body.addEventListener('pointerdown',e=>{
+  e.preventDefault();const p=pt(e),o=hit(p.x,p.y);
+  if(multiKey(e)){if(o)toggleSelected(o);return}
+  releaseGrab();pointer.id=e.pointerId;pointer.down=true;pointer.from=p;pointer.moved=false;
+  try{if(body.setPointerCapture)body.setPointerCapture(e.pointerId)}catch(err){}
+  if(o){
+    if(!selection.has(o))selectOnly(o);
+    grab([...selection],p);pointer.spawn=null;body.style.cursor='grabbing';beginHold(o,p);
+  }else{
+    selectOnly(null);pointer.spawn=makeOrb(p.x,p.y,MIN_R);
+    if(devVisible()){$('#note').value=pointer.spawn.note;$('#selection').textContent=noteName(pointer.spawn.note)}fieldDirty=true;
+  }
+});
+body.addEventListener('pointermove',e=>{
+  if(!pointer.down||e.pointerId!==pointer.id)return;const p=pt(e);
+  if(Math.hypot(p.x-pointer.from.x,p.y-pointer.from.y)>HOLD_SLOP){pointer.moved=true;cancelHold()}
+  for(const g of pointer.grab){g.o.tx=p.x-g.gx;g.o.ty=p.y-g.gy}
+  if(pointer.spawn){setOrbRadius(pointer.spawn,clamp(Math.hypot(p.x-pointer.spawn.x,p.y-pointer.spawn.y),MIN_R,MAX_R));fieldDirty=true}
+});
+function end(e){
+  cancelHold();if(!pointer.down||e.pointerId!==pointer.id)return;
+  if(pointer.grab.length>1&&!pointer.moved)selectOnly(hit(pointer.from.x,pointer.from.y));
+  releaseGrab();
+  if(pointer.spawn){pointer.spawn.note=noteForSize(pointer.spawn.r);admitOrb(pointer.spawn);selectOnly(pointer.spawn);refreshPresetBox()}
+  pointer.id=null;pointer.down=false;pointer.spawn=null;body.style.cursor='crosshair';fieldDirty=true;
+}
 body.addEventListener('pointerup',end);body.addEventListener('pointercancel',end);
 function removeOrb(o){
   if(!o||o.deleted)return;
   o.deleted=true;
   const i=orbs.indexOf(o);
   if(i>=0)orbs.splice(i,1);
-  if(selected===o)selectOrb(null);
+  if(selection.delete(o))paintSelection();
   // let the atmosphere remember it for a moment
   if(auraOn)window.MonadAura.impulse(o,90);
   // gesture-gated: the long-press timer fires before the pointerup that grants
@@ -3690,7 +3724,7 @@ function beginHold(o,p){
   holdFrom={x:p.x,y:p.y};
   holdTimer=setTimeout(()=>{
     holdTimer=0;
-    if(pointer.orb===o){o.held=false;pointer.orb=null;pointer.down=false;pointer.id=null}
+    if(pointer.grab.some(g=>g.o===o)){releaseGrab();pointer.down=false;pointer.id=null}
     removeOrb(o);
   },HOLD_MS);
 }
@@ -3698,7 +3732,7 @@ const elDrag=$('#drag'),elWind=$('#wind');
 function syncMotionControls(){dragValue=+elDrag.value;windValue=+elWind.value;if(devVisible())paintMotionLabels()}
 function paintMotionLabels(){$('#dragV').textContent=dragValue.toFixed(2);$('#windV').textContent=Math.round(windValue*100)+'%'}
 devPainters.push(paintMotionLabels);
-devPainters.push(()=>selectOrb(selected));$('#drag').addEventListener('input',syncMotionControls);$('#wind').addEventListener('input',syncMotionControls);syncMotionControls();
+devPainters.push(paintSelection);$('#drag').addEventListener('input',syncMotionControls);$('#wind').addEventListener('input',syncMotionControls);syncMotionControls();
 function ecosystemControl(id,key,label){
   const el=$('#'+id);
   const paintLabel=()=>{$('#'+label).textContent=Math.round(PHYS[key]*100)+'%'};
@@ -3735,7 +3769,7 @@ function initAura(){
   return true;
 }
 // Orb ring levels come from the engine; they ease so the visuals breathe with the sound.
-const auraScene={orbs,spawn:null,selected:null,waves:pressureWaves,links:resonanceLinks,background,groundAccent,look:{}};
+const auraScene={orbs,spawn:null,selection,waves:pressureWaves,links:resonanceLinks,background,groundAccent,look:{}};
 function auraFrame(dt){
   const ease=Math.min(1,dt*14),measured=engineKind==='worklet';
   for(const o of orbs){
@@ -3744,7 +3778,7 @@ function auraFrame(dt){
   }
   for(const w of pressureWaves)w.fade=pressureWaveStrength(w);
   for(const l of resonanceLinks)l.alpha=(l.a.deleted||l.b.deleted)?0:clamp(l.life/l.maxLife,0,1)*l.strength;
-  auraScene.spawn=pointer.spawn;auraScene.selected=selected;auraScene.background=background;auraScene.groundAccent=groundAccent;
+  auraScene.spawn=pointer.spawn;auraScene.background=background;auraScene.groundAccent=groundAccent;
   const k=auraScene.look;k.atmo=fieldAtmo;k.blur=+elBlur.value;k.strength=fieldStrength;k.haze=fieldHaze;k.mix=fieldMix;k.wind=windValue;
   window.MonadAura.frame(auraScene,dt);
 }
@@ -4012,7 +4046,7 @@ function makeSwatch(i){
   function paint(){
     const c=PALETTE[i]||'#000';
     dot.setAttribute('fill',c);
-    const active=(paletteTarget==='bg'?background:selected&&selected.color)===c;
+    const active=paletteTarget==='bg'?background===c:selection.size>0&&[...selection].every(o=>o.color===c);
     ring.setAttribute('opacity',active?.85:0);
   }
   const apply=()=>{const s=document.querySelectorAll('.swatch')[i];if(s)s.click();paintPaletteGroup()};
@@ -4455,7 +4489,7 @@ function toggleDev(force){
 addEventListener('keydown',e=>{
   if(e.target&&/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))return;
   if(e.key==='?'||e.key==='/'){toggleDev();e.preventDefault()}
-  else if(e.key==='Escape'){if(!$('#dev').hidden)toggleDev(false);else collapseShell()}
+  else if(e.key==='Escape'){if(!$('#dev').hidden)toggleDev(false);else if(shellState!==0)collapseShell();else selectOnly(null)}
 });
 // first gesture anywhere starts audio — no button, no words
 // Arming on pointerdown with {once:true} was silent on every phone: for touch
@@ -4709,7 +4743,7 @@ function seedWorld(){
 boot();
 // verify-*.js harness hook (dev tooling only; nothing in the instrument reads it)
 window.__monadTest={buildPreset,applyPresetObject,R,SPACE,spaceMessage,setEngine,
-  get orbs(){return orbs},applyReverb:()=>{if(ac)applyReverb()},
+  get orbs(){return orbs},get selection(){return [...selection]},applyReverb:()=>{if(ac)applyReverb()},
   get orbNotes(){return orbs.map(o=>o.note)},
   get lastStrikeMidi(){return lastStrikeMidi},
   get quality(){return qLevel},
