@@ -1735,7 +1735,7 @@ class MonadEngine extends AudioWorkletProcessor{
       this.pl,this.pr,this.plT,this.prT,this.e,this.exc,this.live,this.vb,this.dryL,this.dryR,this.pendAt])a.fill(0);
     this.pend.fill(null);this.space.clear(o.space);
     this.queue=[packStrikes((o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0)))];this.queueAt=0;this.queueOff=0;
-    this.frame=0;this.levelBlocks=0;this.quietBlocks=0;this.steals=0;this.drops=0;this.strikes=0;this.statAt=0;this.idle=false;this.muted=false;this.ringing=false;
+    this.frame=0;this.levelBlocks=0;this.quietBlocks=0;this.steals=0;this.drops=0;this.strikes=0;this.statAt=0;this.idle=false;this.muted=false;this.ringing=false;this.idleReported=false;
   }
   post(m,transfer){if(!this.muted)this.port.postMessage(m,transfer)}
   silence(){this.on.fill(0);this.zr.fill(0);this.zi.fill(0);this.pend.fill(null)}
@@ -1832,7 +1832,7 @@ class MonadEngine extends AudioWorkletProcessor{
       for(let v=0;v<this.V;v++)if(this.on[v]){d[j++]=this.key[v];d[j++]=Math.sqrt(this.e[v])}
       this.post({type:'levels',d},[d.buffer]);
     }
-    if(this.frame-this.statAt>=sampleRate*.25){this.statAt=this.frame;this.post({type:'stats',voices,steals:this.steals,drops:this.drops,strikes:this.strikes,idle:this.idle})}
+    if(this.frame-this.statAt>=sampleRate*.25){this.statAt=this.frame;if(!this.idle||!this.idleReported)this.post({type:'stats',voices,steals:this.steals,drops:this.drops,strikes:this.strikes,idle:this.idle});this.idleReported=this.idle}
     return true;
   }
 }
