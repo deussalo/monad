@@ -1521,7 +1521,6 @@ const pow2AtLeast=n=>{let p=1;while(p<n)p<<=1;return p};
 const softLimit=x=>x/(1+Math.abs(x));
 // Sylvester Hadamard row r of length n, used for orthogonal tap/injection signs.
 const hadamardSign=(r,c)=>{let b=r&c,p=0;while(b){p^=b&1;b>>=1}return p?-1:1};
-// A strike record, as the page packs it: at,k,amp,c,a,p,n, then n each of f, g, t.
 const strikeSize=(d,o)=>7+3*d[o+6];
 const packStrikes=list=>{const out=[];for(const m of list){out.push(m.at||0,m.k,m.amp,m.c,m.a,m.p,m.f.length,...m.f);
   for(let i=0;i<m.f.length;i++)out.push(m.g[i]);for(let i=0;i<m.f.length;i++)out.push(m.t[i])}return new Float64Array(out)};
@@ -1582,7 +1581,6 @@ class Space{
     this.glide=1-Math.exp(-BLOCK/(fs*.05));this.sizeGlide=1-Math.exp(-BLOCK/(fs*.35));
     this.clear(space);
   }
-  // Every value process() mutates returns to where it starts, in place.
   clear(space){
     const N=this.N,sh=this.shift;
     this.buf.fill(0);this.apBuf.fill(0);this.apPos.fill(0);this.pre.fill(0);this.w=0;this.preW=0;
@@ -1596,7 +1594,6 @@ class Space{
   }
   assign(space){for(const k of this.keys)this.target[k]=this.cur[k]=space[k]}
   set(p){for(const k in p)if(k in this.target&&Number.isFinite(+p[k]))this.target[k]=+p[k]}
-  // Settings are derived only on the blocks where smoothing still moves a value.
   retune(snap){
     const t=this.target,c=this.cur,fs=this.fs,N=this.N;
     const k=snap?1:this.glide,ks=snap?1:this.sizeGlide;
@@ -1809,7 +1806,6 @@ class MonadEngine extends AudioWorkletProcessor{
     this.idle=this.quietBlocks>this.space.holdBlocks;
     if(!this.idle)this.space.process(dL,dR,L,R,n);
     this.frame=end;
-    // Silence is reported once, not every 8 blocks until the next strike.
     if(++this.levelBlocks>=8&&(this.levelBlocks=0,voices||this.ringing)){
       this.ringing=voices>0;const d=new Float64Array(voices*2);let j=0;
       for(let v=0;v<this.V;v++)if(this.on[v]){d[j++]=this.key[v];d[j++]=Math.sqrt(this.e[v])}
@@ -2582,9 +2578,8 @@ function applyLevels(d){
   }
 }
 function workletLive(){return engineKind==='worklet'&&engineState==='ready'&&ac&&ac.state==='running'}
-// Strikes are packed in the engine's record layout (at,k,amp,c,a,p,n,f[n],g[n],t[n])
-// and leave as one message per task. The key is the orb and the pitch it sounds,
-// so a re-hit drives the same ringing resonators and a retuned orb rings out.
+// The key is the orb and the pitch it sounds, so a re-hit drives the same
+// ringing resonators and a retuned orb rings out.
 const strikeBatch=[];
 function sendStrikes(){const d=new Float64Array(strikeBatch);strikeBatch.length=0;engineNode.port.postMessage({type:'strikes',d},[d.buffer])}
 function workletStrike(o,amp,midi,impact,sympathetic){
@@ -2909,13 +2904,18 @@ function chooseFreeModalEvent(){
 }
 
 function resonanceAffinity(a,b){
-  const A=materialFor(a).ratios,B=materialFor(b).ratios,ba=orbHz(a),bb=orbHz(b);
+  const ma=materialFor(a),mb=materialFor(b),row=a._affinity||(a._affinity=new WeakMap());
+  let e=row.get(b);
+  if(e&&e.ma===ma&&e.mb===mb&&e.na===a.note&&e.nb===b.note)return e.score;
+  const A=ma.ratios,B=mb.ratios,ba=orbHz(a),bb=orbHz(b);
   let best=0;
   for(let i=0;i<A.length;i++)for(let j=0;j<B.length;j++){
     const cents=Math.abs(1200*Math.log2((ba*A[i])/(bb*B[j])));
     const score=Math.exp(-Math.pow(cents/72,2));
     if(score>best)best=score;
   }
+  if(!e)row.set(b,e={});
+  e.ma=ma;e.mb=mb;e.na=a.note;e.nb=b.note;e.score=best;
   return best;
 }
 
