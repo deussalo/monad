@@ -3518,7 +3518,9 @@ function makeOrb(x,y,r){
     color:randomColour(),note:nextNote(),hit:0,resonance:0,energy:0,wall:0,
     a:Math.random()*6.28,b:Math.random()*6.28,
     lastStrikeQueued:-1e9,lastStrikeSent:-1e9,lastSympathy:-1e9,
-    looped:false,loopTrack:null,deleted:false
+    looped:false,loopTrack:null,deleted:false,lastModalAt:0,ring:0,ringTarget:0,
+    _materialKey:'',_material:null,lobes:3,_hzNote:null,_hz:0,_rgbKey:null,_rgb:null,_affinity:null,
+    invMass:0,invMass16:0,invMass17:0,invMass18:0,invMass34:0,invMass08:0,sqrtMass:0
   };
   cacheMass(o);return o;
 }
