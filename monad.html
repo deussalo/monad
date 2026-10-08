@@ -1521,6 +1521,10 @@ const pow2AtLeast=n=>{let p=1;while(p<n)p<<=1;return p};
 const softLimit=x=>x/(1+Math.abs(x));
 // Sylvester Hadamard row r of length n, used for orthogonal tap/injection signs.
 const hadamardSign=(r,c)=>{let b=r&c,p=0;while(b){p^=b&1;b>>=1}return p?-1:1};
+// A strike record, as the page packs it: at,k,amp,c,a,p,n, then n each of f, g, t.
+const strikeSize=(d,o)=>7+3*d[o+6];
+const packStrikes=list=>{const out=[];for(const m of list){out.push(m.at||0,m.k,m.amp,m.c,m.a,m.p,m.f.length,...m.f);
+  for(let i=0;i<m.f.length;i++)out.push(m.g[i]);for(let i=0;i<m.f.length;i++)out.push(m.t[i])}return new Float64Array(out)};
 
 class Allpass{
   constructor(len){this.buf=new Float32Array(len);this.len=len;this.i=0}
@@ -1684,12 +1688,12 @@ class MonadEngine extends AudioWorkletProcessor{
     this.on=new Uint8Array(V);this.key=new Float64Array(V);this.nm=new Uint8Array(V);
     this.zr=new Float64Array(V*MAXM);this.zi=new Float64Array(V*MAXM);this.kr=new Float64Array(V*MAXM);this.ki=new Float64Array(V*MAXM);this.xg=new Float64Array(V*MAXM);
     this.cN=new Int32Array(V);this.cLen=new Int32Array(V);
-    this.env=new Float64Array(V);this.envStep=new Float64Array(V);this.fade=new Float64Array(V);this.pend=new Array(V).fill(null);
+    this.env=new Float64Array(V);this.envStep=new Float64Array(V);this.fade=new Float64Array(V);this.pend=new Array(V).fill(null);this.pendAt=new Int32Array(V);
     this.pl=new Float64Array(V);this.pr=new Float64Array(V);this.plT=new Float64Array(V);this.prT=new Float64Array(V);this.e=new Float64Array(V);
     this.exc=new Float64Array(BLOCK);this.live=new Int32Array(MAXM);this.vb=new Float64Array(BLOCK);
     this.dryL=new Float32Array(BLOCK);this.dryR=new Float32Array(BLOCK);
     this.reset(o);this.warm(o);
-    this.port.onmessage=ev=>{const m=ev.data;if(m.type==='strike')this.queue.push(m);else if(m.type==='space')this.space.set(m);else if(m.type==='silence')this.silence()};
+    this.port.onmessage=ev=>{const m=ev.data;if(m.type==='strikes')this.queue.push(m.d);else if(m.type==='space')this.space.set(m);else if(m.type==='silence')this.silence()};
   }
   // V8 interprets code until it has run enough; cold, the first strike's blocks
   // took 4-8 ms against a 2.7 ms deadline and dropped out as clicks, and the first
@@ -1699,56 +1703,56 @@ class MonadEngine extends AudioWorkletProcessor{
   warm(o){
     const l=new Float32Array(BLOCK),r=new Float32Array(BLOCK),out=[[l,r]],V=this.V;
     const sp=this.space;this.muted=true;this.queue=[];
-    const strike=(k,t)=>this.queue.push({type:'strike',at:0,k,f:[110,230,370,520,700],g:[1,.6,.4,.3,.2],t:[t,t*.75,t*.5,t*.4,t*.25],amp:.1,c:.0008,a:.004,p:.3});
+    const strike=(k,t)=>({k,f:[110,230,370,520,700],g:[1,.6,.4,.3,.2],t:[t,t*.75,t*.5,t*.4,t*.25],amp:.1,c:.0008,a:.004,p:.3});
     for(let i=0;i<400;i++){
       // Both sides of every branch: V8 deoptimises when a path it never saw runs.
       if(i%50===0)sp.target.shimmer=sp.cur.shimmer=i%100?0:1;
       if(i%100===70||i%100===90)sp.target.freeze=sp.cur.freeze=i%100===70?1:0;
-      if(i%40===0)strike(i%3,2);
-      if(i===100)for(let k=0;k<2*V+4;k++)strike(1000+k,.3);
+      if(i%40===0)this.queue.push(packStrikes([strike(i%3,2)]));
+      if(i===100)this.queue.push(packStrikes(Array.from({length:2*V+4},(_,k)=>strike(1000+k,.3))));
       l.fill(0);r.fill(0);this.process([],out);
     }
     this.reset(o);
   }
   reset(o){
     for(const a of [this.on,this.key,this.nm,this.zr,this.zi,this.kr,this.ki,this.xg,this.cN,this.cLen,this.env,this.envStep,this.fade,
-      this.pl,this.pr,this.plT,this.prT,this.e,this.exc,this.live,this.vb,this.dryL,this.dryR])a.fill(0);
+      this.pl,this.pr,this.plT,this.prT,this.e,this.exc,this.live,this.vb,this.dryL,this.dryR,this.pendAt])a.fill(0);
     this.pend.fill(null);this.space.clear(o.space);
-    this.queue=(o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0));
-    this.frame=0;this.levelBlocks=0;this.quietBlocks=0;this.steals=0;this.strikes=0;this.statAt=0;this.idle=false;this.muted=false;this.ringing=false;
+    this.queue=[packStrikes((o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0)))];this.queueAt=0;this.queueOff=0;
+    this.frame=0;this.levelBlocks=0;this.quietBlocks=0;this.steals=0;this.drops=0;this.strikes=0;this.statAt=0;this.idle=false;this.muted=false;this.ringing=false;
   }
   post(m,transfer){if(!this.muted)this.port.postMessage(m,transfer)}
   silence(){this.on.fill(0);this.zr.fill(0);this.zi.fill(0);this.pend.fill(null)}
   active(){let n=0;for(let v=0;v<this.V;v++)n+=this.on[v];return n}
-  load(v,m){
-    const b=v*MAXM,fs=sampleRate,f=m.f,g=m.g,t=m.t;let k=0;
-    for(let i=0;i<f.length&&k<MAXM;i++){
-      if(f[i]>=fs*.45||f[i]<=0)continue;
-      const r=Math.exp(-LN1000/(Math.max(.01,t[i])*fs)),w=TAU*f[i]/fs;
-      this.kr[b+k]=r*Math.cos(w);this.ki[b+k]=r*Math.sin(w);this.xg[b+k]=g[i]*m.amp;k++;
+  load(v,d,o){
+    const b=v*MAXM,fs=sampleRate,n=d[o+6],f=o+7,g=f+n,t=g+n,amp=d[o+2];let k=0;
+    for(let i=0;i<n&&k<MAXM;i++){
+      if(d[f+i]>=fs*.45||d[f+i]<=0)continue;
+      const r=Math.exp(-LN1000/(Math.max(.01,d[t+i])*fs)),w=TAU*d[f+i]/fs;
+      this.kr[b+k]=r*Math.cos(w);this.ki[b+k]=r*Math.sin(w);this.xg[b+k]=d[g+i]*amp;k++;
     }
     this.nm[v]=k;
-    const len=Math.max(8,Math.round((m.c||.002)*fs));this.cLen[v]=len;this.cN[v]=len;
-    const p=Math.max(-1,Math.min(1,m.p||0)),a=(p+1)*Math.PI/4;this.plT[v]=Math.cos(a);this.prT[v]=Math.sin(a);
+    const len=Math.max(8,Math.round((d[o+3]||.002)*fs));this.cLen[v]=len;this.cN[v]=len;
+    const p=Math.max(-1,Math.min(1,d[o+5]||0)),a=(p+1)*Math.PI/4;this.plT[v]=Math.cos(a);this.prT[v]=Math.sin(a);
   }
-  start(m){
+  start(d,o){
     this.strikes++;
-    const V=this.V;
-    for(let v=0;v<V;v++)if(this.on[v]&&this.key[v]===m.k&&this.fade[v]===0){this.load(v,m);return}
+    const V=this.V,key=d[o+1];
+    for(let v=0;v<V;v++)if(this.on[v]&&this.key[v]===key&&this.fade[v]===0){this.load(v,d,o);return}
     let free=-1;for(let v=0;v<V;v++)if(!this.on[v]){free=v;break}
-    const n=this.active(),poly=Math.sqrt(8/Math.max(8,n+1));m.amp*=poly;
+    const n=this.active(),poly=Math.sqrt(8/Math.max(8,n+1));d[o+2]*=poly;
     if(free<0){
       let best=-1,be=Infinity;
       for(let v=0;v<V;v++)if(this.fade[v]===0&&this.e[v]<be){be=this.e[v];best=v}
-      if(best<0)return;
-      this.steals++;this.fade[best]=1;this.pend[best]=m;return;
+      if(best<0){this.drops++;return}
+      this.steals++;this.fade[best]=1;this.pend[best]=d;this.pendAt[best]=o;return;
     }
-    this.begin(free,m);
+    this.begin(free,d,o);
   }
-  begin(v,m){
+  begin(v,d,o){
     const b=v*MAXM;for(let k=0;k<MAXM;k++){this.zr[b+k]=0;this.zi[b+k]=0}
-    this.on[v]=1;this.key[v]=m.k;this.fade[v]=0;this.pend[v]=null;this.load(v,m);this.pl[v]=this.plT[v];this.pr[v]=this.prT[v];
-    const a=m.a||0;if(a>.002){this.env[v]=0;this.envStep[v]=1/(a*sampleRate)}else{this.env[v]=1;this.envStep[v]=0}
+    this.on[v]=1;this.key[v]=d[o+1];this.fade[v]=0;this.pend[v]=null;this.load(v,d,o);this.pl[v]=this.plT[v];this.pr[v]=this.prT[v];
+    const a=d[o+4]||0;if(a>.002){this.env[v]=0;this.envStep[v]=1/(a*sampleRate)}else{this.env[v]=1;this.envStep[v]=0}
   }
   renderVoice(v,n,L,R){
     const b=v*MAXM,nm=this.nm[v],exc=this.exc,vb=this.vb,zr=this.zr,zi=this.zi,kr=this.kr,ki=this.ki,xg=this.xg;
@@ -1781,13 +1785,20 @@ class MonadEngine extends AudioWorkletProcessor{
     this.pl[v]=pl;this.pr[v]=pr;this.env[v]=env;this.envStep[v]=es;this.e[v]=e;
     if(fl>0){
       this.fade[v]=fl;
-      if(fl<=1e-9){const m=this.pend[v];this.on[v]=0;this.fade[v]=0;if(m)this.begin(v,m)}
+      if(fl<=1e-9){const d=this.pend[v];this.on[v]=0;this.fade[v]=0;if(d)this.begin(v,d,this.pendAt[v])}
     }else if(!exciting&&cN===0&&e<1e-11)this.on[v]=0;
   }
   process(inputs,outputs){
     const out=outputs[0],L=out[0],R=out[1]||out[0],n=L.length;
     const end=this.frame+n;
-    while(this.queue.length&&(this.queue[0].at||0)<end)this.start(this.queue.shift());
+    const q=this.queue;
+    while(this.queueAt<q.length){
+      const d=q[this.queueAt];
+      if(this.queueOff>=d.length){this.queueAt++;this.queueOff=0;continue}
+      if(d[this.queueOff]>=end)break;
+      this.start(d,this.queueOff);this.queueOff+=strikeSize(d,this.queueOff);
+    }
+    if(this.queueAt===q.length){q.length=0;this.queueAt=0}
     const dL=this.dryL,dR=this.dryR;dL.fill(0);dR.fill(0);
     let voices=0;
     for(let v=0;v<this.V;v++)if(this.on[v]){voices++;this.renderVoice(v,n,dL,dR)}
@@ -1804,7 +1815,7 @@ class MonadEngine extends AudioWorkletProcessor{
       for(let v=0;v<this.V;v++)if(this.on[v]){d[j++]=this.key[v];d[j++]=Math.sqrt(this.e[v])}
       this.post({type:'levels',d},[d.buffer]);
     }
-    if(this.frame-this.statAt>=sampleRate*.25){this.statAt=this.frame;this.post({type:'stats',voices,steals:this.steals,strikes:this.strikes,idle:this.idle})}
+    if(this.frame-this.statAt>=sampleRate*.25){this.statAt=this.frame;this.post({type:'stats',voices,steals:this.steals,drops:this.drops,strikes:this.strikes,idle:this.idle})}
     return true;
   }
 }
@@ -1892,7 +1903,7 @@ const SOURCE={wave:'sine',attack:.004,hardness:.65,decay:6,level:.234,sizeRing:1
 const SPACE={dry:1,wet:.85,predelay:40,size:1.6,decay:11,lowMult:1.1,highMult:.55,lowCross:200,highCross:4500,
   diffusion:.78,density:.55,modRate:.3,modDepth:.5,shimmer:0,shimmerPitch:12,freeze:0,width:1.1,duck:.15,lowCut:110,highCut:15000};
 let engineKind=/engine=legacy/.test(location.hash)?'legacy':'worklet',engineNode=null,engineState='none',legacyBuilt=false;
-let engineStats={voices:0,steals:0,strikes:0,idle:true};
+let engineStats={voices:0,steals:0,drops:0,strikes:0,idle:true};
 const SPACE_DEFS=[['dry','Dry',0,1,.001,''],['wet','Wet',0,1.5,.001,''],['predelay','Predelay',0,500,1,' ms'],
   ['size','Size',.2,3,.01,'×'],['decay','Decay T60',.3,60,.01,' s'],['lowMult','Low decay',.25,3,.01,'×'],
   ['highMult','High decay',.05,1.5,.01,'×'],['lowCross','Low crossover',40,1200,1,' Hz'],['highCross','High crossover',800,14000,1,' Hz'],
@@ -2377,7 +2388,7 @@ let voiceDrops=0,modalDrops=0,collisionCount=0,strikeCount=0,contactEvents=0;
 let voiceSteals=0,stealBlocked=0;
 window.__monadAudioStats=function(){return{
   state:ac?ac.state:'none',
-  engine:engineKind,engineState:engineState,engineIdle:engineStats.idle,engineSteals:engineStats.steals,engineStrikes:engineStats.strikes,
+  engine:engineKind,engineState:engineState,engineIdle:engineStats.idle,engineSteals:engineStats.steals,engineDrops:engineStats.drops,engineStrikes:engineStats.strikes,
   voices:activeVoiceCount(),
   modals:activeModalCount(),
   voiceDrops:voiceDrops,modalDrops:modalDrops,collisionCount:collisionCount,strikeCount:strikeCount,contactEvents:contactEvents,
@@ -2571,17 +2582,22 @@ function applyLevels(d){
   }
 }
 function workletLive(){return engineKind==='worklet'&&engineState==='ready'&&ac&&ac.state==='running'}
-// One message per strike. The key is the orb and the pitch it sounds, so a
-// re-hit drives the same ringing resonators and a retuned orb rings out.
+// Strikes are packed in the engine's record layout (at,k,amp,c,a,p,n,f[n],g[n],t[n])
+// and leave as one message per task. The key is the orb and the pitch it sounds,
+// so a re-hit drives the same ringing resonators and a retuned orb rings out.
+const strikeBatch=[];
+function sendStrikes(){const d=new Float64Array(strikeBatch);strikeBatch.length=0;engineNode.port.postMessage({type:'strikes',d},[d.buffer])}
 function workletStrike(o,amp,midi,impact,sympathetic){
   const m=materialFor(o),f0=hz(midi),sizeNorm=clamp((o.r-MIN_R)/(MAX_R-MIN_R),0,1);
   const ring=Math.max(.03,SOURCE.decay*(1+SOURCE.sizeRing*sizeNorm))*.5*m.decay;
-  const partials=PHYS.modalMix*3,n=m.ratios.length,f=new Array(n),g=new Array(n),t=new Array(n);
-  for(let k=0;k<n;k++){f[k]=f0*m.ratios[k];g[k]=k?m.weights[k]*partials:1;t[k]=ring*Math.pow(m.ratios[k],-m.damp)}
+  const partials=PHYS.modalMix*3,n=m.ratios.length,b=strikeBatch;
   // Contact time sets brightness: a hard, fast hit is a short pulse that reaches the high partials.
   const contact=sympathetic?.008:clamp((.0016-.0014*SOURCE.hardness)*Math.pow(Math.max(1,impact)/60,-.35),.00012,.004);
-  engineNode.port.postMessage({type:'strike',k:o.uid*128+midi,f,g,t,amp,c:contact,
-    a:sympathetic?.02:SOURCE.attack,p:clamp((o.x/Math.max(1,W))*2-1,-.88,.88)});
+  if(!b.length)queueMicrotask(sendStrikes);
+  b.push(0,o.uid*128+midi,amp,contact,sympathetic?.02:SOURCE.attack,clamp((o.x/Math.max(1,W))*2-1,-.88,.88),n);
+  for(let k=0;k<n;k++)b.push(f0*m.ratios[k]);
+  for(let k=0;k<n;k++)b.push(k?m.weights[k]*partials:1);
+  for(let k=0;k<n;k++)b.push(ring*Math.pow(m.ratios[k],-m.damp));
 }
 
 function buildReverb(){
