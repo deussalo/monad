@@ -1528,7 +1528,7 @@ class Allpass{
 }
 
 class Svf{
-  constructor(){this.s1=0;this.s2=0}
+  constructor(){this.s1=0;this.s2=0;this.lp=0;this.hp=0}
   // Topology-preserving SVF (Zavalishin); returns [lp,hp] via fields to avoid allocation.
   run(x,g,k){const h=(x-(2*k+g)*this.s1-this.s2)/(1+g*(g+2*k)),b=g*h+this.s1,l=g*b+this.s2;
     this.s1=g*h+b;this.s2=g*b+l;this.lp=l;this.hp=h;return l}
@@ -1558,7 +1558,6 @@ class Space{
     const maxLen=maxMs*fs/1000*3.2+fs*.004+8;
     this.size=pow2AtLeast(maxLen);this.mask=this.size-1;
     this.buf=new Float32Array(this.size*N);
-    this.w=0;
     this.lp1=new Float64Array(N);this.lp2=new Float64Array(N);
     this.gl=new Float64Array(N);this.gm=new Float64Array(N);this.gh=new Float64Array(N);
     this.y=new Float64Array(N);
@@ -1566,27 +1565,29 @@ class Space{
     const sc=1/Math.sqrt(N);
     for(let i=0;i<N;i++){this.inj[i]=hadamardSign(3,i)*sc;this.oL[i]=hadamardSign(5,i)*sc;this.oR[i]=hadamardSign(10,i)*sc}
     this.mc=new Float64Array(N);this.ms=new Float64Array(N);this.mrc=new Float64Array(N);this.mrs=new Float64Array(N);this.mdepth=new Float64Array(N);
-    for(let i=0;i<N;i++){const ph=TAU*i/N*2.37;this.mc[i]=Math.cos(ph);this.ms[i]=Math.sin(ph)}
     this.apLen=new Int32Array(N);this.apPos=new Int32Array(N);this.apOff=new Int32Array(N);let off=0;
     for(let i=0;i<N;i++){const l=primeAtLeast(fs*(2.9+i*.53)/1000);this.apLen[i]=l;this.apOff[i]=off;off+=l}
     this.apBuf=new Float32Array(off);
     this.diffusers=[4.77,3.59,12.73,9.31].map(ms=>new Allpass(primeAtLeast(fs*ms/1000)));
-    this.preSize=pow2AtLeast(fs*.52);this.preMask=this.preSize-1;this.pre=new Float32Array(this.preSize);this.preW=0;
-    this.hpIn=0;this.shift=new PitchShifter(fs);this.shimLp=0;this.shimOut=0;
+    this.preSize=pow2AtLeast(fs*.52);this.preMask=this.preSize-1;this.pre=new Float32Array(this.preSize);
+    this.shift=new PitchShifter(fs);
     this.eqL=[new Svf(),new Svf()];this.eqR=[new Svf(),new Svf()];
-    this.duckEnv=0;this.denorm=1e-18;this.energy=0;
     this.keys=Object.keys(space).filter(k=>typeof space[k]==='number');
-    this.target={};this.cur={};this.assign(space);
+    this.target={};this.cur={};
     this.holdBlocks=Math.ceil((fs*.52+this.size)/BLOCK);
     this.glide=1-Math.exp(-BLOCK/(fs*.05));this.sizeGlide=1-Math.exp(-BLOCK/(fs*.35));
-    this.retune(true);
+    this.clear(space);
   }
+  // Every value process() mutates returns to where it starts, in place.
   clear(space){
-    this.buf.fill(0);this.apBuf.fill(0);this.pre.fill(0);this.shift.buf.fill(0);
+    const N=this.N,sh=this.shift;
+    this.buf.fill(0);this.apBuf.fill(0);this.apPos.fill(0);this.pre.fill(0);this.w=0;this.preW=0;
     this.lp1.fill(0);this.lp2.fill(0);this.y.fill(0);
-    for(const f of [...this.eqL,...this.eqR]){f.s1=0;f.s2=0}
-    for(const d of this.diffusers)d.buf.fill(0);
-    this.hpIn=0;this.shimLp=0;this.shimOut=0;this.duckEnv=0;this.energy=0;
+    for(let i=0;i<N;i++){const ph=TAU*i/N*2.37;this.mc[i]=Math.cos(ph);this.ms[i]=Math.sin(ph)}
+    sh.buf.fill(0);sh.w=0;sh.p=0;
+    for(const f of [...this.eqL,...this.eqR]){f.s1=0;f.s2=0;f.lp=0;f.hp=0}
+    for(const d of this.diffusers){d.buf.fill(0);d.i=0}
+    this.hpIn=0;this.shimLp=0;this.shimOut=0;this.duckEnv=0;this.denorm=1e-18;this.energy=0;
     this.assign(space);this.retune(true);
   }
   assign(space){for(const k of this.keys)this.target[k]=this.cur[k]=space[k]}
@@ -1687,24 +1688,36 @@ class MonadEngine extends AudioWorkletProcessor{
     this.pl=new Float64Array(V);this.pr=new Float64Array(V);this.plT=new Float64Array(V);this.prT=new Float64Array(V);this.e=new Float64Array(V);
     this.exc=new Float64Array(BLOCK);this.live=new Int32Array(MAXM);this.vb=new Float64Array(BLOCK);
     this.dryL=new Float32Array(BLOCK);this.dryR=new Float32Array(BLOCK);
-    this.queue=(o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0));
-    this.frame=0;this.levelBlocks=0;this.quietBlocks=0;this.steals=0;this.strikes=0;this.statAt=0;this.idle=false;
-    this.warm(o);
+    this.reset(o);this.warm(o);
     this.port.onmessage=ev=>{const m=ev.data;if(m.type==='strike')this.queue.push(m);else if(m.type==='space')this.space.set(m);else if(m.type==='silence')this.silence()};
   }
   // V8 interprets code until it has run enough; cold, the first strike's blocks
-  // took 4-8 ms against a 2.7 ms deadline and dropped out as clicks. Run the
-  // whole path silently at construction, then start from fresh state.
+  // took 4-8 ms against a 2.7 ms deadline and dropped out as clicks, and the first
+  // shimmer blocks took up to 7 ms. Run every path silently at construction:
+  // shimmer, full polyphony, stealing and overload. Then reset the same objects in
+  // place: a Space allocated after warm-up runs cold again.
   warm(o){
-    const l=new Float32Array(BLOCK),r=new Float32Array(BLOCK),out=[[l,r]];
+    const l=new Float32Array(BLOCK),r=new Float32Array(BLOCK),out=[[l,r]],V=this.V;
+    const sp=this.space;this.muted=true;this.queue=[];
+    const strike=(k,t)=>this.queue.push({type:'strike',at:0,k,f:[110,230,370,520,700],g:[1,.6,.4,.3,.2],t:[t,t*.75,t*.5,t*.4,t*.25],amp:.1,c:.0008,a:.004,p:.3});
     for(let i=0;i<400;i++){
-      if(i%40===0)this.queue.push({type:'strike',at:0,k:i%3,f:[110,230,370,520,700],g:[1,.6,.4,.3,.2],t:[2,1.5,1,.8,.5],amp:.1,c:.0008,a:.004,p:.3});
+      // Both sides of every branch: V8 deoptimises when a path it never saw runs.
+      if(i%50===0)sp.target.shimmer=sp.cur.shimmer=i%100?0:1;
+      if(i%100===70||i%100===90)sp.target.freeze=sp.cur.freeze=i%100===70?1:0;
+      if(i%40===0)strike(i%3,2);
+      if(i===100)for(let k=0;k<2*V+4;k++)strike(1000+k,.3);
       l.fill(0);r.fill(0);this.process([],out);
     }
-    this.silence();this.space.clear(o.space);
-    this.queue=(o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0));
-    this.frame=0;this.levelBlocks=0;this.quietBlocks=0;this.steals=0;this.strikes=0;this.statAt=0;this.idle=false;this.e.fill(0);
+    this.reset(o);
   }
+  reset(o){
+    for(const a of [this.on,this.key,this.nm,this.zr,this.zi,this.kr,this.ki,this.xg,this.cN,this.cLen,this.env,this.envStep,this.fade,
+      this.pl,this.pr,this.plT,this.prT,this.e,this.exc,this.live,this.vb,this.dryL,this.dryR])a.fill(0);
+    this.pend.fill(null);this.space.clear(o.space);
+    this.queue=(o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0));
+    this.frame=0;this.levelBlocks=0;this.quietBlocks=0;this.steals=0;this.strikes=0;this.statAt=0;this.idle=false;this.muted=false;
+  }
+  post(m,transfer){if(!this.muted)this.port.postMessage(m,transfer)}
   silence(){this.on.fill(0);this.zr.fill(0);this.zi.fill(0);this.pend.fill(null)}
   active(){let n=0;for(let v=0;v<this.V;v++)n+=this.on[v];return n}
   load(v,m){
@@ -1788,9 +1801,9 @@ class MonadEngine extends AudioWorkletProcessor{
     if(++this.levelBlocks>=8){
       this.levelBlocks=0;const d=new Float64Array(voices*2);let j=0;
       for(let v=0;v<this.V;v++)if(this.on[v]){d[j++]=this.key[v];d[j++]=Math.sqrt(this.e[v])}
-      this.port.postMessage({type:'levels',d},[d.buffer]);
+      this.post({type:'levels',d},[d.buffer]);
     }
-    if(this.frame-this.statAt>=sampleRate*.25){this.statAt=this.frame;this.port.postMessage({type:'stats',voices,steals:this.steals,strikes:this.strikes,idle:this.idle})}
+    if(this.frame-this.statAt>=sampleRate*.25){this.statAt=this.frame;this.post({type:'stats',voices,steals:this.steals,strikes:this.strikes,idle:this.idle})}
     return true;
   }
 }
