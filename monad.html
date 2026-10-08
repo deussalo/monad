@@ -1393,6 +1393,8 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     var all = scene.spawn ? orbs.concat([scene.spawn]) : orbs;
     stepSwarms(all, Math.min(0.033, dt), look);
 
+    // Every offscreen pass runs before the screen is bound: on a tiled phone GPU,
+    // leaving the default framebuffer mid-frame stores the whole scene and reloads it.
     // ground: very low frequency, so it is rendered small and a few times a second
     gl.disable(gl.BLEND);
     groundAge += dt;
@@ -1407,45 +1409,6 @@ Monad is a live instrument and cannot run without it. The page you are looking a
       gl.uniform2f(progGround.u.uRes, cssW, cssH);
       drawFull();
     }
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, dispW, dispH);
-    gl.useProgram(progCopy.p);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ground.tex);
-    gl.uniform1i(progCopy.u.uSrc, 0);
-    drawFull();
-
-    // rings, then links and bodies
-    var nr = 0, n = 0;
-    for (var w = 0; w < scene.waves.length; w++) {
-      var wv = scene.waves[w];
-      nr = pushShape(ringData, nr, wv.x, wv.y, wv.r, 1, 1 + wv.fade*1.4, 0, Math.min(0.18, 0.16*wv.fade), 0, WHITE, 0, 0, 0);
-    }
-    for (var l = 0; l < scene.links.length; l++) {
-      var ln = scene.links[l];
-      n = pushShape(shapeData, n, ln.a.x, ln.a.y, 0.7 + ln.alpha*0.8, 2, ln.b.x, ln.b.y, 0.025 + 0.16*ln.alpha, 0, WHITE, 0, 0, 0);
-    }
-    for (var i = 0; i < all.length; i++) {
-      var o = all[i];
-      n = pushShape(shapeData, n, o.x, o.y, o.r, 0, o.ring || 0, o.resonance || 0, o === scene.selected ? 1 : 0, o.lobes || 3,
-        hexRgb(o.color), 0, o.hit || 0, (o.uid*2.399) % 6.2832);
-    }
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    gl.useProgram(progShape.p);
-    gl.uniform2f(progShape.u.uView, cssW, cssH);
-    gl.uniform1f(progShape.u.uPx, dispW/cssW);
-    gl.uniform1f(progShape.u.uTime, time);
-    if (nr) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, ringBuf);
-      gl.bufferSubData(gl.ARRAY_BUFFER, 0, ringData, 0, nr*SHAPE_FLOATS);
-      gl.bindVertexArray(vaoRing);
-      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, (RING_SEGMENTS + 1)*2, nr);
-    }
-    gl.bindBuffer(gl.ARRAY_BUFFER, shapeBuf);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, shapeData, 0, n*SHAPE_FLOATS);
-    gl.bindVertexArray(vaoShape);
-    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, n);
-
     // aura: accumulate
     var m = 0, atmo = look.atmo;
     for (var j = 0; j < all.length; j++) {
@@ -1464,6 +1427,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     gl.bindFramebuffer(gl.FRAMEBUFFER, acc.fb);
     gl.viewport(0, 0, auraW, auraH);
     gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
     gl.useProgram(progSplat.p);
     gl.uniform2f(progSplat.u.uView, cssW, cssH);
@@ -1504,11 +1468,46 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     gl.uniform1f(progResolve.u.uGlow, look.haze*1.6 + (1 - veil)*0.4);
     drawFull();
 
-    // aura: paint over the scene
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, dispW, dispH);
+    gl.disable(gl.BLEND);
+    gl.useProgram(progCopy.p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ground.tex);
+    gl.uniform1i(progCopy.u.uSrc, 0);
+    drawFull();
+
+    // rings, then links and bodies
+    var nr = 0, n = 0;
+    for (var w = 0; w < scene.waves.length; w++) {
+      var wv = scene.waves[w];
+      nr = pushShape(ringData, nr, wv.x, wv.y, wv.r, 1, 1 + wv.fade*1.4, 0, Math.min(0.18, 0.16*wv.fade), 0, WHITE, 0, 0, 0);
+    }
+    for (var l = 0; l < scene.links.length; l++) {
+      var ln = scene.links[l];
+      n = pushShape(shapeData, n, ln.a.x, ln.a.y, 0.7 + ln.alpha*0.8, 2, ln.b.x, ln.b.y, 0.025 + 0.16*ln.alpha, 0, WHITE, 0, 0, 0);
+    }
+    for (var i = 0; i < all.length; i++) {
+      var o = all[i];
+      n = pushShape(shapeData, n, o.x, o.y, o.r, 0, o.ring || 0, o.resonance || 0, o === scene.selected ? 1 : 0, o.lobes || 3,
+        hexRgb(o.color), 0, o.hit || 0, (o.uid*2.399) % 6.2832);
+    }
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(progShape.p);
+    gl.uniform2f(progShape.u.uView, cssW, cssH);
+    gl.uniform1f(progShape.u.uPx, dispW/cssW);
+    gl.uniform1f(progShape.u.uTime, time);
+    if (nr) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, ringBuf);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, ringData, 0, nr*SHAPE_FLOATS);
+      gl.bindVertexArray(vaoRing);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, (RING_SEGMENTS + 1)*2, nr);
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, shapeBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, shapeData, 0, n*SHAPE_FLOATS);
+    gl.bindVertexArray(vaoShape);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, n);
+
     gl.useProgram(progComp.p);
     gl.bindTexture(gl.TEXTURE_2D, blurA.tex);
     gl.uniform1i(progComp.u.uSrc, 0);
