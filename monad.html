@@ -1012,13 +1012,15 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     '  float wob = ring*min(2.0, vA.z*0.028)*sin(lobes*ang + uTime*(1.6+lobes*0.45) + seed);\n' +
     '  float r = vA.z*(1.0+0.025*hit+0.018*res) + wob;\n' +
     '  float inside = clamp((r - d)*uPx + 0.5, 0.0, 1.0);\n' +
+    '  vec3 base = vC.rgb, c = vec3(0.0);\n' +
+    '  if (inside > 0.0) {\n' +
     '  vec2 n2 = vLocal/max(r, 1.0); float z = sqrt(max(0.0, 1.0-dot(n2,n2)));\n' +
     '  vec3 nrm = normalize(vec3(n2, z+0.35));\n' +
     '  float lit = 0.80 + 0.30*dot(nrm, normalize(vec3(-0.45,-0.6,0.66)));\n' +
-    '  vec3 base = vC.rgb;\n' +
-    '  vec3 c = base*lit*(0.92+0.10*z);\n' +
+    '  c = base*lit*(0.92+0.10*z);\n' +
     '  float rim = pow(1.0 - z, 3.0);\n' +
     '  c += mix(base, vec3(1.0), 0.3)*rim*(0.06 + 0.32*ring + 0.18*hit);\n' +
+    '  }\n' +
     '  float out_ = max(0.0, d - r);\n' +
     '  float halo = exp(-out_/(5.0 + 14.0*ring))*(0.04 + 0.22*ring + 0.12*hit)*(1.0-inside)*clamp(1.0 - out_/(vA.z*0.2 + 24.0), 0.0, 1.0);\n' +
     '  float resRing = res > 0.015 ? line(d - (r + 3.0 + res*6.0), 0.7 + res)*(0.05 + 0.16*res) : 0.0;\n' +
