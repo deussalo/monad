@@ -1680,13 +1680,13 @@ class MonadEngine extends AudioWorkletProcessor{
     this.on=new Uint8Array(V);this.key=new Float64Array(V);this.nm=new Uint8Array(V);
     this.zr=new Float64Array(V*MAXM);this.zi=new Float64Array(V*MAXM);this.kr=new Float64Array(V*MAXM);this.ki=new Float64Array(V*MAXM);this.xg=new Float64Array(V*MAXM);
     this.cN=new Int32Array(V);this.cLen=new Int32Array(V);
-    this.env=new Float64Array(V);this.envStep=new Float64Array(V);this.fade=new Float64Array(V);this.pend=new Array(V).fill(null);this.pendAt=new Int32Array(V);
+    this.env=new Float64Array(V);this.envStep=new Float64Array(V);this.fade=new Float64Array(V);this.fadeStep=new Float64Array(V);this.pend=new Array(V).fill(null);this.pendAt=new Int32Array(V);
     this.pl=new Float64Array(V);this.pr=new Float64Array(V);this.plT=new Float64Array(V);this.prT=new Float64Array(V);this.e=new Float64Array(V);
     this.exc=new Float64Array(BLOCK);this.live=new Int32Array(MAXM);this.vb=new Float64Array(BLOCK);
     this.dryL=new Float32Array(BLOCK);this.dryR=new Float32Array(BLOCK);
     this.maxStarts=4*V;this.maxWait=8*BLOCK;
     this.reset(o);this.warm(o);
-    this.port.onmessage=ev=>{const m=ev.data;if(m.type==='strikes')this.queue.push(m.d);else if(m.type==='space')this.space.set(m);else if(m.type==='silence')this.silence()};
+    this.port.onmessage=ev=>{const m=ev.data;if(m.type==='strikes')this.queue.push(m.d);else if(m.type==='space')this.space.set(m);else if(m.type==='silence')this.silence();else if(m.type==='release')this.release(m.seconds)};
   }
   // V8 interprets code until it has run enough; cold, the first strike's blocks
   // took 4-8 ms against a 2.7 ms deadline and dropped out as clicks, and the first
@@ -1708,7 +1708,7 @@ class MonadEngine extends AudioWorkletProcessor{
     this.reset(o);
   }
   reset(o){
-    for(const a of [this.on,this.key,this.nm,this.zr,this.zi,this.kr,this.ki,this.xg,this.cN,this.cLen,this.env,this.envStep,this.fade,
+    for(const a of [this.on,this.key,this.nm,this.zr,this.zi,this.kr,this.ki,this.xg,this.cN,this.cLen,this.env,this.envStep,this.fade,this.fadeStep,
       this.pl,this.pr,this.plT,this.prT,this.e,this.exc,this.live,this.vb,this.dryL,this.dryR,this.pendAt])a.fill(0);
     this.pend.fill(null);this.space.clear(o.space);
     this.queue=[packStrikes((o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0)))];this.queueAt=0;this.queueOff=0;
@@ -1716,6 +1716,11 @@ class MonadEngine extends AudioWorkletProcessor{
   }
   post(m,transfer){if(!this.muted)this.port.postMessage(m,transfer)}
   silence(){this.on.fill(0);this.zr.fill(0);this.zi.fill(0);this.pend.fill(null)}
+  release(seconds){
+    this.queue=[];this.queueAt=0;this.queueOff=0;this.waitFrom=-1;this.pend.fill(null);
+    const step=1/(seconds*sampleRate);
+    for(let v=0;v<this.V;v++)if(this.on[v]&&this.fade[v]===0){this.fade[v]=1;this.fadeStep[v]=step}
+  }
   active(){let n=0;for(let v=0;v<this.V;v++)n+=this.on[v];return n}
   load(v,d,o){
     const b=v*MAXM,fs=sampleRate,n=d[o+6],f=o+7,g=f+n,t=g+n,amp=d[o+2];let k=0;
@@ -1738,7 +1743,7 @@ class MonadEngine extends AudioWorkletProcessor{
       let best=-1,be=Infinity;
       for(let v=0;v<V;v++)if(this.fade[v]===0&&this.e[v]<be){be=this.e[v];best=v}
       if(best<0)return false;
-      this.strikes++;d[o+2]*=poly;this.steals++;this.fade[best]=1;this.pend[best]=d;this.pendAt[best]=o;return true;
+      this.strikes++;d[o+2]*=poly;this.steals++;this.fade[best]=1;this.fadeStep[best]=1/96;this.pend[best]=d;this.pendAt[best]=o;return true;
     }
     this.strikes++;d[o+2]*=poly;this.begin(free,d,o);return true;
   }
@@ -1770,7 +1775,7 @@ class MonadEngine extends AudioWorkletProcessor{
       else for(let s=0;s<n;s++){const nr=a*r-c*i;i=a*i+c*r;r=nr;vb[s]+=r}
       zr[p]=r;zi[p]=i;e+=r*r+i*i;
     }
-    let env=this.env[v],es=this.envStep[v],fl=this.fade[v],pl=this.pl[v],pr=this.pr[v];const fstep=1/96,dl=(this.plT[v]-pl)/n,dr=(this.prT[v]-pr)/n;
+    let env=this.env[v],es=this.envStep[v],fl=this.fade[v],pl=this.pl[v],pr=this.pr[v];const fstep=this.fadeStep[v],dl=(this.plT[v]-pl)/n,dr=(this.prT[v]-pr)/n;
     if(env===1&&es===0&&fl===0&&pl+dl===pl&&pr+dr===pr)for(let s=0;s<n;s++){const x=vb[s];L[s]+=x*pl;R[s]+=x*pr}
     else for(let s=0;s<n;s++){
       if(es>0){env+=es;if(env>=1){env=1;es=0}}
@@ -2250,6 +2255,15 @@ function syncBoundControls(){
   for(const b of controlBindings){b.input.value=b.obj[b.key];b.paint()}
   wave.value=SOURCE.wave;
 }
+function clearWorld(){
+  for(const o of orbs)o.deleted=true;
+  selection.clear();orbs.length=0;pendingHits.clear();clearPressureWaves();resonanceLinks.length=0;
+  motion.recording=false;motion.active=false;motion.targets=[];motion.tracks.clear();
+  motion.duration=0;motion.seamDuration=0;motion.period=0;
+  $('#motionRec').textContent='RECORD MOTION';$('#motionRec').classList.remove('recording');
+  fieldDirty=true;
+}
+function clearAll(){clearWorld();releaseVoices();paintSelection();refreshPresetBox()}
 function importPalette(values){
   if(!Array.isArray(values)||!values.length)return;
   const clean=values.filter(v=>typeof v==='string'&&/^#[0-9a-f]{6}$/i.test(v)).slice(0,PALETTE.length);
@@ -2337,10 +2351,7 @@ function applyPresetObject(p){
   // A shared scene intentionally replaces the current world. Old/simple presets
   // without a scene only alter synthesis/physics and leave the current orbs alone.
   if(p.scene&&Array.isArray(p.scene.orbs)){
-    selection.clear();orbs.length=0;clearPressureWaves();resonanceLinks.length=0;
-    motion.recording=false;motion.active=false;motion.targets=[];motion.tracks.clear();
-    motion.duration=0;motion.seamDuration=0;motion.period=0;
-    $('#motionRec').textContent='RECORD MOTION';$('#motionRec').classList.remove('recording');
+    clearWorld();
     const minDim=Math.max(1,Math.min(W,H));
     for(const spec of p.scene.orbs.slice(0,96)){
       const x=clamp(Number.isFinite(+spec.x)?+spec.x:.5,0,1)*W;
@@ -2597,7 +2608,19 @@ function applyLevels(d){
 function workletLive(){return engineKind==='worklet'&&engineState==='ready'&&ac&&ac.state==='running'}
 // The key is the orb and the pitch it sounds, so a re-hit drives the same
 // ringing resonators and a retuned orb rings out.
-const strikeBatch=[];
+const strikeBatch=[],RELEASE_S=.03;
+function releaseVoices(){
+  strikeBatch.length=0;
+  if(engineNode)engineNode.port.postMessage({type:'release',seconds:RELEASE_S});
+  if(!ac||!legacyBuilt)return;
+  const t=ac.currentTime;
+  for(const v of [...voices,...modalEvents]){
+    if(!v.gain||t>=v.end)continue;
+    const g=v.gain.gain;
+    if(g.cancelAndHoldAtTime)g.cancelAndHoldAtTime(t);else{g.cancelScheduledValues(t);g.setValueAtTime(g.value,t)}
+    g.linearRampToValueAtTime(0,t+RELEASE_S);v.end=t+RELEASE_S;
+  }
+}
 function sendStrikes(){const d=new Float64Array(strikeBatch);strikeBatch.length=0;engineNode.port.postMessage({type:'strikes',d},[d.buffer])}
 function workletStrike(o,amp,midi,impact,sympathetic){
   const m=materialFor(o),f0=hz(midi),sizeNorm=clamp((o.r-MIN_R)/(MAX_R-MIN_R),0,1);
@@ -3847,7 +3870,8 @@ const ICON={
   kScatter:`<circle cx="6" cy="6.2" r="1.7" ${FILL}/><circle cx="17.8" cy="7.2" r="1.7" ${FILL}/><circle cx="11.6" cy="12.4" r="1.7" ${FILL}/><circle cx="6.6" cy="17.8" r="1.7" ${FILL}/><circle cx="17.2" cy="16.8" r="1.7" ${FILL}/>`,
   cRec:`<circle cx="12" cy="12" r="8.8"/><circle cx="12" cy="12" r="4" ${FILL}/>`,
   cOut:`<path d="M12 14.6V3.4"/><path d="M8 7.4l4-4 4 4"/><path d="M3.6 14v6.6h16.8V14"/>`,
-  cIn:`<path d="M12 3.4v11.2"/><path d="M8 10.6l4 4 4-4"/><path d="M3.6 14v6.6h16.8V14"/>`
+  cIn:`<path d="M12 3.4v11.2"/><path d="M8 10.6l4 4 4-4"/><path d="M3.6 14v6.6h16.8V14"/>`,
+  cClear:`<circle cx="12" cy="12" r="8.4"/><path d="M5.4 18.6l13.2-13.2"/>`
 };
 const iconCache=new Map();
 // Icons are parsed inside THIS document. The previous version built them in a
@@ -4297,10 +4321,11 @@ const GROUPS=[
   ]},
   {id:'voicing',icon:'hubVoicing',span:168,items:[]},
   {id:'palette',icon:'hubPalette',span:168,items:[]},
-  {id:'capture',icon:'hubCapture',span:96,items:[
+  {id:'capture',icon:'hubCapture',span:128,items:[
     {t:'action',icon:()=>'cRec',tint:()=>$('#motionRec').classList.contains('recording')?'#E0876A':'',run:()=>$('#motionRec').click(),a:'record motion'},
     {t:'action',icon:()=>'cOut',run:()=>$('#copyPreset').click(),a:'copy'},
-    {t:'action',icon:()=>'cIn',run:()=>$('#pastePreset').click(),a:'paste'}
+    {t:'action',icon:()=>'cIn',run:()=>$('#pastePreset').click(),a:'paste'},
+    {t:'action',icon:()=>'cClear',run:clearAll,a:'clear all'}
   ]}
 ];
 // voicing group mirrors the engine's mode catalogue, plus the custom-palette
