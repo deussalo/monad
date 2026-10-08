@@ -1773,8 +1773,9 @@ class MonadEngine extends AudioWorkletProcessor{
   renderVoice(v,n,L,R){
     const b=v*MAXM,nm=this.nm[v],exc=this.exc,vb=this.vb,zr=this.zr,zi=this.zi,kr=this.kr,ki=this.ki,xg=this.xg;
     let cN=this.cN[v];const cLen=this.cLen[v],norm=2/cLen;
-    for(let s=0;s<n;s++){if(cN>0){const ph=(cLen-cN+.5)/cLen;exc[s]=(1-Math.cos(TAU*ph))*.5*norm;cN--}else exc[s]=0;vb[s]=0}
-    const exciting=this.cN[v]>0;this.cN[v]=cN;
+    const exciting=cN>0;
+    if(exciting)for(let s=0;s<n;s++){if(cN>0){const ph=(cLen-cN+.5)/cLen;exc[s]=(1-Math.cos(TAU*ph))*.5*norm;cN--}else exc[s]=0}
+    vb.fill(0,0,n);this.cN[v]=cN;
     let e=0,k=0;
     // Partials ring independently; one that has decayed below -110 dB stops costing.
     const live=this.live;let nl=0;
@@ -1793,7 +1794,8 @@ class MonadEngine extends AudioWorkletProcessor{
       zr[p]=r;zi[p]=i;e+=r*r+i*i;
     }
     let env=this.env[v],es=this.envStep[v],fl=this.fade[v],pl=this.pl[v],pr=this.pr[v];const fstep=1/96,dl=(this.plT[v]-pl)/n,dr=(this.prT[v]-pr)/n;
-    for(let s=0;s<n;s++){
+    if(env===1&&es===0&&fl===0&&pl+dl===pl&&pr+dr===pr)for(let s=0;s<n;s++){const x=vb[s];L[s]+=x*pl;R[s]+=x*pr}
+    else for(let s=0;s<n;s++){
       if(es>0){env+=es;if(env>=1){env=1;es=0}}
       let g=env;if(fl>0){fl=Math.max(1e-9,fl-fstep);g*=fl<=1e-9?0:fl}
       pl+=dl;pr+=dr;const x=vb[s]*g;L[s]+=x*pl;R[s]+=x*pr;
