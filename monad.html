@@ -517,26 +517,6 @@ Monad is a live instrument and cannot run without it. The page you are looking a
   }
 
   /**
-   * The current voicing as one playable chord, low to high, transposed.
-   * Catalogue modes: the stack on a fixed E3 root so the chord always lands
-   * mid-register regardless of the weighted-root dice. Custom: the middle
-   * six of the pool (a hand's worth), which keeps huge pools playable.
-   */
-  function chordNotes() {
-    var out = [], i;
-    if (_currentId === 'custom') {
-      if (!_customNotes.length) return out;
-      var lo = Math.max(0, ((_customNotes.length - 6) / 2) | 0);
-      for (i = lo; i < Math.min(_customNotes.length, lo + 6); i++) out.push(_xp(_customNotes[i]));
-      return out;
-    }
-    var mode = _modeById(_currentId);
-    if (!mode) return out;
-    for (i = 0; i < mode.semitones.length; i++) out.push(_xp(52 + mode.semitones[i]));
-    return out;
-  }
-
-  /**
    * Returns dot positions for drawing a 34 px constellation icon.
    *
    * dots: array of 6 {a: 0..1} where a is the normalized linear position.
@@ -562,41 +542,6 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     return { dots: dots, span: span };
   }
 
-  /**
-   * Plays the mode as a soft ascending arpeggio.
-   * Calls strike(midiInt, amp, delaySeconds) — caller supplies the callback.
-   * Uses E3 (MIDI 52) as audition root so preview is always in mid register.
-   * ~90 ms spacing, amplitude decays 0.82× per step.
-   */
-  function audition(id, strike, nowMs) {
-    if (typeof strike !== 'function') return;
-    if (id === 'custom') {
-      // custom notes are absolute pitches — audition them as-is, low to high
-      var pool = _customNotes.slice(0, 6);
-      var a = 0.65;
-      for (var k = 0; k < pool.length; k++) {
-        strike(pool[k], a, k * 0.09);
-        a *= 0.82;
-      }
-      return;
-    }
-    var mode = _modeById(id);
-    if (!mode) return;
-
-    var ROOT    = 52; // E3
-    var SPACING = 0.09; // seconds between notes
-    var amp     = 0.65;
-    var AMP_DECAY = 0.82;
-
-    for (var i = 0; i < mode.semitones.length; i++) {
-      var midi = _xp(mode.semitones[i] + ROOT);
-      if (midi < 0) midi = 0;
-      if (midi > 127) midi = 127;
-      strike(midi, amp, i * SPACING);
-      amp *= AMP_DECAY;
-    }
-  }
-
   /* ── Export ────────────────────────────────────────────────────────────── */
   global.MonadVoicing = {
     /** Ordered mode catalogue — read-only by convention. */
@@ -612,12 +557,10 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     setOctaveSpread: function (v) { _octaveSpread = Math.max(0, Math.min(1, +v || 0)); },
     get transpose() { return _transpose; },
     setTranspose:   setTranspose,
-    chordNotes:     chordNotes,
     scatterNote:    _scatterOctave,
     noteSet:        noteSet,
     nextNote:      nextNote,
-    constellation: constellation,
-    audition:      audition
+    constellation: constellation
   };
 
 }(window));
@@ -4082,10 +4025,8 @@ function makeVoicingNode(mode){
     const MV=window.MonadVoicing;if(!MV)return;
     MV.setMode(mode.id);
     retuneOrbs();
-    chordStrike();   // the chord builder: this voicing on the held wheel tone
     itemNodes.forEach(n=>n.paint&&n.paint());
   }
-  // pointerdown, matching the tone wheel: chords land when the finger does
   pad.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();pick()});
   pad.addEventListener('click',e=>{e.stopPropagation()});
   pad.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){pick();e.preventDefault()}});
@@ -4102,24 +4043,13 @@ function auditionStrike(midi,amp,delaySec){
     strikeNow(ghost,10+58*clamp(amp,0,1),false,1,ghost.note);   // auditions pin their pitch
   },Math.max(0,delaySec*1000));
 }
-// The chord builder's voice: the active voicing on the active wheel tone as
-// one gesture — a fast low-to-high strum, not the editor's slow arpeggio.
-// Fired by every tone press and every voicing press, so walking either ring
-// plays a progression.
-function chordStrike(){
-  const MV=window.MonadVoicing;if(!MV)return;
-  const notes=MV.chordNotes();
-  let amp=.72;
-  notes.forEach((m,i)=>{auditionStrike(m,amp,i*.028);amp*=.9});
-}
 // ---- tone wheel ----
 // Eight transposition roots on an inner wheel inside the voicing ring:
 // I ii iii IV V bVI vi bVII of the home key. Tones above the fifth shift
 // DOWN (V is -5, not +7) so a progression voice-leads around the home
 // register instead of climbing out of it. Hold a tone (pointerdown sets it
 // instantly) and tap a voicing — or keep a voicing and walk the tones —
-// either way each press builds and sounds the full chord and retunes the
-// world to it.
+// either way each press retunes the world, silently.
 const WHEEL_TONES=[0,2,4,5,-5,-4,-3,-2];
 function makeToneNode(t){
   const inner=sv('g',null,'node bloom'),g=wrapNode(inner);
@@ -4139,7 +4069,6 @@ function makeToneNode(t){
     const MV=window.MonadVoicing;if(!MV)return;
     MV.setTranspose(t);
     retuneOrbs();
-    chordStrike();
     itemNodes.forEach(n=>n.paint&&n.paint());
   }
   // pointerdown, not click: the wheel is an instrument — the root must be

@@ -1,4 +1,4 @@
-// Verification: voicing catalogue revamp + tone wheel + chord builder.
+// Verification: voicing catalogue + tone wheel; selecting retunes the world without sounding it.
 // Dev tool, never shipped.
 const { chromium } = require('/srv/rig/monad/node_modules/playwright-core');
 const path = require('path');
@@ -13,7 +13,7 @@ const path = require('path');
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', e => errors.push('PAGEERROR: ' + (e && e.stack || e)));
 
-  await page.goto('file://' + path.join(__dirname, 'monad.html'));
+  await page.goto(process.argv[2] || ('file://' + path.join(__dirname, 'monad.html')));
   await page.waitForTimeout(900);
 
   const out = {};
@@ -83,19 +83,6 @@ const path = require('path');
   if (JSON.stringify(out.customXp.set) !== '[50,57,62]') errors.push('custom pool did not transpose: ' + out.customXp.set);
   if (JSON.stringify(out.customXp.stored) !== '[48,55,60]') errors.push('transpose rewrote the stored custom pool');
 
-  // ── chordNotes: the voicing on a fixed mid root ─────────────────────────
-  out.chord = await page.evaluate(() => {
-    const MV = window.MonadVoicing;
-    MV.setMode('barron_m11'); MV.setTranspose(0);
-    const home = MV.chordNotes();
-    MV.setTranspose(-5);
-    const five = MV.chordNotes();
-    MV.setTranspose(0);
-    return { home, five };
-  });
-  if (JSON.stringify(out.chord.home) !== '[52,59,66,67,74,81,90]') errors.push('barron_m11 chordNotes wrong: ' + out.chord.home);
-  if (JSON.stringify(out.chord.five) !== '[47,54,61,62,69,76,85]') errors.push('transposed chordNotes wrong: ' + out.chord.five);
-
   // ── shell: voicing ring carries the tone wheel ──────────────────────────
   await page.evaluate(() => { window.__monadTest.applyPresetObject({voicing:{mode:'barron_m11',transpose:0}}); });
   await page.mouse.click(195, 844 - 56);
@@ -141,16 +128,39 @@ const path = require('path');
   });
   if (out.nested.tone >= out.nested.voice) errors.push('tone wheel is not inside the voicing arc: ' + JSON.stringify(out.nested));
 
-  // ── chord builder: press a tone -> transpose + retune + chord strike ────
+  // ── selection is silent: still the world, then count every strike sent ─
+  out.armed = await page.evaluate(() => window.__monadAudio());
+  if (out.armed !== 'running') errors.push('audio not running, silence check would be vacuous: ' + out.armed);
+  await page.evaluate(() => {
+    const set = (i, v) => { const e = document.querySelector(i); e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); };
+    set('#wind', '0');
+    window.__monadTest.orbs.forEach(o => { o.vx = 0; o.vy = 0; });
+  });
+  await page.waitForTimeout(500);
+  await page.evaluate(() => {
+    window.__sent = 0;
+    const port = window.__monadBuses.engine.port, post = port.postMessage.bind(port);
+    port.postMessage = (m, t) => { if (m.type === 'strikes') window.__sent++; return post(m, t); };
+    window.__strikes0 = window.__monadAudioStats().strikeCount;
+  });
+  const silence = () => page.evaluate(() => ({ messages: window.__sent, strikes: window.__monadAudioStats().strikeCount - window.__strikes0 }));
+
+  // ── press a tone -> transpose + retune, no sound ────────────────────────
   // (tone index 4 is the fifth, wheel order [0,2,4,5,-5,-4,-3,-2])
+  out.notesBefore = await page.evaluate(() => window.__monadTest.orbNotes);
   await click('tone', 4);
+  await page.waitForTimeout(300);
   out.afterTone = await page.evaluate(() => ({
     transpose: window.MonadVoicing.transpose,
+    notes: window.__monadTest.orbNotes,
     orbsRetuned: window.__monadTest.orbNotes.every(n => window.MonadVoicing.noteSet().includes(n))
   }));
+  out.afterTone.silence = await silence();
+  if (JSON.stringify(out.afterTone.notes) === JSON.stringify(out.notesBefore)) errors.push('tone press left every orb note unchanged');
+  if (out.afterTone.silence.messages || out.afterTone.silence.strikes) errors.push('tone press sounded: ' + JSON.stringify(out.afterTone.silence));
   if (out.afterTone.transpose !== -5) errors.push('tone press set transpose ' + out.afterTone.transpose + ', expected -5');
   if (!out.afterTone.orbsRetuned) errors.push('tone press did not retune the world');
-  // hold the tone, press a voicing: chord is built on the held root
+  // hold the tone, press a voicing: the voicing is built on the held root
   const toneBox = await pad('tone', 2), voiceBox = await pad('voicing', 3);
   await page.mouse.move(toneBox.x, toneBox.y);
   await page.mouse.down();
@@ -159,10 +169,15 @@ const path = require('path');
   await page.mouse.up();
   await page.touchscreen.tap(voiceBox.x, voiceBox.y).catch(() => page.mouse.click(voiceBox.x, voiceBox.y));
   await page.waitForTimeout(320);
+  await page.waitForTimeout(300);
   out.built = await page.evaluate(() => ({
     mode: window.MonadVoicing.current,
-    transpose: window.MonadVoicing.transpose
+    transpose: window.MonadVoicing.transpose,
+    orbsRetuned: window.__monadTest.orbNotes.every(n => window.MonadVoicing.noteSet().includes(n))
   }));
+  out.built.silence = await silence();
+  if (!out.built.orbsRetuned) errors.push('voicing press did not retune the world');
+  if (out.built.silence.messages || out.built.silence.strikes) errors.push('voicing press sounded: ' + JSON.stringify(out.built.silence));
   if (out.heldRoot !== 4) errors.push('held tone did not set root on pointerdown (got ' + out.heldRoot + ')');
   if (out.built.transpose !== 4) errors.push('voicing press lost the held root');
   if (out.built.mode !== 'lydian_13') errors.push('voicing press picked ' + out.built.mode + ', expected lydian_13');
