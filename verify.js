@@ -4,7 +4,7 @@ const path = require('path');
 
 (async () => {
   const browser = await chromium.launch({
-    executablePath:'/srv/rig/.cache/ms-playwright/chromium-1187/chrome-linux/chrome',
+    executablePath:(process.env.MONAD_CHROME||'/srv/rig/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome'),
     args: ['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--mute-audio']
   });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -49,9 +49,9 @@ const path = require('path');
     // path, so console-clean tells you nothing. Only the buffer sizes do.
     // (Learned the hard way: a regex tidy-up once deleted the live Gaussian
     // shader and every other check in this file still passed.)
-    const F = window.MonadFluid;
-    out.fluid = F && F.available ? (F.info ? F.info() : 'available') : 'UNAVAILABLE (2D fallback)';
-    out.fluidDegenerate = /(^|[^0-9])1x1/.test(out.fluid || '');
+    const A = window.MonadAura;
+    out.aura = A && A.available ? A.info() : 'UNAVAILABLE (2D fallback)';
+    out.auraDegenerate = /(^|[^0-9])1x1/.test(out.aura || '');
     return out;
   });
 
@@ -109,7 +109,7 @@ const path = require('path');
 
   console.log(JSON.stringify({ audit, interaction, fps: +fps.toFixed(1), errors, warnings: warnings.slice(0,5), logs: logs.slice(0,10) }, null, 2));
   await browser.close();
-  const fluidBad = audit.fluidDegenerate || /UNAVAILABLE/.test(audit.fluid || '');
-  if (fluidBad) console.error('FLUID CHECK FAILED:', audit.fluid);
-  process.exit(errors.length || fluidBad ? 1 : 0);
+  const auraBad = audit.auraDegenerate || /UNAVAILABLE/.test(audit.aura || '');
+  if (auraBad) console.error('AURA CHECK FAILED:', audit.aura);
+  process.exit(errors.length || auraBad ? 1 : 0);
 })().catch(e => { console.error('HARNESS FAIL', e); process.exit(2); });

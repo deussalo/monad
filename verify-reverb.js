@@ -8,14 +8,14 @@ const path = require('path');
 
 (async () => {
   const browser = await chromium.launch({
-    executablePath:'/srv/rig/.cache/ms-playwright/chromium-1187/chrome-linux/chrome',
+    executablePath:(process.env.MONAD_CHROME||'/srv/rig/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome'),
     args: ['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--mute-audio','--autoplay-policy=no-user-gesture-required']
   });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on('pageerror', e => errors.push('PAGEERROR: ' + (e && e.stack || e)));
 
-  await page.goto('file://' + path.join(__dirname, 'monad.html'));
+  await page.goto('file://' + path.join(__dirname, 'monad.html') + '#engine=legacy');
   await page.waitForTimeout(800);
   // gesture arms audio
   await page.mouse.click(700, 400);
@@ -26,6 +26,8 @@ const path = require('path');
     if (!B || !B.ac) return res({ fail: 'audio not armed' });
     const ac = B.ac;
 
+    // an empty world: collisions would feed fresh notes into the tail being measured
+    window.__monadTest.applyPresetObject({ scene: { orbs: [] } });
     // hostile settings
     const R = window.__monadTest.R;
     R.feedback = 100; R.decay = 120; R.lowRatio = 4; R.highRatio = 2;

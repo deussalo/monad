@@ -4,7 +4,7 @@ const path = require('path');
 
 (async () => {
   const browser = await chromium.launch({
-    executablePath:'/srv/rig/.cache/ms-playwright/chromium-1187/chrome-linux/chrome',
+    executablePath:(process.env.MONAD_CHROME||'/srv/rig/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome'),
     args: ['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--mute-audio','--autoplay-policy=no-user-gesture-required']
   });
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -19,7 +19,7 @@ const path = require('path');
     custom: window.MonadVoicing ? window.MonadVoicing.getCustomNotes().length : 0,
     orbs: window.__monadTest ? window.__monadTest.orbNotes.length : 0
   }));
-  if (factory.mode !== 'custom') errors.push('factory voicing is ' + factory.mode + ', expected custom');
+  if (factory.mode !== 'barron_m11') errors.push('factory voicing is ' + factory.mode + ', expected barron_m11');
   if (factory.custom !== 18) errors.push('factory custom pool is ' + factory.custom + ', expected 18');
   if (factory.orbs !== 18) errors.push('factory scene has ' + factory.orbs + ' orbs, expected 18');
 
@@ -41,7 +41,7 @@ const path = require('path');
   await page.waitForTimeout(500);
   await clickPad('voicing');
   out.voicingItems = await page.evaluate(() => document.querySelectorAll('#shellSvg .bloom.in').length);
-  if (out.voicingItems !== 16) errors.push('expected 16 voicing nodes (6 voicings + plus + spread knob + 8 wheel tones), got ' + out.voicingItems);
+  if (out.voicingItems !== 17) errors.push('expected 17 voicing nodes (7 voicings + plus + spread knob + 8 wheel tones), got ' + out.voicingItems);
   // spread knob lives on the SCALE ring, not inside the keyboard editor
   out.spreadOnVoicing = await page.evaluate(() =>
     !!document.querySelector('.bloom.in .hitpad[aria-label="octave spread"]'));
@@ -54,7 +54,7 @@ const path = require('path');
   // palette from an empty set — same toggle / octave / spread / retune
   // / round-trip semantics as when custom started empty.
   await page.evaluate(() => {
-    window.__monadTest.applyPresetObject({voicing:{custom:[],mode:'quintal'}});
+    window.__monadTest.applyPresetObject({voicing:{custom:[],mode:'barron_m11'}});
   });
 
   // no visible node may sit off-screen

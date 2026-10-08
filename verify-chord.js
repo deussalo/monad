@@ -5,7 +5,7 @@ const path = require('path');
 
 (async () => {
   const browser = await chromium.launch({
-    executablePath:'/srv/rig/.cache/ms-playwright/chromium-1187/chrome-linux/chrome',
+    executablePath:(process.env.MONAD_CHROME||'/srv/rig/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome'),
     args: ['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--mute-audio','--autoplay-policy=no-user-gesture-required']
   });
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -18,17 +18,17 @@ const path = require('path');
 
   const out = {};
 
-  // ── catalogue: 6 voicings, the two keepers unchanged, no drift ──────────
+  // ── catalogue: 7 voicings, Barron m11 and stacked fifths first ─────────
   out.catalogue = await page.evaluate(() => window.MonadVoicing.modes.map(m => m.id));
-  if (out.catalogue.length !== 6) errors.push('expected 6 catalogue modes, got ' + out.catalogue.length);
-  if (out.catalogue[0] !== 'quartal' || out.catalogue[1] !== 'quintal') errors.push('first two modes changed: ' + out.catalogue);
+  if (out.catalogue.length !== 7) errors.push('expected 7 catalogue modes, got ' + out.catalogue.length);
+  if (out.catalogue[0] !== 'barron_m11' || out.catalogue[1] !== 'stacked_fifths') errors.push('first two modes changed: ' + out.catalogue);
   if (out.catalogue.includes('drift')) errors.push('drift survived the cut');
   out.keepers = await page.evaluate(() => ({
-    quartal: window.MonadVoicing.modes[0].semitones,
-    quintal: window.MonadVoicing.modes[1].semitones
+    barron: window.MonadVoicing.modes[0].semitones,
+    fifths: window.MonadVoicing.modes[1].semitones
   }));
-  if (JSON.stringify(out.keepers.quartal) !== '[0,5,10,15,20,25]') errors.push('quartal intervals changed');
-  if (JSON.stringify(out.keepers.quintal) !== '[0,7,14,15,22,29]') errors.push('quintal intervals changed');
+  if (JSON.stringify(out.keepers.barron) !== '[0,7,14,15,22,29,38]') errors.push('barron_m11 intervals changed');
+  if (JSON.stringify(out.keepers.fifths) !== '[0,7,14,21,28,35]') errors.push('stacked_fifths intervals changed');
   // no duplicated interval stack anywhere in the catalogue
   out.dupStacks = await page.evaluate(() => {
     const seen = new Set(); let dup = 0;
@@ -57,7 +57,7 @@ const path = require('path');
   // ── transpose semantics: noteSet shifts as a block ──────────────────────
   out.transpose = await page.evaluate(() => {
     const MV = window.MonadVoicing;
-    MV.setMode('quintal'); MV.setTranspose(0);
+    MV.setMode('barron_m11'); MV.setTranspose(0);
     const base = MV.noteSet();
     MV.setTranspose(5);
     const up = MV.noteSet();
@@ -83,21 +83,21 @@ const path = require('path');
   if (JSON.stringify(out.customXp.set) !== '[50,57,62]') errors.push('custom pool did not transpose: ' + out.customXp.set);
   if (JSON.stringify(out.customXp.stored) !== '[48,55,60]') errors.push('transpose rewrote the stored custom pool');
 
-  // ── chordNotes: a playable six-note chord on a fixed mid root ───────────
+  // ── chordNotes: the voicing on a fixed mid root ─────────────────────────
   out.chord = await page.evaluate(() => {
     const MV = window.MonadVoicing;
-    MV.setMode('quintal'); MV.setTranspose(0);
+    MV.setMode('barron_m11'); MV.setTranspose(0);
     const home = MV.chordNotes();
     MV.setTranspose(-5);
     const five = MV.chordNotes();
     MV.setTranspose(0);
     return { home, five };
   });
-  if (JSON.stringify(out.chord.home) !== '[52,59,66,67,74,81]') errors.push('quintal chordNotes wrong: ' + out.chord.home);
-  if (JSON.stringify(out.chord.five) !== '[47,54,61,62,69,76]') errors.push('transposed chordNotes wrong: ' + out.chord.five);
+  if (JSON.stringify(out.chord.home) !== '[52,59,66,67,74,81,90]') errors.push('barron_m11 chordNotes wrong: ' + out.chord.home);
+  if (JSON.stringify(out.chord.five) !== '[47,54,61,62,69,76,85]') errors.push('transposed chordNotes wrong: ' + out.chord.five);
 
   // ── shell: voicing ring carries the tone wheel ──────────────────────────
-  await page.evaluate(() => { window.__monadTest.applyPresetObject({voicing:{mode:'quintal',transpose:0}}); });
+  await page.evaluate(() => { window.__monadTest.applyPresetObject({voicing:{mode:'barron_m11',transpose:0}}); });
   await page.mouse.click(195, 844 - 56);
   await page.waitForTimeout(500);
   const pad = async (label, nth = 0) => {
@@ -122,7 +122,7 @@ const path = require('path');
     voicings: document.querySelectorAll('.bloom.in .hitpad[aria-label="voicing"]').length
   }));
   if (out.rings.tones !== 8) errors.push('expected 8 wheel tones, got ' + out.rings.tones);
-  if (out.rings.voicings !== 6) errors.push('expected 6 voicing pads, got ' + out.rings.voicings);
+  if (out.rings.voicings !== 7) errors.push('expected 7 voicing pads, got ' + out.rings.voicings);
   // nothing off-screen on a narrow phone
   out.offscreen = await page.evaluate(() =>
     [...document.querySelectorAll('#shellSvg .bloom.in')].filter(g => {
@@ -165,7 +165,7 @@ const path = require('path');
   }));
   if (out.heldRoot !== 4) errors.push('held tone did not set root on pointerdown (got ' + out.heldRoot + ')');
   if (out.built.transpose !== 4) errors.push('voicing press lost the held root');
-  if (out.built.mode !== 'lydian') errors.push('voicing press picked ' + out.built.mode + ', expected lydian');
+  if (out.built.mode !== 'lydian_13') errors.push('voicing press picked ' + out.built.mode + ', expected lydian_13');
 
   await page.screenshot({ path: 'shot-tonewheel.png' });
 

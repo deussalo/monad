@@ -2,7 +2,7 @@ const {chromium}=require('playwright-core');
 const assert=require('node:assert/strict');
 const path=require('node:path');
 (async()=>{
-  const browser=await chromium.launch({executablePath:'/srv/rig/.cache/ms-playwright/chromium-1187/chrome-linux/chrome',args:['--disable-gpu']});
+  const browser=await chromium.launch({executablePath:(process.env.MONAD_CHROME||'/srv/rig/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome'),args:['--disable-gpu']});
   try{
     const page=await browser.newPage({viewport:{width:390,height:844},hasTouch:true,isMobile:true});
     const errors=[];page.on('pageerror',e=>errors.push(e.message));
@@ -22,7 +22,7 @@ const path=require('node:path');
       const filter=AudioContext.prototype.createBiquadFilter;
       AudioContext.prototype.createBiquadFilter=function(){const node=filter.call(this);window.audioAudit.filters.push(node);return node;};
     });
-    await page.goto(process.argv[2]||'file://'+path.join(__dirname,'monad.html'));
+    await page.goto((process.argv[2]||'file://'+path.join(__dirname,'monad.html'))+'#engine=legacy');
     await page.touchscreen.tap(190,400);await page.waitForTimeout(300);
     assert.equal(await page.evaluate(()=>window.__monadAudio()),'running');
     const switching=await page.evaluate(()=>{

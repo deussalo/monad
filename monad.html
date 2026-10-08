@@ -48,7 +48,7 @@ html,body{margin:0;height:100%;height:100dvh;overflow:hidden;background:var(--gr
 /* NB: must out-specify `#stage canvas` above, or these stay visible and swallow
    every pointer event aimed at the world. */
 #stage #field,#stage #haze{display:none}
-#stage #fluid{pointer-events:none;display:none}
+#stage #aura{pointer-events:none;display:none}
 #bodies{touch-action:none;cursor:crosshair}
 
 /* Surface texture: a slow domain-warped gradient veil + static grain.
@@ -66,11 +66,8 @@ html,body{margin:0;height:100%;height:100dvh;overflow:hidden;background:var(--gr
 #grain{position:fixed;inset:0;pointer-events:none;z-index:3;opacity:.055;mix-blend-mode:overlay;
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='140' height='140' filter='url(%23n)'/></svg>");
   background-size:140px 140px}
-/* The fluid composite renders its own ground and grain, so the CSS veil and
-   grain would double-texture the image and pay for fill twice. */
-body.fluid #veil,body.fluid #grain{display:none}
-/* the fluid composite draws its own vignette; this layer is for the 2D path */
-body.fluid #vignette{display:none}
+/* The aura renders its own ground, grain and vignette; these layers serve the 2D path. */
+body.aura #veil,body.aura #grain,body.aura #vignette{display:none}
 #vignette{position:fixed;inset:0;pointer-events:none;z-index:4;
   background:radial-gradient(120% 90% at 50% 45%,transparent 42%,rgba(8,5,2,.46) 100%)}
 
@@ -140,8 +137,8 @@ body.fluid #vignette{display:none}
 <!-- ===== STAGE: the whole product ===== -->
 <div id="stage">
   <canvas id="field" aria-hidden="true"></canvas>
-  <canvas id="fluid" aria-hidden="true"></canvas>
   <canvas id="bodies" aria-label="Monad"></canvas>
+  <canvas id="aura" aria-hidden="true"></canvas>
   <canvas id="haze" aria-hidden="true"></canvas>
 </div>
 <script>
@@ -260,8 +257,12 @@ Monad is a live instrument and cannot run without it. The page you are looking a
   </div>
 
   <details open><summary>SOURCE</summary><div id="sourceControls" class="grid"></div></details>
-  <details open>
-    <summary>REVERB — DEEP LUSH / PRIMARY</summary>
+  <details open><summary>SPACE — WORKLET REVERB</summary>
+    <label class="control"><span>ENGINE</span><select id="engine"><option value="worklet">WORKLET</option><option value="legacy">LEGACY GRAPH</option></select></label>
+    <div id="spaceControls" class="grid"></div>
+  </details>
+  <details>
+    <summary>LEGACY REVERB — PRIMARY</summary>
     <div class="stats mono">
       <div>DECAY <span id="statDecay"></span></div>
       <div>SIZE <span id="statSize"></span></div>
@@ -271,10 +272,10 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     </div>
     <div id="revPrimary" class="grid"></div>
   </details>
-  <details><summary>REVERB — FINAL EQ</summary><div id="revEq" class="grid"></div></details>
-  <details><summary>REVERB — DECAY SPECTRUM</summary><div id="revSpectrum" class="grid"></div></details>
-  <details><summary>REVERB — DIFFUSION / MOTION</summary><div id="revMotion" class="grid"></div></details>
-  <details><summary>REVERB — 8 DELAY LINES</summary><div id="revDelays" class="grid"></div></details>
+  <details><summary>LEGACY REVERB — FINAL EQ</summary><div id="revEq" class="grid"></div></details>
+  <details><summary>LEGACY REVERB — DECAY SPECTRUM</summary><div id="revSpectrum" class="grid"></div></details>
+  <details><summary>LEGACY REVERB — DIFFUSION / MOTION</summary><div id="revMotion" class="grid"></div></details>
+  <details><summary>LEGACY REVERB — 8 DELAY LINES</summary><div id="revDelays" class="grid"></div></details>
   <details id="presetDetails" open><summary>PRESET — COPY / PASTE</summary>
     <div class="presetbar">
       <button id="refreshPreset" type="button">REFRESH JSON</button>
@@ -295,76 +296,26 @@ Monad is a live instrument and cannot run without it. The page you are looking a
 (function (global) {
   'use strict';
 
-  /* ── MIDI roots ────────────────────────────────────────────────────────────
-   * Matches monad.html exactly: E1(28) E2(40) E3(52), weights [1, 4.4, 3.2].
-   * Middle octave is most likely; bass octave rare — keeps music airy.
-   */
-  var ROOTS = [28, 40, 52];
+  /* Roots E2 E3 E4, weighted to the middle. */
+  var ROOTS = [40, 52, 64];
+  var ROOT_WEIGHTS = [1.6, 4, 2.4];
 
-  /* ── Mode catalogue ────────────────────────────────────────────────────────
-   * semitones: 6 ascending offsets from root (same meaning as monad makeStack).
-   * rootWeights: 3 weights parallel to ROOTS.
-   * drift: true only for the drift entry.
-   *
-   * Interval choices are tuned for calm / windchime character at low-mid register.
-   * No offset pushes root=52 past MIDI 84 (52+29=81 ≤ 84). ✓
-   */
+  /* Extended voicings, low to high, as semitones above the root. */
   var MODES = [
-    {
-      id: 'quartal',
-      // Pure stacked perfect 4ths (+5 each).  Evenly spaced — gives the most
-      // uniform constellation and a wide open, harp-like sound.
-      semitones: [0, 5, 10, 15, 20, 25],
-      rootWeights: [1, 4.4, 3.2],
-      drift: false
-    },
-    {
-      id: 'quintal',
-      // DEFAULT. Exact replica of monad.html makeStack: E B F# G D A.
-      // Steps: +7 +7 +1 +7 +7 — the +1 cluster is the characteristic voicing.
-      semitones: [0, 7, 14, 15, 22, 29],
-      rootWeights: [1, 4.4, 3.2],
-      drift: false
-    },
-    {
-      id: 'maj9',
-      // The quintal's major twin — Kenny Barron voicing, major form:
-      // LH R 5 9, RH 3 7 9.  Steps +7 +7 +2 +7 +3.  Same stacked-fifth
-      // foundation, but the M3/M7 colour turns the cluster warm instead
-      // of shadowed.  E B F# G# D# F#.
-      semitones: [0, 7, 14, 16, 23, 26],
-      rootWeights: [1, 4.4, 3.2],
-      drift: false
-    },
-    {
-      id: 'lydian',
-      // Maj9#11 spread: R 5 9 #11 7 3.  Steps +7 +7 +4 +5 +5.  The raised
-      // 11th floats the whole chord — bright without resolving anywhere.
-      // E B F# A# D# G#.
-      semitones: [0, 7, 14, 18, 23, 28],
-      rootWeights: [1, 4.4, 3.2],
-      drift: false
-    },
-    {
-      id: 'minor9',
-      // Spread m9 (drop-2 colour): R 5 b7 b3 5 9.  Steps +7 +3 +5 +4 +7.
-      // The b7-under-b3 gap is what makes a piano m9 melt.  E B D G B F#.
-      semitones: [0, 7, 10, 15, 19, 26],
-      rootWeights: [1, 4.4, 3.2],
-      drift: false
-    },
-    {
-      id: 'six_nine',
-      // 6/9 across three octaves: fifths at the bottom, fourths on top —
-      // R 5 3 6 9 5.  Steps +7 +9 +5 +5 +5.  The widest, most radiant
-      // major in the catalogue.  E B G# C# F# B.
-      semitones: [0, 7, 16, 21, 26, 31],
-      rootWeights: [1, 4.4, 3.2],
-      drift: false
-    }
-    // (jazz / natural_minor / dorian / egyptian / hirajoshi / double_harmonic
-    // / drift were here — the scales read as rows of notes, not voicings, and
-    // drift's stack duplicated quintal's.  setMode() of any old id is a no-op.)
+    // Kenny Barron minor 11: two stacks of fifths a semitone apart (R 5 9 | b3 b7 11), then the 9th on top.
+    { id: 'barron_m11',     semitones: [0, 7, 14, 15, 22, 29, 38] },
+    // Pure stacked fifths: R 5 9 6 3 7 — a Lydian maj13 that never resolves.
+    { id: 'stacked_fifths', semitones: [0, 7, 14, 21, 28, 35] },
+    // Bill Evans 'So What': three fourths and a major third, twice, a fourth apart.
+    { id: 'so_what',        semitones: [0, 5, 10, 15, 19, 24, 29, 34] },
+    // Maj13#11 spread: R 5 9 3 7 #11 13.
+    { id: 'lydian_13',      semitones: [0, 7, 14, 16, 23, 30, 33] },
+    // Herbie's 'Maiden Voyage' sus: R 5 b7 9 11, 11 and b7 again above.
+    { id: 'maiden_sus',     semitones: [0, 7, 10, 14, 17, 29, 34] },
+    // Dorian 13 cloud: R 5 b7 9 11 13 and the 9th up top.
+    { id: 'dorian_13',      semitones: [0, 7, 10, 14, 17, 21, 26] },
+    // Minor-major 9, the film-noir chord: R 5 7 b3 9 5.
+    { id: 'noir_mmaj9',     semitones: [0, 7, 11, 15, 26, 31] }
   ];
 
   /* ── Internal playback state ───────────────────────────────────────────── */
@@ -378,8 +329,9 @@ Monad is a live instrument and cannot run without it. The page you are looking a
    * seam. Empty pool = 'custom' is not selectable.
    * Factory default is a C-minor-ish stack across six octaves (see DEFAULT_PRESET).
    */
-  var _customNotes = [26,36,48,51,55,56,60,63,67,68,72,75,79,80,84,87,91,92];
-  var _currentId = 'custom';
+  // E minor 11 shimmer across four octaves: Barron's fifths below, a 9-11-b3 cluster up top.
+  var _customNotes = [40,47,54,55,62,64,66,67,69,71,74,76,78,79,83,86,88,90];
+  var _currentId = 'barron_m11';
 
   /* Octave scatter at impact: 0 = notes sound in their true octaves; rising
    * values make offsets of ±1..±3 octaves increasingly likely (geometric
@@ -491,7 +443,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     clean.sort(function (a, b) { return a - b; });
     _customNotes = clean;
     if (_currentId === 'custom') {
-      if (!clean.length) _currentId = 'quintal';
+      if (!clean.length) _currentId = MODES[0].id;
       _stack = [];
       _idx = 0;
     }
@@ -542,8 +494,8 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     }
     var mode = _modeById(_currentId);
     if (!mode) return 52;
-    if (!_stack.length || _idx >= 6) {
-      _stack = _makeStack(mode.semitones, mode.rootWeights);
+    if (!_stack.length || _idx >= _stack.length) {
+      _stack = _makeStack(mode.semitones, ROOT_WEIGHTS);
       _idx = 0;
     }
     return _stack[_idx++];
@@ -985,207 +937,210 @@ Monad is a live instrument and cannot run without it. The page you are looking a
 </script>
 
 <script>
-/* MonadFluid — WebGL2 curl-noise advected dye for monad.html
- * window.MonadFluid. No imports, no external deps, no text.
- *
- * Bodies inject dye + velocity; pressure fronts push annular impulses; the
- * field advects itself through a divergence-free curl-noise flow so colours
- * smear and swirl instead of sitting still. The composite pass carries the
- * visual identity: a widely Gaussian-diffused dye over a slow domain-warped
- * ground, tone mapped on luminance so impacts bloom as saturated colour.
- *
- * Passes are discrete named programs so a real pressure-projection solver can
- * replace the curl-noise velocity stage later without touching the rest.
+/* MonadAura — the WebGL2 scene for monad.html.
+ * Ground, bodies, and an aura of large soft particles that follow each body,
+ * kick on impact, swell with its ringing, and fuse with their neighbours: the
+ * aura accumulates OKLab colour weighted by density at low resolution, blurs
+ * it, and paints the normalised colour over the scene, so overlapping masses
+ * mix into new gradients instead of washing toward white.
  */
 (function (global) {
   'use strict';
 
-  var VERT =
+  var VERT_FULL =
     '#version 300 es\n' +
-    'in vec2 aPos; out vec2 vUv;\n' +
+    'layout(location=0) in vec2 aPos; out vec2 vUv;\n' +
     'void main(){ vUv = aPos*0.5+0.5; gl_Position = vec4(aPos,0.0,1.0); }\n';
 
-  /* Shared noise: value noise + a scalar potential whose curl is, by
-     construction, divergence-free in 2D. */
-  var NOISE =
-    'float hash(vec3 p){ p = fract(p*0.3183099+vec3(0.1,0.7,0.4));' +
-    ' p *= 17.0; return fract(p.x*p.y*p.z*(p.x+p.y+p.z)); }\n' +
-    'float vnoise(vec3 x){ vec3 i=floor(x), f=fract(x); f=f*f*(3.0-2.0*f);\n' +
-    ' return mix(mix(mix(hash(i+vec3(0,0,0)),hash(i+vec3(1,0,0)),f.x),\n' +
-    '                mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),\n' +
-    '            mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x),\n' +
-    '                mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y),f.z); }\n' +
-    'float fbm(vec3 p){ return 0.66*vnoise(p) + 0.34*vnoise(p*2.03); }\n' +
-    'vec2 curl(vec2 p, float t){ float e=0.045;\n' +
-    ' float a=fbm(vec3(p.x, p.y+e, t)), b=fbm(vec3(p.x, p.y-e, t));\n' +
-    ' float c=fbm(vec3(p.x+e, p.y, t)), d=fbm(vec3(p.x-e, p.y, t));\n' +
-    ' return vec2(a-b, d-c)/(2.0*e); }\n';
+  var HASH =
+    'float hash(vec2 p){ p = fract(p*vec2(443.897,441.423)); p += dot(p, p.yx+19.19); return fract((p.x+p.y)*p.x); }\n';
 
-  /* Velocity: advect by itself, decay, and re-inject the curl field. */
-  var FRAG_VEL =
-    '#version 300 es\nprecision highp float;\n' +
-    'in vec2 vUv; out vec4 outColor;\n' +
-    'uniform sampler2D uVel; uniform vec2 uTexel; uniform float uDt, uTime, uDecay, uCurl, uScale;\n' +
-    NOISE +
-    // Velocity is stored in UV/second, not sim-pixels/second, so the velocity
-    // field can run at a different resolution from the dye without any unit
-    // coupling between the two.
-    'void main(){\n' +
-    '  vec2 v = texture(uVel, vUv).xy;\n' +
-    '  vec2 src = vUv - v*uDt;\n' +
-    '  vec2 sv = texture(uVel, src).xy;\n' +
-    '  vec2 f = curl(vUv*uScale, uTime*0.05);\n' +
-    '  outColor = vec4(sv*uDecay + f*uCurl*uDt, 0.0, 1.0);\n' +
-    '}\n';
-
-  /* Dye: semi-lagrangian advection with gentle dissipation. */
-  var FRAG_ADV =
-    '#version 300 es\nprecision highp float;\n' +
-    'in vec2 vUv; out vec4 outColor;\n' +
-    'uniform sampler2D uSrc, uVel; uniform vec2 uTexel; uniform float uDt, uDiss;\n' +
-    'void main(){\n' +
-    '  vec2 v = texture(uVel, vUv).xy;\n' +
-    '  vec2 src = vUv - v*uDt;\n' +
-    // Backtracking past the edge clamps to the border row, so dye piles up
-    // there. Fade the last few percent instead of accumulating a rim.
-    '  vec2 e = smoothstep(vec2(0.0), vec2(0.045), vUv)\n' +
-    '         * smoothstep(vec2(0.0), vec2(0.045), 1.0-vUv);\n' +
-    '  outColor = texture(uSrc, src) * uDiss * (0.55 + 0.45*e.x*e.y);\n' +
-    '}\n';
-
-  /* Additive injection. Blending is ONE/ONE so this only emits the increment. */
-  var FRAG_SPLAT =
-    '#version 300 es\nprecision highp float;\n' +
-    'in vec2 vUv; out vec4 outColor;\n' +
-    'uniform vec2 uPoint, uAspect; uniform vec3 uValue; uniform float uRadius, uRing, uThick;\n' +
-    'void main(){\n' +
-    '  vec2 d = (vUv - uPoint) * uAspect;\n' +
-    '  float r = length(d);\n' +
-    '  float f;\n' +
-    '  if (uRing > 0.5) {\n' +
-    '    float o = (r - uRadius) / max(uThick, 1e-4);\n' +
-    '    f = exp(-o*o);\n' +
-    '    vec2 dir = r > 1e-5 ? d/r : vec2(0.0);\n' +
-    '    outColor = vec4(dir*f*uValue.x, 0.0, 0.0);\n' +
-    '  } else {\n' +
-    '    float o = r / max(uRadius, 1e-4);\n' +
-    '    f = exp(-o*o);\n' +
-    '    outColor = vec4(uValue*f, 0.0);\n' +
-    '  }\n' +
-    '}\n';
-
-  /* Ground: the slow domain-warped gradient. It is very low frequency and the
-     only expensive maths in the whole chain, so it is rendered into a tiny
-     texture a few times a second and sampled back bilinearly. Evaluating fbm
-     per screen pixel cost more than everything else combined. */
   var FRAG_GROUND =
     '#version 300 es\nprecision highp float;\n' +
     'in vec2 vUv; out vec4 outColor;\n' +
-    'uniform float uTime, uWarp;\n' +
-    NOISE +
+    'uniform vec3 uBg; uniform float uTime; uniform vec2 uRes;\n' + HASH +
+    'float vnoise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);\n' +
+    ' return mix(mix(hash(i),hash(i+vec2(1,0)),f.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x), f.y); }\n' +
     'void main(){\n' +
-    '  vec2 wp = vUv*1.7 + vec2(fbm(vec3(vUv*2.1, uTime*0.011)),\n' +
-    '                           fbm(vec3(vUv*2.1+7.3, uTime*0.013)))*uWarp*0.55;\n' +
-    '  outColor = vec4(vec3(fbm(vec3(wp, uTime*0.008))), 1.0);\n' +
+    '  vec2 q = vUv*vec2(uRes.x/uRes.y,1.0);\n' +
+    '  float n = 0.62*vnoise(q*1.4+vec2(uTime*0.010,-uTime*0.007)) + 0.38*vnoise(q*3.3-vec2(uTime*0.013,uTime*0.009));\n' +
+    '  vec3 c = uBg*(0.78+0.48*n);\n' +
+    '  vec2 vd = (vUv-vec2(0.5,0.52))*vec2(1.12,1.0);\n' +
+    '  c *= 1.0 - smoothstep(0.10,0.62,dot(vd,vd))*0.5;\n' +
+    '  outColor = vec4(c,1.0);\n' +
     '}\n';
 
-  /* Bloom, at HALF SIM resolution. This 9-tap blur used to run per screen
-     pixel: 6.7M texture fetches a frame at phone resolution, which is what
-     made this unusable on a real device. At 59x128 it is ~25x cheaper and,
-     being a soft glow, indistinguishable once bilinearly upscaled. */
-  /* Separable Gaussian, run at DYE resolution. The jaggedness the owner saw was
-     the dye compositing straight from a 256-wide texture with one bilinear
-     upscale to 1080+: diamond artifacts and hard dye edges. Blurring at sim
-     resolution first is what removes texel structure, and at these sizes each
-     pass is a few tens of thousands of pixels - free. */
+  /* Bodies, pressure rings and resonance links share one instanced program.
+   * kind 0 orb, 1 ring, 2 segment. Geometry is in CSS px. */
+  var VERT_SHAPE =
+    '#version 300 es\n' +
+    'in vec2 aPos; in vec4 iA; in vec4 iB; in vec4 iC; in vec4 iD;\n' +
+    'uniform vec2 uView;\n' +
+    'out vec2 vLocal; flat out vec4 vA; flat out vec4 vB; flat out vec4 vC; flat out vec4 vD; out float vT;\n' +
+    'void main(){\n' +
+    '  vA=iA; vB=iB; vC=iC; vD=iD; vec2 world; vT=0.0;\n' +
+    '  if (iA.w < 1.5) {\n' +
+    '    float ext = iA.w < 0.5 ? iA.z*1.2 + 26.0 : iA.z + iB.x + 3.0;\n' +
+    '    vLocal = aPos*ext; world = iA.xy + vLocal;\n' +
+    '  } else {\n' +
+    '    vec2 d = iB.xy - iA.xy; float len = max(length(d), 0.001); vec2 t = d/len, n = vec2(-t.y, t.x);\n' +
+    '    float hw = iA.z + 2.0;\n' +
+    '    vec2 along = t*((aPos.x*0.5+0.5)*(len+2.0*hw) - hw);\n' +
+    '    world = iA.xy + along + n*aPos.y*hw;\n' +
+    '    vLocal = vec2(dot(world-iA.xy, t), aPos.y*hw); vT = len;\n' +
+    '  }\n' +
+    '  gl_Position = vec4(world.x/uView.x*2.0-1.0, 1.0-world.y/uView.y*2.0, 0.0, 1.0);\n' +
+    '}\n';
+
+  var FRAG_SHAPE =
+    '#version 300 es\nprecision highp float;\n' +
+    'in vec2 vLocal; flat in vec4 vA; flat in vec4 vB; flat in vec4 vC; flat in vec4 vD; in float vT;\n' +
+    'uniform float uPx, uTime; out vec4 outColor;\n' +
+    'float line(float d, float w){ return clamp((w*0.5 - abs(d))*uPx + 0.5, 0.0, 1.0); }\n' +
+    'void main(){\n' +
+    '  if (vA.w > 1.5) {\n' +
+    '    float x = clamp(vLocal.x, 0.0, vT), d = length(vLocal - vec2(x, 0.0));\n' +
+    '    float a = line(d, vA.z)*vB.z; outColor = vec4(vC.rgb*a, 0.0); return;\n' +
+    '  }\n' +
+    '  float d = length(vLocal);\n' +
+    '  if (vA.w > 0.5) { float a = line(d - vA.z, vB.x)*vB.z; outColor = vec4(vC.rgb*a, 0.0); return; }\n' +
+    // orb: iB = (ring level, resonance, selected, lobes); iD = (hit, seed, -, -)
+    '  float ring = vB.x, res = vB.y, sel = vB.z, lobes = vB.w, hit = vD.x, seed = vD.y;\n' +
+    '  float ang = atan(vLocal.y, vLocal.x);\n' +
+    '  float wob = ring*min(2.0, vA.z*0.028)*sin(lobes*ang + uTime*(1.6+lobes*0.45) + seed);\n' +
+    '  float r = vA.z*(1.0+0.025*hit+0.018*res) + wob;\n' +
+    '  float inside = clamp((r - d)*uPx + 0.5, 0.0, 1.0);\n' +
+    '  vec2 n2 = vLocal/max(r, 1.0); float z = sqrt(max(0.0, 1.0-dot(n2,n2)));\n' +
+    '  vec3 nrm = normalize(vec3(n2, z+0.35));\n' +
+    '  float lit = 0.80 + 0.30*dot(nrm, normalize(vec3(-0.45,-0.6,0.66)));\n' +
+    '  vec3 base = vC.rgb;\n' +
+    '  vec3 c = base*lit*(0.92+0.10*z);\n' +
+    '  float rim = pow(1.0 - z, 3.0);\n' +
+    '  c += mix(base, vec3(1.0), 0.3)*rim*(0.06 + 0.32*ring + 0.18*hit);\n' +
+    '  float out_ = max(0.0, d - r);\n' +
+    '  float halo = exp(-out_/(5.0 + 14.0*ring))*(0.04 + 0.22*ring + 0.12*hit)*(1.0-inside)*clamp(1.0 - out_/(vA.z*0.2 + 24.0), 0.0, 1.0);\n' +
+    '  float resRing = res > 0.015 ? line(d - (r + 3.0 + res*6.0), 0.7 + res)*(0.05 + 0.16*res) : 0.0;\n' +
+    '  float selRing = sel*line(d - (r + 4.5), 1.2)*0.72;\n' +
+    '  vec3 add = mix(base, vec3(1.0), 0.25)*halo + vec3(resRing + selRing);\n' +
+    '  outColor = vec4(c*inside + add, inside);\n' +
+    '}\n';
+
+  /* Aura accumulation: each particle adds (OKLab * w, w) as a Gaussian. */
+  var VERT_SPLAT =
+    '#version 300 es\n' +
+    'in vec2 aPos; in vec4 iP; in vec4 iL;\n' +
+    'uniform vec2 uView;\n' +
+    'out vec2 vQ; flat out vec4 vL; flat out float vW;\n' +
+    'void main(){\n' +
+    '  vL = iL; vW = iP.w; vQ = aPos*3.0;\n' +
+    '  vec2 world = iP.xy + aPos*iP.z*3.0;\n' +
+    '  gl_Position = vec4(world.x/uView.x*2.0-1.0, 1.0-world.y/uView.y*2.0, 0.0, 1.0);\n' +
+    '}\n';
+  var FRAG_SPLAT =
+    '#version 300 es\nprecision highp float;\n' +
+    'in vec2 vQ; flat in vec4 vL; flat in float vW; out vec4 outColor;\n' +
+    'void main(){ float g = exp(-0.5*dot(vQ,vQ))*vW; outColor = vec4(vec3(vL.x*vL.w, vL.y, vL.z)*g, g); }\n';
+
   var FRAG_BLUR =
     '#version 300 es\nprecision highp float;\n' +
     'in vec2 vUv; out vec4 outColor;\n' +
-    'uniform sampler2D uSrc; uniform vec2 uDir; uniform float uStride;\n' +
+    'uniform sampler2D uSrc; uniform vec2 uDir;\n' +
     'void main(){\n' +
-    // 9-tap Gaussian folded into 5 linearly-interpolated fetches
-    '  vec2 d = uDir * uStride;\n' +
-    '  vec3 c = texture(uSrc, vUv).rgb * 0.2270270270;\n' +
-    '  c += texture(uSrc, vUv + d*1.3846153846).rgb * 0.3162162162;\n' +
-    '  c += texture(uSrc, vUv - d*1.3846153846).rgb * 0.3162162162;\n' +
-    '  c += texture(uSrc, vUv + d*3.2307692308).rgb * 0.0702702703;\n' +
-    '  c += texture(uSrc, vUv - d*3.2307692308).rgb * 0.0702702703;\n' +
-    '  outColor = vec4(c, 1.0);\n' +
+    '  vec4 c = texture(uSrc, vUv)*0.2270270270;\n' +
+    '  c += texture(uSrc, vUv + uDir*1.3846153846)*0.3162162162;\n' +
+    '  c += texture(uSrc, vUv - uDir*1.3846153846)*0.3162162162;\n' +
+    '  c += texture(uSrc, vUv + uDir*3.2307692308)*0.0702702703;\n' +
+    '  c += texture(uSrc, vUv - uDir*3.2307692308)*0.0702702703;\n' +
+    '  outColor = c;\n' +
     '}\n';
 
-  /* Composite: the visual identity. Three texture taps and one hash — no
-     loops, no noise, nothing that scales with screen area beyond the fetches. */
-  var FRAG_COMP =
+  var FRAG_RESOLVE =
     '#version 300 es\nprecision highp float;\n' +
     'in vec2 vUv; out vec4 outColor;\n' +
-    'uniform sampler2D uDye, uGround; uniform vec2 uTexel;\n' +
-    'uniform vec3 uBg; uniform float uTime, uGrain, uHaze, uStrength, uAtmo;\n' +
-
+    'uniform sampler2D uAcc; uniform float uDensity, uStrength, uVeil, uGlow;\n' +
+    'vec3 oklabToLinear(vec3 c){\n' +
+    '  float l = c.x + 0.3963377774*c.y + 0.2158037573*c.z;\n' +
+    '  float m = c.x - 0.1055613458*c.y - 0.0638541728*c.z;\n' +
+    '  float s = c.x - 0.0894841775*c.y - 1.2914855480*c.z;\n' +
+    '  l = l*l*l; m = m*m*m; s = s*s*s;\n' +
+    '  return vec3(4.0767416621*l - 3.3077115913*m + 0.2309699292*s,\n' +
+    '             -1.2684380046*l + 2.6097574011*m - 0.3413193965*s,\n' +
+    '             -0.0041960863*l - 0.7034186147*m + 1.7076147010*s);\n' +
+    '}\n' +
+    'vec3 toSrgb(vec3 c){ c = max(c, 0.0); return mix(c*12.92, 1.055*pow(c, vec3(1.0/2.4)) - 0.055, step(0.0031308, c)); }\n' +
     'void main(){\n' +
-    // ONE tap. The dye arrives already blurred at sim resolution, where a pass
-    // costs ~14k pixels; a tent here would cost four extra fetches per SCREEN
-    // pixel (~160k+). Soften where pixels are cheap, sample where they are not.
-    '  vec3 dye = texture(uDye, vUv).rgb;\n' +
-    // The separate half-resolution bloom buffer was the coarsest thing on
-    // screen (40x88 stretched to a 1080 panel) and is redundant now that the
-    // dye is properly diffused - its lift folds straight into the dye.
-    '  vec3 c = dye * (1.0 + uHaze * 1.85);\n' +
-    '  c *= uStrength * (0.64 + 0.20*uAtmo);\n' +
-    '  c += uBg * (0.72 + 0.85*texture(uGround, vUv).r);\n' +
-    // Tone map LUMINANCE and rescale, so chromaticity is preserved exactly: a
-    // hard impact blooms as saturated colour and can never wash toward white,
-    // which is what a per-channel shoulder did.
-    '  float L = dot(c, vec3(0.2126, 0.7152, 0.0722));\n' +
-    '  float Lm = L / (1.0 + L * 1.45);\n' +
-    '  c *= Lm / max(L, 1e-4);\n' +          // soft clip, no hard highlights
-    // vignette in-shader: replaces a whole full-screen composited CSS layer
-    '  vec2 vd = (vUv - vec2(0.5, 0.55)) * vec2(1.15, 1.0);\n' +
-    '  c *= 1.0 - smoothstep(0.34, 0.78, dot(vd, vd)) * 0.46;\n' +
-    '  outColor = vec4(max(c, 0.0), 1.0);\n' +
+    '  vec4 a = texture(uAcc, vUv);\n' +
+    '  if (a.w < 1e-4) { outColor = vec4(0.0); return; }\n' +
+    '  vec3 lab = a.xyz / a.w; lab.x = min(lab.x, 0.86); vec3 col = toSrgb(oklabToLinear(lab));\n' +
+    '  float cover = 1.0 - exp(-a.w*uDensity);\n' +
+    '  vec2 vd = (vUv - vec2(0.5, 0.52))*vec2(1.12, 1.0);\n' +
+    '  cover *= 1.0 - smoothstep(0.14, 0.7, dot(vd, vd))*0.45;\n' +
+    '  float alpha = cover*uStrength;\n' +
+    '  outColor = vec4(col*alpha*(1.0 + 0.5*uGlow), alpha*uVeil);\n' +
     '}\n';
 
-  var gl = null, canvas = null;
-  var progVel = null, progAdv = null, progSplat = null, progComp = null, progGround = null, progBlur = null;
-  var vao = null, quad = null;
-  var vel = null, dye = null, ground = null, blurA = null, blurB = null;
-  var blurW = 1, blurH2 = 1;
-  var velW = 1, velH = 1;   // velocity runs at half the dye resolution
-  var GROUND_W = 160, GROUND_H = 160, groundAge = 1e9;
-  // Widening strides compose into one very wide, properly weighted Gaussian for
-  // three cheap passes: a fully diffuse field has no fine structure left to
-  // alias when it is magnified onto the panel.
-  var BLUR_STRIDES = [1.0, 2.0, 4.0];   // at half res these are 2/4/8 dye texels   // seconds since last ground refresh
-  var simW = 1, simH = 1, dispW = 1, dispH = 1, dpr = 1;
-  var cssWLast = 0, cssHLast = 0;   // true CSS size, free of any quality scaling
-  var time = 0, ok = false, listening = false;
+  /* Full-resolution passes are a single fetch: ground, and the resolved aura plus grain. */
+  var FRAG_COPY =
+    '#version 300 es\nprecision mediump float;\n' +
+    'in vec2 vUv; out vec4 outColor; uniform sampler2D uSrc;\n' +
+    'void main(){ outColor = texture(uSrc, vUv); }\n';
+  var FRAG_COMP =
+    '#version 300 es\nprecision highp float;\n' +
+    'in vec2 vUv; out vec4 outColor; uniform sampler2D uSrc; uniform float uTime;\n' + HASH +
+    'void main(){ vec4 c = texture(uSrc, vUv);\n' +
+    '  outColor = vec4(c.rgb + (hash(gl_FragCoord.xy + fract(uTime*3.7)*61.0) - 0.5)*(3.0/255.0), c.a); }\n';
 
-  function compile(vsSrc, fsSrc) {
+  var gl = null, canvas = null, ok = false, listening = false;
+  var progGround, progShape, progSplat, progBlur, progResolve, progCopy, progComp;
+  var quadBuf = null, fullBuf = null, shapeBuf = null, splatBuf = null, vaoShape = null, vaoSplat = null, vaoFull = null;
+  var acc = null, blurA = null, blurB = null, ground = null, groundAge = 1e9, GROUND_W = 160;
+  var cssW = 1, cssH = 1, dpr = 1, renderScale = 1, bloom = true, lowPower = false;
+  var dispW = 1, dispH = 1, auraW = 1, auraH = 1;
+  var time = 0;
+  var SHAPE_FLOATS = 16, SPLAT_FLOATS = 8, MAX_SHAPES = 512, MAX_SPLATS = 1024;
+  var shapeData = new Float32Array(MAX_SHAPES*SHAPE_FLOATS), splatData = new Float32Array(MAX_SPLATS*SPLAT_FLOATS);
+  var swarms = new Map(), motes = [], MAX_MOTES = 120;
+  var labCache = new Map(), rgbCache = new Map();
+
+  function hexRgb(hex) {
+    var v = rgbCache.get(hex);
+    if (v) return v;
+    var n = parseInt(String(hex).replace('#', ''), 16) || 0;
+    v = [((n >> 16) & 255)/255, ((n >> 8) & 255)/255, (n & 255)/255];
+    rgbCache.set(hex, v); return v;
+  }
+  function hexLab(hex) {
+    var v = labCache.get(hex);
+    if (v) return v;
+    var c = hexRgb(hex).map(function (x) { return x <= 0.04045 ? x/12.92 : Math.pow((x + 0.055)/1.055, 2.4); });
+    var l = Math.cbrt(0.4122214708*c[0] + 0.5363325363*c[1] + 0.0514459929*c[2]);
+    var m = Math.cbrt(0.2119034982*c[0] + 0.6806995451*c[1] + 0.1073969566*c[2]);
+    var s = Math.cbrt(0.0883024619*c[0] + 0.2817188376*c[1] + 0.6299787005*c[2]);
+    v = [0.2104542553*l + 0.7936177850*m - 0.0040720468*s,
+         1.9779984951*l - 2.4285922050*m + 0.4505937099*s,
+         0.0259040371*l + 0.7827717662*m - 0.8086757660*s];
+    labCache.set(hex, v); return v;
+  }
+
+  function compile(vs, fs) {
     function sh(type, src) {
-      var s = gl.createShader(type);
-      gl.shaderSource(s, src); gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { gl.deleteShader(s); return null; }
+      var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error('monad aura shader', gl.getShaderInfoLog(s)); return null; }
       return s;
     }
-    var v = sh(gl.VERTEX_SHADER, vsSrc), f = sh(gl.FRAGMENT_SHADER, fsSrc);
+    var v = sh(gl.VERTEX_SHADER, vs), f = sh(gl.FRAGMENT_SHADER, fs);
     if (!v || !f) return null;
-    var p = gl.createProgram();
-    gl.attachShader(p, v); gl.attachShader(p, f);
-    gl.bindAttribLocation(p, 0, 'aPos');
-    gl.linkProgram(p);
-    gl.deleteShader(v); gl.deleteShader(f);
-    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { gl.deleteProgram(p); return null; }
+    var p = gl.createProgram(); gl.attachShader(p, v); gl.attachShader(p, f); gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error('monad aura link', gl.getProgramInfoLog(p)); return null; }
     var u = {}, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
-    for (var i = 0; i < n; i++) {
-      var info = gl.getActiveUniform(p, i);
-      u[info.name] = gl.getUniformLocation(p, info.name);
-    }
+    for (var i = 0; i < n; i++) { var name = gl.getActiveUniform(p, i).name; u[name] = gl.getUniformLocation(p, name); }
     return { p: p, u: u };
   }
 
-  function makeTarget(w, h, internal, format, type) {
+  function makeTarget(w, h) {
     var tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, type, null);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -1194,346 +1149,646 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
     var complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
-    gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    // free both handles rather than leaking a texture+FBO per failed attempt
-    if (!complete) { gl.deleteTexture(tex); gl.deleteFramebuffer(fb); return null; }
-    return { tex: tex, fb: fb, w: w, h: h };
+    return complete ? { tex: tex, fb: fb, w: w, h: h } : null;
   }
-
   function dropTarget(t) { if (t) { gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fb); } }
 
-  function makePair(w, h, internal, format, type) {
-    var a = makeTarget(w, h, internal, format, type);
-    var b = makeTarget(w, h, internal, format, type);
-    if (!a || !b) { dropTarget(a); dropTarget(b); return null; }
-    return { read: a, write: b, swap: function () { var t = this.read; this.read = this.write; this.write = t; } };
+  function instanced(prog, buf, stride, names) {
+    var v = gl.createVertexArray(); gl.bindVertexArray(v);
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+    var ap = gl.getAttribLocation(prog.p, 'aPos');
+    gl.enableVertexAttribArray(ap); gl.vertexAttribPointer(ap, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    names.forEach(function (name, i) {
+      var loc = gl.getAttribLocation(prog.p, name);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 4, gl.FLOAT, false, stride*4, i*16);
+      gl.vertexAttribDivisor(loc, 1);
+    });
+    gl.bindVertexArray(null);
+    return v;
   }
 
-  function destroyPair(p) {
-    if (!p) return;
-    [p.read, p.write].forEach(function (t) {
-      if (!t) return;
-      gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fb);
+  function init(target, options) {
+    if (ok) return true;
+    lowPower = !!(options && options.lowPower);
+    canvas = target;
+    if (!listening) {
+      listening = true;
+      canvas.addEventListener('webglcontextlost', function (e) {
+        e.preventDefault(); ok = false; api.available = false;
+        acc = blurA = blurB = ground = null;
+        if (typeof api.onContextLost === 'function') api.onContextLost();
+      }, false);
+      canvas.addEventListener('webglcontextrestored', function () {
+        gl = null;
+        if (init(canvas, { lowPower: lowPower }) && typeof api.onContextRestored === 'function') api.onContextRestored();
+      }, false);
+    }
+    gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false,
+      premultipliedAlpha: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
+    if (!gl) return false;
+    // RGBA16F is only colour-renderable with one of these extensions.
+    if (!gl.getExtension('EXT_color_buffer_float') && !gl.getExtension('EXT_color_buffer_half_float')) { gl = null; return false; }
+    progGround = compile(VERT_FULL, FRAG_GROUND);
+    progShape = compile(VERT_SHAPE, FRAG_SHAPE);
+    progSplat = compile(VERT_SPLAT, FRAG_SPLAT);
+    progBlur = compile(VERT_FULL, FRAG_BLUR);
+    progResolve = compile(VERT_FULL, FRAG_RESOLVE);
+    progCopy = compile(VERT_FULL, FRAG_COPY);
+    progComp = compile(VERT_FULL, FRAG_COMP);
+    if (!progGround || !progShape || !progSplat || !progBlur || !progResolve || !progCopy || !progComp) { gl = null; return false; }
+
+    quadBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
+    fullBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, fullBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+    vaoFull = gl.createVertexArray(); gl.bindVertexArray(vaoFull);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+    shapeBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, shapeBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, shapeData.byteLength, gl.DYNAMIC_DRAW);
+    splatBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, splatBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, splatData.byteLength, gl.DYNAMIC_DRAW);
+    vaoShape = instanced(progShape, shapeBuf, SHAPE_FLOATS, ['iA', 'iB', 'iC', 'iD']);
+    vaoSplat = instanced(progSplat, splatBuf, SPLAT_FLOATS, ['iP', 'iL']);
+    ok = true; api.available = true;
+    if (cssW > 1) resize(cssW, cssH, dpr);
+    return true;
+  }
+
+  function allocate() {
+    dropTarget(acc); dropTarget(blurA); dropTarget(blurB); dropTarget(ground);
+    var div = lowPower ? 8 : 6;
+    auraW = Math.max(16, Math.min(lowPower ? 220 : 360, Math.round(cssW/div*Math.sqrt(renderScale))));
+    auraH = Math.max(16, Math.round(auraW*cssH/cssW));
+    acc = makeTarget(auraW, auraH); blurA = makeTarget(auraW, auraH); blurB = makeTarget(auraW, auraH);
+    ground = makeTarget(GROUND_W, Math.max(8, Math.round(GROUND_W*cssH/cssW))); groundAge = 1e9;
+    if (!acc || !blurA || !blurB || !ground) { ok = false; api.available = false; if (typeof api.onContextLost === 'function') api.onContextLost(); }
+  }
+
+  function resize(w, h, ratio) {
+    cssW = Math.max(1, w); cssH = Math.max(1, h); dpr = ratio || 1;
+    if (!ok) return;
+    var px = Math.min(dpr, 3);
+    dispW = Math.max(1, Math.round(cssW*px)); dispH = Math.max(1, Math.round(cssH*px));
+    if (canvas.width !== dispW) canvas.width = dispW;
+    if (canvas.height !== dispH) canvas.height = dispH;
+    allocate();
+  }
+
+  function quality(step) {
+    if (!step) return;
+    bloom = !!step.bloom;
+    var s = Math.max(0.3, Math.min(1, +step.scale || 1));
+    if (s !== renderScale) { renderScale = s; if (ok) allocate(); }
+  }
+
+  /* ---- particle life ---------------------------------------------------- */
+  function rnd(seed) { var x = Math.sin(seed*127.1 + 311.7)*43758.5453; return x - Math.floor(x); }
+
+  function swarmFor(o) {
+    var s = swarms.get(o.uid);
+    if (s) return s;
+    var K = lowPower ? 5 : 7;
+    s = { k: K, x: new Float32Array(K), y: new Float32Array(K), vx: new Float32Array(K), vy: new Float32Array(K),
+      ang: new Float32Array(K), spin: new Float32Array(K), rad: new Float32Array(K), size: new Float32Array(K),
+      stiff: new Float32Array(K), seen: 0 };
+    for (var i = 0; i < K; i++) {
+      var r = rnd(o.uid*13 + i);
+      s.ang[i] = (i/K)*6.2832 + r;
+      s.spin[i] = (0.12 + 0.4*rnd(o.uid*7 + i*3))*(i % 2 ? -1 : 1);
+      s.rad[i] = 0.2 + 1.0*rnd(o.uid*5 + i*11);
+      s.size[i] = 0.75 + 0.9*rnd(o.uid*3 + i*17);
+      s.stiff[i] = 2.2 + 7.0*rnd(o.uid*19 + i*5);
+      s.x[i] = o.x; s.y[i] = o.y;
+    }
+    swarms.set(o.uid, s);
+    return s;
+  }
+
+  function flow(x, y, t, out) {
+    var a = Math.sin(x*0.0061 + t*0.21) + Math.sin(y*0.0047 - t*0.17 + 1.3);
+    var b = Math.cos(y*0.0058 + t*0.19) + Math.cos(x*0.0043 + t*0.23 + 2.1);
+    out[0] = b; out[1] = -a;
+  }
+  var fl = [0, 0];
+
+  function stepSwarms(orbs, dt, look) {
+    var frame = (stepSwarms.n = (stepSwarms.n || 0) + 1);
+    for (var j = 0; j < orbs.length; j++) {
+      var o = orbs[j], s = swarmFor(o);
+      s.seen = frame;
+      var energy = Math.min(2, (o.hit || 0) + (o.resonance || 0) + 1.4*(o.ring || 0));
+      var reach = o.r*(1 + 0.55*energy);
+      for (var i = 0; i < s.k; i++) {
+        var a = s.ang[i] + time*s.spin[i];
+        var tx = o.x + Math.cos(a)*s.rad[i]*reach, ty = o.y + Math.sin(a)*s.rad[i]*reach;
+        var k = s.stiff[i], c = 2*Math.sqrt(k)*0.7;
+        flow(s.x[i], s.y[i], time, fl);
+        var drift = 10 + 18*look.wind;
+        s.vx[i] += (k*(tx - s.x[i]) - c*s.vx[i] + fl[0]*drift)*dt;
+        s.vy[i] += (k*(ty - s.y[i]) - c*s.vy[i] + fl[1]*drift)*dt;
+        s.x[i] += s.vx[i]*dt; s.y[i] += s.vy[i]*dt;
+      }
+    }
+    swarms.forEach(function (s, uid) { if (s.seen !== frame) swarms.delete(uid); });
+    for (var m = motes.length - 1; m >= 0; m--) {
+      var p = motes[m];
+      p.age += dt;
+      if (p.age >= p.life) { motes[m] = motes[motes.length - 1]; motes.pop(); continue; }
+      if (p.to) {
+        var u = Math.min(1, p.age/p.life), e = u*u*(3 - 2*u);
+        p.x = p.fx + (p.to.x - p.fx)*e; p.y = p.fy + (p.to.y - p.fy)*e;
+      } else {
+        flow(p.x, p.y, time, fl);
+        var drag = Math.exp(-1.6*dt);
+        p.vx = p.vx*drag + fl[0]*14*dt; p.vy = p.vy*drag + fl[1]*14*dt;
+        p.x += p.vx*dt; p.y += p.vy*dt;
+      }
+    }
+  }
+
+  function impulse(o, impact) {
+    if (!ok) return;
+    var s = swarmFor(o), kick = Math.min(420, 30 + impact*2.2);
+    for (var i = 0; i < s.k; i++) {
+      var dx = s.x[i] - o.x, dy = s.y[i] - o.y, d = Math.hypot(dx, dy) || 1;
+      var a = s.ang[i] + time*s.spin[i];
+      if (d < 2) { dx = Math.cos(a); dy = Math.sin(a); d = 1; }
+      s.vx[i] += dx/d*kick; s.vy[i] += dy/d*kick;
+    }
+    var n = Math.min(3, 1 + Math.floor(impact/55));
+    for (var j = 0; j < n && motes.length < MAX_MOTES; j++) {
+      var ang = Math.random()*6.2832, sp = 40 + impact*1.3*(0.6 + 0.6*Math.random());
+      motes.push({ x: o.x + Math.cos(ang)*o.r*0.7, y: o.y + Math.sin(ang)*o.r*0.7,
+        vx: Math.cos(ang)*sp + (o.vx || 0)*0.4, vy: Math.sin(ang)*sp + (o.vy || 0)*0.4,
+        age: 0, life: 2.2 + 1.6*Math.random(), size: o.r*0.9, weight: Math.min(1.4, 0.35 + impact/110), color: o.color, to: null });
+    }
+  }
+
+  function link(a, b, strength) {
+    if (!ok || motes.length >= MAX_MOTES) return;
+    motes.push({ x: a.x, y: a.y, fx: a.x, fy: a.y, vx: 0, vy: 0, age: 0, life: 0.9, size: a.r*0.7,
+      weight: 0.5 + 0.6*(strength || 0.5), color: a.color, to: b });
+  }
+
+  function burst(list, at) {
+    if (!ok || !list) return;
+    var cx = at && at.x != null ? at.x : cssW*0.5, cy = at && at.y != null ? at.y : cssH*0.5;
+    list.forEach(function (hex, i) {
+      var a = i/list.length*6.2832;
+      for (var k = 0; k < 2 && motes.length < MAX_MOTES; k++) {
+        var sp = 120 + 90*k;
+        motes.push({ x: cx, y: cy, vx: Math.cos(a)*sp, vy: Math.sin(a)*sp, age: 0, life: 3.2, size: Math.min(cssW, cssH)*0.06,
+          weight: 1.1, color: hex, to: null });
+      }
     });
   }
 
-  function drawQuad() { gl.bindVertexArray(vao); gl.drawArrays(gl.TRIANGLES, 0, 3); }
+  /* ---- drawing ---------------------------------------------------------- */
+  function pushSplat(n, x, y, sigma, w, lab, glow) {
+    if (n >= MAX_SPLATS) return n;
+    var b = n*SPLAT_FLOATS;
+    splatData[b] = x; splatData[b+1] = y; splatData[b+2] = sigma; splatData[b+3] = w;
+    splatData[b+4] = lab[0]; splatData[b+5] = lab[1]; splatData[b+6] = lab[2]; splatData[b+7] = glow;
+    return n + 1;
+  }
+  function pushShape(n, ax, ay, ar, kind, b0, b1, b2, b3, rgb, c3, d0, d1) {
+    if (n >= MAX_SHAPES) return n;
+    var b = n*SHAPE_FLOATS;
+    shapeData[b] = ax; shapeData[b+1] = ay; shapeData[b+2] = ar; shapeData[b+3] = kind;
+    shapeData[b+4] = b0; shapeData[b+5] = b1; shapeData[b+6] = b2; shapeData[b+7] = b3;
+    shapeData[b+8] = rgb[0]; shapeData[b+9] = rgb[1]; shapeData[b+10] = rgb[2]; shapeData[b+11] = c3;
+    shapeData[b+12] = d0; shapeData[b+13] = d1; shapeData[b+14] = 0; shapeData[b+15] = 0;
+    return n + 1;
+  }
+  var WHITE = [1, 1, 1];
 
-  function bindTex(unit, tex) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); }
-
-  function allocate() {
-    destroyPair(vel); destroyPair(dye);
-    velW = Math.max(8, simW >> 1); velH = Math.max(8, simH >> 1);
-    vel = makePair(velW, velH, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
-    dye = makePair(simW, simH, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
-    // Blur at HALF the dye resolution: four times cheaper per pass AND wider
-    // per tap, and the result is so smooth that upsampling it shows nothing.
-    blurW = Math.max(8, simW >> 1); blurH2 = Math.max(8, simH >> 1);
-    dropTarget(blurA); dropTarget(blurB);
-    blurA = makeTarget(blurW, blurH2, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
-    blurB = makeTarget(blurW, blurH2, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
-    if (!ground) ground = makeTarget(GROUND_W, GROUND_H, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
-    groundAge = 1e9;
-    return !!(vel && dye && ground && blurA && blurB);
+  function drawFull() {
+    gl.bindVertexArray(vaoFull);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
-  /* A lost context turns every GL call into a silent no-op and leaves an opaque
-     black canvas covering the instrument. Drop back to the 2D atmosphere until
-     the browser hands the context back. */
-  function handleLost(e) {
-    e.preventDefault();
-    ok = false; api.available = false;
-    vel = dye = ground = null;
-    progVel = progAdv = progSplat = progComp = progGround = null;
-    vao = quad = null;
-    if (typeof api.onContextLost === 'function') api.onContextLost();
-  }
-  function handleRestored() {
-    if (!canvas) return;
-    gl = null;
-    if (init(canvas) && typeof api.onContextRestored === 'function') api.onContextRestored();
-  }
+  /* scene: {orbs, spawn, selected, waves:[{x,y,r,fade}], links:[{a,b,alpha}], background, look:{atmo,blur,strength,haze,mix,wind}} */
+  function frame(scene, dt) {
+    if (!ok || !gl) return;
+    time += Math.min(0.05, Math.max(0, dt));
+    var look = scene.look, orbs = scene.orbs;
+    var all = scene.spawn ? orbs.concat([scene.spawn]) : orbs;
+    stepSwarms(all, Math.min(0.033, dt), look);
 
-  function init(target) {
-    if (ok) return true;
-    try {
-      canvas = target;
-      if (!listening) {
-        listening = true;
-        canvas.addEventListener('webglcontextlost', handleLost, false);
-        canvas.addEventListener('webglcontextrestored', handleRestored, false);
-      }
-      gl = canvas.getContext('webgl2', {
-        alpha: true, antialias: false, depth: false, stencil: false,
-        premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance'
-      });
-      if (!gl) return false;
-      // RGBA16F is only colour-renderable with this extension.
-      if (!gl.getExtension('EXT_color_buffer_float') && !gl.getExtension('EXT_color_buffer_half_float')) {
-        gl = null; return false;
-      }
-      progVel = compile(VERT, FRAG_VEL);
-      progAdv = compile(VERT, FRAG_ADV);
-      progSplat = compile(VERT, FRAG_SPLAT);
-      progComp = compile(VERT, FRAG_COMP);
-      progGround = compile(VERT, FRAG_GROUND);
-      progBlur = compile(VERT, FRAG_BLUR);
-      if (!progVel || !progAdv || !progSplat || !progComp || !progGround || !progBlur) { gl = null; return false; }
-
-      quad = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, quad);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-      vao = gl.createVertexArray();
-      gl.bindVertexArray(vao);
-      gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-      gl.bindVertexArray(null);
-
-      gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
-      resize(canvas.clientWidth || 1, canvas.clientHeight || 1, global.devicePixelRatio || 1);
-      if (!vel || !dye || !ground || !blurA || !blurB) { gl = null; return false; }
-      ok = true;
-      api.available = true;
-      return true;
-    } catch (err) {
-      gl = null; ok = false; api.available = false;
-      return false;
-    }
-  }
-
-  function resize(cssW, cssH, ratio) {
-    if (!gl) return;
-    // Display composite is independent of quality. Softness lives in the sim
-    // (blurred dye), never as a stretched thumbnail of the whole ground.
-    // Phone: 2× of a 3× panel — bilinear upsample of a blurred field at 2×
-    // still reads soft; 1× × qScale 0.40 does not. Desktop keeps the 1.5 cap.
-    dpr = Math.min(ratio || 1, cssW < 700 ? 2 : 1.5);
-    cssWLast = cssW; cssHLast = cssH;
-    dispW = Math.max(1, Math.round(cssW * dpr));
-    dispH = Math.max(1, Math.round(cssH * dpr));
-    canvas.width = dispW; canvas.height = dispH;
-    // Sim only. Cap 256 phone / 512 desktop, then apply qScale. Floor the
-    // long edge at 128 so a quality step cannot collapse the field into a
-    // 64px thumbnail — but 160 flattened phone steps 0 and -1 to the same
-    // buffer, so the governor shed work that wasn't there.
-    var cap = cssW < 700 ? 256 : 512;
-    var long = Math.max(cssW, cssH);
-    var scale = Math.min(0.5, cap / Math.max(1, long)) * qScale;
-    var nw = Math.max(16, Math.round(cssW * scale));
-    var nh = Math.max(16, Math.round(cssH * scale));
-    var simLong = Math.max(nw, nh);
-    if (simLong < 128) {
-      var boost = 128 / Math.max(1, simLong);
-      nw = Math.max(16, Math.round(nw * boost));
-      nh = Math.max(16, Math.round(nh * boost));
-    }
-    if (nw !== simW || nh !== simH || !vel || !dye) {
-      simW = nw; simH = nh;
-      // A failed reallocation used to leave ok=true with null targets, so the
-      // next step() threw and took the whole frame loop with it.
-      if (!allocate()) {
-        ok = false; api.available = false;
-        if (typeof api.onContextLost === 'function') api.onContextLost();
-      }
-    }
-  }
-
-  /* One additive quad into the given pair's read target, scissored to the
-     splat's own footprint. A body-per-frame splat used to cost a FULL screen
-     pass each: 56 bodies x 2 targets = 112 full sim passes per frame. The
-     gaussian is negligible past 3 sigma, so only that box is touched. */
-  function injectScissor(t, px, py, halfX, halfY) {
-    var x0 = Math.floor((px - halfX) * t.w), x1 = Math.ceil((px + halfX) * t.w);
-    var y0 = Math.floor((py - halfY) * t.h), y1 = Math.ceil((py + halfY) * t.h);
-    x0 = Math.max(0, x0); y0 = Math.max(0, y0);
-    x1 = Math.min(t.w, x1); y1 = Math.min(t.h, y1);
-    if (x1 <= x0 || y1 <= y0) return null;      // entirely offscreen: skip the draw
-    return [x0, y0, x1 - x0, y1 - y0];
-  }
-
-  function inject(pair, isRing, px, py, value, radius, thickness) {
-    if (!gl || !pair) return;
-    var t = pair.read;
-    var reach = isRing ? (radius + 3.0 * (thickness || 0.02)) : 3.0 * radius;
-    var box = injectScissor(t, px, py, reach, reach * (t.w / t.h));
-    if (!box) return;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
-    gl.viewport(0, 0, t.w, t.h);
-    gl.enable(gl.SCISSOR_TEST); gl.scissor(box[0], box[1], box[2], box[3]);
-    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
-    gl.useProgram(progSplat.p);
-    var u = progSplat.u;
-    gl.uniform2f(u.uPoint, px, py);
-    gl.uniform2f(u.uAspect, 1.0, t.h / t.w);
-    gl.uniform3f(u.uValue, value[0], value[1], value[2]);
-    gl.uniform1f(u.uRadius, radius);
-    gl.uniform1f(u.uRing, isRing ? 1.0 : 0.0);
-    gl.uniform1f(u.uThick, thickness || 0.02);
-    drawQuad();
+    // ground: very low frequency, so it is rendered small and a few times a second
     gl.disable(gl.BLEND);
-    gl.disable(gl.SCISSOR_TEST);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  }
-
-  function splat(x, y, dx, dy, rgb, radius, strength) {
-    if (!ok || !gl) return;
-    var w = dispW / dpr, h = dispH / dpr;
-    if (w <= 0 || h <= 0) return;
-    var px = x / w, py = 1.0 - y / h;
-    var r = Math.max(0.004, (radius || 20) / w);
-    var s = Math.max(0, strength || 0);
-    // velocity in sim px/s; the shader consumes texel-space offsets
-    var k = 0.00055 * s;   // px/s -> UV/s
-    inject(vel, false, px, py, [dx * k, -dy * k, 0], r, 0);
-    inject(dye, false, px, py, [rgb[0] * s, rgb[1] * s, rgb[2] * s], r, 0);
-  }
-
-  function ring(x, y, radius, strength) {
-    if (!ok || !gl) return;
-    var w = dispW / dpr, h = dispH / dpr;
-    if (w <= 0 || h <= 0) return;
-    var px = x / w, py = 1.0 - y / h;
-    var r = Math.max(0.004, (radius || 20) / w);
-    var s = Math.max(0, strength || 0) * 0.09;   // UV/s
-    inject(vel, true, px, py, [s, s, 0], r, Math.max(0.012, r * 0.5));
-  }
-
-  function step(dt) {
-    if (!ok || !gl) return;
-    var d = Math.min(Math.max(dt || 0, 0), 1 / 30);
-    if (d <= 0) return;
-    time += d; groundAge += d;
-    var texel = [1 / simW, 1 / simH];
-
-    // 1) velocity: self-advect, decay, re-inject curl
-    gl.bindFramebuffer(gl.FRAMEBUFFER, vel.write.fb);
-    gl.viewport(0, 0, velW, velH);
-    gl.useProgram(progVel.p);
-    bindTex(0, vel.read.tex);
-    gl.uniform1i(progVel.u.uVel, 0);
-    gl.uniform2f(progVel.u.uTexel, texel[0], texel[1]);
-    gl.uniform1f(progVel.u.uDt, d);
-    gl.uniform1f(progVel.u.uTime, time);
-    gl.uniform1f(progVel.u.uDecay, Math.exp(-0.55 * d));
-    gl.uniform1f(progVel.u.uCurl, 0.0075);
-    gl.uniform1f(progVel.u.uScale, 3.2);
-    drawQuad();
-    vel.swap();
-
-    // 2) dye: advect through the velocity field
-    gl.bindFramebuffer(gl.FRAMEBUFFER, dye.write.fb);
-    gl.viewport(0, 0, simW, simH);
-    gl.useProgram(progAdv.p);
-    bindTex(0, dye.read.tex); bindTex(1, vel.read.tex);
-    gl.uniform1i(progAdv.u.uSrc, 0);
-    gl.uniform1i(progAdv.u.uVel, 1);
-    gl.uniform2f(progAdv.u.uTexel, texel[0], texel[1]);
-    gl.uniform1f(progAdv.u.uDt, d);
-    gl.uniform1f(progAdv.u.uDiss, Math.exp(-0.85 * d));
-    drawQuad();
-    dye.swap();
-
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  }
-
-  // Runtime quality, driven by the host's frame budget.
-  var qBloom = true, qScale = 1;
-  function quality(o) {
-    if (!o) return { bloom: qBloom, scale: qScale };
-    if (typeof o.bloom === 'boolean') qBloom = o.bloom;
-    if (typeof o.scale === 'number' && o.scale !== qScale) {
-      qScale = Math.max(0.4, Math.min(1, o.scale));
-      // qScale now only resizes sim/blur/vel. cssWLast is the true CSS size
-      // (never quality-scaled), so feeding it back cannot compound.
-      if (canvas) resize(cssWLast || (dispW / dpr), cssHLast || (dispH / dpr), dpr);
-    }
-    return { bloom: qBloom, scale: qScale };
-  }
-
-  function render(p) {
-    if (!ok || !gl) return;
-    p = p || {};
-    var bg = p.background || [0.13, 0.07, 0.01];
-
-    // The ground drifts on a ~100s cycle. Wall-clock gated, so its speed does
-    // not depend on frame rate.
-    if (groundAge > 0.16) {
-      groundAge = 0;
+    groundAge += dt;
+    if (groundAge > 0.2 || scene.background !== frame.bg) {
+      groundAge = 0; frame.bg = scene.background;
       gl.bindFramebuffer(gl.FRAMEBUFFER, ground.fb);
-      gl.viewport(0, 0, GROUND_W, GROUND_H);
+      gl.viewport(0, 0, ground.w, ground.h);
       gl.useProgram(progGround.p);
+      var bg = hexRgb(scene.background);
+      gl.uniform3f(progGround.u.uBg, bg[0], bg[1], bg[2]);
       gl.uniform1f(progGround.u.uTime, time);
-      gl.uniform1f(progGround.u.uWarp, p.warp === undefined ? 0.6 : p.warp);
-      drawQuad();
+      gl.uniform2f(progGround.u.uRes, cssW, cssH);
+      drawFull();
     }
-
-    // Separable Gaussian for DISPLAY ONLY. Feeding the blur back into the dye
-    // state compounds as numerical diffusion every frame and flattens every
-    // colour into one grey mass; the state stays sharp and only what reaches
-    // the screen is softened.
-    gl.useProgram(progBlur.p);
-    gl.viewport(0, 0, blurW, blurH2);
-    var srcTex = dye.read.tex;
-    for (var pass = 0; pass < BLUR_STRIDES.length; pass++) {
-      gl.uniform1f(progBlur.u.uStride, BLUR_STRIDES[pass]);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, blurA.fb);
-      bindTex(0, srcTex);
-      gl.uniform1i(progBlur.u.uSrc, 0);
-      gl.uniform2f(progBlur.u.uDir, 1 / blurW, 0);
-      drawQuad();
-      gl.bindFramebuffer(gl.FRAMEBUFFER, blurB.fb);
-      bindTex(0, blurA.tex);
-      gl.uniform2f(progBlur.u.uDir, 0, 1 / blurH2);
-      drawQuad();
-      srcTex = blurB.tex;
-    }
-
-    // Composite: three texture taps and one hash.
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, dispW, dispH);
-    gl.useProgram(progComp.p);
-    bindTex(0, blurB.tex); bindTex(1, ground.tex);
-    var u = progComp.u;
-    gl.uniform1i(u.uDye, 0);
-    gl.uniform1i(u.uGround, 1);
-    gl.uniform2f(u.uTexel, 1 / simW, 1 / simH);
-    gl.uniform3f(u.uBg, bg[0], bg[1], bg[2]);
-    gl.uniform1f(u.uTime, time);
-    gl.uniform1f(u.uGrain, p.grain === undefined ? 0.5 : p.grain);
-    gl.uniform1f(u.uHaze, qBloom ? (p.haze === undefined ? 0.25 : p.haze) : 0.0);
-    gl.uniform1f(u.uStrength, p.strength === undefined ? 0.85 : p.strength);
-    gl.uniform1f(u.uAtmo, p.atmosphere === undefined ? 3.4 : p.atmosphere);
-    drawQuad();
-  }
+    gl.useProgram(progCopy.p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ground.tex);
+    gl.uniform1i(progCopy.u.uSrc, 0);
+    drawFull();
 
-  function dispose() {
-    if (!gl) { ok = false; return; }
-    destroyPair(vel); destroyPair(dye);
-    dropTarget(ground); ground = null;
-    dropTarget(blurA); blurA = null; dropTarget(blurB); blurB = null;
-    [progVel, progAdv, progSplat, progComp, progGround, progBlur].forEach(function (pr) { if (pr) gl.deleteProgram(pr.p); });
-    if (quad) gl.deleteBuffer(quad);
-    if (vao) gl.deleteVertexArray(vao);
-    vel = dye = null; progVel = progAdv = progSplat = progComp = progGround = progBlur = null;
-    gl = null; ok = false; api.available = false;
+    // bodies, rings, links
+    var n = 0;
+    for (var w = 0; w < scene.waves.length; w++) {
+      var wv = scene.waves[w];
+      n = pushShape(n, wv.x, wv.y, wv.r, 1, 1 + wv.fade*1.4, 0, Math.min(0.18, 0.16*wv.fade), 0, WHITE, 0, 0, 0);
+    }
+    for (var l = 0; l < scene.links.length; l++) {
+      var ln = scene.links[l];
+      n = pushShape(n, ln.a.x, ln.a.y, 0.7 + ln.alpha*0.8, 2, ln.b.x, ln.b.y, 0.025 + 0.16*ln.alpha, 0, WHITE, 0, 0, 0);
+    }
+    for (var i = 0; i < all.length; i++) {
+      var o = all[i];
+      n = pushShape(n, o.x, o.y, o.r, 0, o.ring || 0, o.resonance || 0, o === scene.selected ? 1 : 0, o.lobes || 3,
+        hexRgb(o.color), 0, o.hit || 0, (o.uid*2.399) % 6.2832);
+    }
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(progShape.p);
+    gl.uniform2f(progShape.u.uView, cssW, cssH);
+    gl.uniform1f(progShape.u.uPx, dispW/cssW);
+    gl.uniform1f(progShape.u.uTime, time);
+    gl.bindBuffer(gl.ARRAY_BUFFER, shapeBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, shapeData, 0, n*SHAPE_FLOATS);
+    gl.bindVertexArray(vaoShape);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, n);
+
+    // aura: accumulate
+    var m = 0, atmo = look.atmo;
+    for (var j = 0; j < all.length; j++) {
+      var ob = all[j], s = swarms.get(ob.uid);
+      if (!s) continue;
+      var lab = hexLab(ob.color), energy = Math.min(2, (ob.hit || 0) + (ob.resonance || 0) + 1.4*(ob.ring || 0));
+      var sig = ob.r*atmo*0.32*(1 + 0.35*energy), wgt = (0.55 + 0.6*energy)/s.k*Math.sqrt(ob.r/30);
+      var glow = 1 + 0.18*energy;
+      for (var q = 0; q < s.k; q++) m = pushSplat(m, s.x[q], s.y[q], sig*s.size[q], wgt*(0.7 + 0.6*s.size[q]), lab, glow);
+    }
+    for (var t = 0; t < motes.length; t++) {
+      var p = motes[t], u = p.age/p.life;
+      var grow = 1 + 1.6*u, fade = Math.pow(1 - u, 1.6)*Math.min(1, p.age*8);
+      m = pushSplat(m, p.x, p.y, p.size*atmo*0.32*grow, p.weight*fade*0.5, hexLab(p.color), 1.1);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, acc.fb);
+    gl.viewport(0, 0, auraW, auraH);
+    gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.useProgram(progSplat.p);
+    gl.uniform2f(progSplat.u.uView, cssW, cssH);
+    gl.bindBuffer(gl.ARRAY_BUFFER, splatBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, splatData, 0, m*SPLAT_FLOATS);
+    gl.bindVertexArray(vaoSplat);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, m);
+
+    // aura: blur at its own resolution; widening strides compose one broad Gaussian
+    gl.disable(gl.BLEND);
+    gl.useProgram(progBlur.p);
+    var src = acc, strides = bloom ? [1, 2, 4] : [1, 3];
+    var px = Math.max(0.5, look.blur/24);
+    for (var b = 0; b < strides.length; b++) {
+      var st = strides[b]*px;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, blurA.fb);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, src.tex);
+      gl.uniform1i(progBlur.u.uSrc, 0);
+      gl.uniform2f(progBlur.u.uDir, st/auraW, 0);
+      drawFull();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, blurB.fb);
+      gl.bindTexture(gl.TEXTURE_2D, blurA.tex);
+      gl.uniform2f(progBlur.u.uDir, 0, st/auraH);
+      drawFull();
+      src = blurB;
+    }
+
+    // aura: resolve colour and coverage at its own resolution
+    gl.bindFramebuffer(gl.FRAMEBUFFER, blurA.fb);
+    gl.viewport(0, 0, auraW, auraH);
+    gl.useProgram(progResolve.p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, src.tex);
+    gl.uniform1i(progResolve.u.uAcc, 0);
+    var veil = look.mix === 'lighter' ? 0.0 : look.mix === 'screen' ? 0.55 : 1.0;
+    gl.uniform1f(progResolve.u.uDensity, 1.6);
+    gl.uniform1f(progResolve.u.uStrength, Math.min(1, look.strength*0.78));
+    gl.uniform1f(progResolve.u.uVeil, veil);
+    gl.uniform1f(progResolve.u.uGlow, look.haze*1.6 + (1 - veil)*0.4);
+    drawFull();
+
+    // aura: paint over the scene
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, dispW, dispH);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(progComp.p);
+    gl.bindTexture(gl.TEXTURE_2D, blurA.tex);
+    gl.uniform1i(progComp.u.uSrc, 0);
+    gl.uniform1f(progComp.u.uTime, time);
+    drawFull();
+    gl.bindVertexArray(null);
   }
 
   var api = {
     available: false,
     init: init,
     resize: resize,
-    splat: splat,
-    ring: ring,
-    step: step,
-    render: render,
     quality: quality,
-    info: function(){ return simW + 'x' + simH + ' dye, ' + blurW + 'x' + blurH2 + ' blur, ' + dispW + 'x' + dispH + ' out'; },
-    dispose: dispose
+    frame: frame,
+    impulse: impulse,
+    link: link,
+    burst: burst,
+    info: function () { return dispW + 'x' + dispH + ' out, ' + auraW + 'x' + auraH + ' aura, ' + swarms.size + ' swarms, ' + motes.length + ' motes'; }
   };
-  global.MonadFluid = api;
-
+  global.MonadAura = api;
 }(window));
+</script>
+
+<script type="text/x-monad-worklet" id="monad-engine">
+'use strict';
+const TAU=Math.PI*2,LN1000=6.907755278982137,MAXM=6,BLOCK=128;
+const isPrime=n=>{for(let d=2;d*d<=n;d++)if(n%d===0)return false;return n>1};
+const primeAtLeast=n=>{n=Math.max(2,Math.round(n));while(!isPrime(n))n++;return n};
+const pow2AtLeast=n=>{let p=1;while(p<n)p<<=1;return p};
+const softLimit=x=>x/(1+Math.abs(x));
+// Sylvester Hadamard row r of length n, used for orthogonal tap/injection signs.
+const hadamardSign=(r,c)=>{let b=r&c,p=0;while(b){p^=b&1;b>>=1}return p?-1:1};
+
+class Allpass{
+  constructor(len){this.buf=new Float32Array(len);this.len=len;this.i=0}
+  run(x,g){const b=this.buf,i=this.i,d=b[i],v=x-g*d;b[i]=v;this.i=i+1===this.len?0:i+1;return d+g*v}
+}
+
+class Svf{
+  constructor(){this.s1=0;this.s2=0}
+  // Topology-preserving SVF (Zavalishin); returns [lp,hp] via fields to avoid allocation.
+  run(x,g,k){const h=(x-(2*k+g)*this.s1-this.s2)/(1+g*(g+2*k)),b=g*h+this.s1,l=g*b+this.s2;
+    this.s1=g*h+b;this.s2=g*b+l;this.lp=l;this.hp=h;return l}
+}
+
+class PitchShifter{
+  constructor(fs){this.size=pow2AtLeast(fs*.2);this.mask=this.size-1;this.buf=new Float32Array(this.size);
+    this.w=0;this.p=0;this.win=Math.round(fs*.07)}
+  read(d){const pos=this.w-d,i=Math.floor(pos),f=pos-i,m=this.mask;return this.buf[i&m]*(1-f)+this.buf[(i+1)&m]*f}
+  run(x,ratio){
+    this.buf[this.w&this.mask]=x;
+    const W=this.win;let p=this.p+(1-ratio)/W;p-=Math.floor(p);this.p=p;
+    let q=p+.5;if(q>=1)q-=1;
+    const a=Math.sin(Math.PI*p),b=Math.sin(Math.PI*q);
+    const y=this.read(p*W+1)*a*a+this.read(q*W+1)*b*b;
+    this.w++;return y;
+  }
+}
+
+
+class Space{
+  constructor(fs,lines,space){
+    this.fs=fs;const N=this.N=lines;
+    const minMs=37,maxMs=113;
+    this.base=new Float64Array(N);this.len=new Float64Array(N);
+    for(let i=0;i<N;i++)this.base[i]=primeAtLeast(fs*(minMs*Math.pow(maxMs/minMs,i/(N-1)))/1000);
+    const maxLen=maxMs*fs/1000*3.2+fs*.004+8;
+    this.size=pow2AtLeast(maxLen);this.mask=this.size-1;
+    this.buf=new Float32Array(this.size*N);
+    this.w=0;
+    this.lp1=new Float64Array(N);this.lp2=new Float64Array(N);
+    this.gl=new Float64Array(N);this.gm=new Float64Array(N);this.gh=new Float64Array(N);
+    this.y=new Float64Array(N);
+    this.inj=new Float64Array(N);this.oL=new Float64Array(N);this.oR=new Float64Array(N);
+    const sc=1/Math.sqrt(N);
+    for(let i=0;i<N;i++){this.inj[i]=hadamardSign(3,i)*sc;this.oL[i]=hadamardSign(5,i)*sc;this.oR[i]=hadamardSign(10,i)*sc}
+    this.mc=new Float64Array(N);this.ms=new Float64Array(N);this.mrc=new Float64Array(N);this.mrs=new Float64Array(N);this.mdepth=new Float64Array(N);
+    for(let i=0;i<N;i++){const ph=TAU*i/N*2.37;this.mc[i]=Math.cos(ph);this.ms[i]=Math.sin(ph)}
+    this.apLen=new Int32Array(N);this.apPos=new Int32Array(N);this.apOff=new Int32Array(N);let off=0;
+    for(let i=0;i<N;i++){const l=primeAtLeast(fs*(2.9+i*.53)/1000);this.apLen[i]=l;this.apOff[i]=off;off+=l}
+    this.apBuf=new Float32Array(off);
+    this.diffusers=[4.77,3.59,12.73,9.31].map(ms=>new Allpass(primeAtLeast(fs*ms/1000)));
+    this.preSize=pow2AtLeast(fs*.52);this.preMask=this.preSize-1;this.pre=new Float32Array(this.preSize);this.preW=0;
+    this.hpIn=0;this.shift=new PitchShifter(fs);this.shimLp=0;this.shimOut=0;
+    this.eqL=[new Svf(),new Svf()];this.eqR=[new Svf(),new Svf()];
+    this.duckEnv=0;this.denorm=1e-18;this.energy=0;
+    this.target=Object.assign({},space);this.cur=Object.assign({},space);
+    this.holdBlocks=Math.ceil((fs*.52+this.size)/BLOCK);
+    this.retune(true);
+  }
+  clear(space){
+    this.buf.fill(0);this.apBuf.fill(0);this.pre.fill(0);this.shift.buf.fill(0);
+    this.lp1.fill(0);this.lp2.fill(0);this.y.fill(0);
+    for(const f of [...this.eqL,...this.eqR]){f.s1=0;f.s2=0}
+    for(const d of this.diffusers)d.buf.fill(0);
+    this.hpIn=0;this.shimLp=0;this.shimOut=0;this.duckEnv=0;this.energy=0;
+    Object.assign(this.target,space);Object.assign(this.cur,space);this.retune(true);
+  }
+  set(p){for(const k in p)if(k in this.target&&Number.isFinite(+p[k]))this.target[k]=+p[k]}
+  retune(snap){
+    const t=this.target,c=this.cur,fs=this.fs;
+    const k=snap?1:1-Math.exp(-BLOCK/(fs*.05)),ks=snap?1:1-Math.exp(-BLOCK/(fs*.35));
+    for(const key in t){if(key==='size')c.size+=(t.size-c.size)*ks;else if(key==='freeze'||key==='shimmerPitch')c[key]=t[key];else c[key]+=(t[key]-c[key])*k}
+    const N=this.N,size=Math.max(.2,Math.min(3,c.size)),frozen=c.freeze>=.5;
+    const T=Math.max(.1,c.decay),TL=T*Math.max(.05,c.lowMult),TH=T*Math.max(.02,c.highMult);
+    const cap=frozen?.99999:.9999;
+    for(let i=0;i<N;i++){
+      const L=this.base[i]*size;this.len[i]=L;
+      const sec=(L+this.apLen[i])/fs;
+      this.gm[i]=frozen?cap:Math.min(cap,Math.exp(-LN1000*sec/T));
+      this.gl[i]=frozen?cap:Math.min(cap,Math.exp(-LN1000*sec/TL));
+      this.gh[i]=frozen?cap:Math.min(cap,Math.exp(-LN1000*sec/TH));
+      const hz=c.modRate*(.62+.76*i/(N-1)),w=TAU*hz/fs;
+      this.mrc[i]=Math.cos(w);this.mrs[i]=Math.sin(w);
+      this.mdepth[i]=c.modDepth*fs/1000*(.55+.45*((i*7)%N)/(N-1));
+      const n=Math.hypot(this.mc[i],this.ms[i]);this.mc[i]/=n;this.ms[i]/=n;
+    }
+    this.a1=1-Math.exp(-TAU*Math.min(c.lowCross,c.highCross*.8)/fs);
+    this.a2=1-Math.exp(-TAU*c.highCross/fs);
+    this.gDiff=Math.min(.78,c.diffusion*.78);this.gInner=Math.min(.7,c.density*.7);
+    this.eqHpG=Math.tan(Math.PI*Math.min(c.lowCut,fs*.45)/fs);this.eqLpG=Math.tan(Math.PI*Math.min(c.highCut,fs*.45)/fs);
+    this.ratio=Math.pow(2,c.shimmerPitch/12);
+  }
+  // inL/inR: dry block. Adds the wet signal into outL/outR.
+  process(inL,inR,outL,outR,n){
+    this.retune(false);
+    const c=this.cur,N=this.N,fs=this.fs,mask=this.mask,size=this.size,buf=this.buf,len=this.len,y=this.y,apBuf=this.apBuf,apLen=this.apLen,apPos=this.apPos,apOff=this.apOff;
+    const lp1=this.lp1,lp2=this.lp2,gl=this.gl,gm=this.gm,gh=this.gh,inj=this.inj,oL=this.oL,oR=this.oR;
+    const mc=this.mc,ms=this.ms,mrc=this.mrc,mrs=this.mrs,md=this.mdepth,dif=this.diffusers;
+    const a1=this.a1,a2=this.a2,gD=this.gDiff,gI=this.gInner,frozen=c.freeze>=.5;
+    const preD=Math.max(1,Math.min(this.preSize-2,c.predelay*fs)),aHp=1-Math.exp(-TAU*30/fs);
+    const shim=frozen?0:Math.min(.6,c.shimmer*.6),hiShim=1-Math.exp(-TAU*6000/fs);
+    const duckAtk=1-Math.exp(-1/(fs*.004)),duckRel=1-Math.exp(-1/(fs*.35)),duck=c.duck;
+    const width=c.width,wet=c.wet,dry=c.dry,houseK=2/N,inGain=frozen?0:1;
+    const gHp=this.eqHpG,gLp=this.eqLpG,kq=1.41421356;
+    let energy=0,w=this.w,dn=this.denorm;
+    for(let s=0;s<n;s++){
+      const x=(inL[s]+inR[s])*.5;
+      // predelay (linear interp, smoothed length)
+      this.pre[this.preW&this.preMask]=x;
+      const pp=this.preW-preD,pi=Math.floor(pp),pf=pp-pi;
+      let v=this.pre[pi&this.preMask]*(1-pf)+this.pre[(pi+1)&this.preMask]*pf;this.preW++;
+      this.hpIn+=aHp*(v-this.hpIn);v-=this.hpIn;
+      for(let d=0;d<4;d++)v=dif[d].run(v,d<2?gD:gD*.82);
+      v=v*inGain+this.shimOut*shim;
+      let sum=0;
+      for(let i=0;i<N;i++){
+        const o=i*size,cc=mc[i],ss=ms[i];
+        mc[i]=cc*mrc[i]-ss*mrs[i];ms[i]=ss*mrc[i]+cc*mrs[i];
+        const pos=w-len[i]-md[i]*(1+ss),ip=Math.floor(pos),f=pos-ip;
+        const x0=buf[o+((ip-1)&mask)],x1=buf[o+(ip&mask)],x2=buf[o+((ip+1)&mask)],x3=buf[o+((ip+2)&mask)];
+        const c1=.5*(x2-x0),c2=x0-2.5*x1+2*x2-.5*x3,c3=.5*(x3-x0)+1.5*(x1-x2);
+        const r=((c3*f+c2)*f+c1)*f+x1;
+        const l1=lp1[i]+a1*(r-lp1[i]),rest=r-l1,l2=lp2[i]+a2*(rest-lp2[i]);lp1[i]=l1;lp2[i]=l2;
+        const absorbed=gl[i]*l1+gm[i]*l2+gh[i]*(rest-l2);
+        const ap=apOff[i]+apPos[i],d=apBuf[ap],u=absorbed-gI*d;apBuf[ap]=u;
+        apPos[i]=apPos[i]+1===apLen[i]?0:apPos[i]+1;
+        const out=d+gI*u;y[i]=out;sum+=out;
+      }
+      const f=sum*houseK;let tl=0,tr=0;
+      for(let i=0;i<N;i++){const r=y[i];tl+=r*oL[i];tr+=r*oR[i];buf[i*size+(w&mask)]=r-f+v*inj[i]+dn}
+      dn=-dn;w++;
+      // shimmer: octave(ish)-shifted tank fed back into the input, low-passed and soft-limited
+      if(shim>0){this.shimLp+=hiShim*(this.shift.run((tl+tr)*.5,this.ratio)-this.shimLp);this.shimOut=softLimit(this.shimLp)}else this.shimOut=0;
+      // wet EQ: 12 dB/oct high-pass then low-pass
+      let l=tl,rr=tr;
+      this.eqL[0].run(l,gHp,kq);l=this.eqL[0].hp;l=this.eqL[1].run(l,gLp,kq);
+      this.eqR[0].run(rr,gHp,kq);rr=this.eqR[0].hp;rr=this.eqR[1].run(rr,gLp,kq);
+      const m=(l+rr)*.5,sd=(l-rr)*.5*width;l=m+sd;rr=m-sd;
+      const ax=Math.abs(x);this.duckEnv+=(ax>this.duckEnv?duckAtk:duckRel)*(ax-this.duckEnv);
+      const g=wet*(1-duck*Math.min(1,this.duckEnv*6));
+      outL[s]+=inL[s]*dry+l*g;outR[s]+=inR[s]*dry+rr*g;
+      energy+=l*l+rr*rr;
+    }
+    this.w=w;this.denorm=dn;
+    this.energy=energy/n;
+  }
+}
+
+class MonadEngine extends AudioWorkletProcessor{
+  constructor(options){
+    super();
+    const o=(options&&options.processorOptions)||{};
+    const V=this.V=o.voices||48;
+    this.space=new Space(sampleRate,o.lines||16,o.space);
+    this.on=new Uint8Array(V);this.key=new Float64Array(V);this.nm=new Uint8Array(V);
+    this.zr=new Float64Array(V*MAXM);this.zi=new Float64Array(V*MAXM);this.kr=new Float64Array(V*MAXM);this.ki=new Float64Array(V*MAXM);this.xg=new Float64Array(V*MAXM);
+    this.cN=new Int32Array(V);this.cLen=new Int32Array(V);
+    this.env=new Float64Array(V);this.envStep=new Float64Array(V);this.fade=new Float64Array(V);this.pend=new Array(V).fill(null);
+    this.pl=new Float64Array(V);this.pr=new Float64Array(V);this.plT=new Float64Array(V);this.prT=new Float64Array(V);this.e=new Float64Array(V);
+    this.exc=new Float64Array(BLOCK);this.live=new Int32Array(MAXM);this.vb=new Float64Array(BLOCK);
+    this.dryL=new Float32Array(BLOCK);this.dryR=new Float32Array(BLOCK);
+    this.queue=(o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0));
+    this.frame=0;this.levelBlocks=0;this.quietBlocks=0;this.steals=0;this.strikes=0;this.statAt=0;this.idle=false;
+    this.warm(o);
+    this.port.onmessage=ev=>{const m=ev.data;if(m.type==='strike')this.queue.push(m);else if(m.type==='space')this.space.set(m);else if(m.type==='silence')this.silence()};
+  }
+  // V8 interprets code until it has run enough; cold, the first strike's blocks
+  // took 4-8 ms against a 2.7 ms deadline and dropped out as clicks. Run the
+  // whole path silently at construction, then start from fresh state.
+  warm(o){
+    const l=new Float32Array(BLOCK),r=new Float32Array(BLOCK),out=[[l,r]];
+    for(let i=0;i<400;i++){
+      if(i%40===0)this.queue.push({type:'strike',at:0,k:i%3,f:[110,230,370,520,700],g:[1,.6,.4,.3,.2],t:[2,1.5,1,.8,.5],amp:.1,c:.0008,a:.004,p:.3});
+      l.fill(0);r.fill(0);this.process([],out);
+    }
+    this.silence();this.space.clear(o.space);
+    this.queue=(o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0));
+    this.frame=0;this.levelBlocks=0;this.quietBlocks=0;this.steals=0;this.strikes=0;this.statAt=0;this.idle=false;this.e.fill(0);
+  }
+  silence(){this.on.fill(0);this.zr.fill(0);this.zi.fill(0);this.pend.fill(null)}
+  active(){let n=0;for(let v=0;v<this.V;v++)n+=this.on[v];return n}
+  load(v,m){
+    const b=v*MAXM,fs=sampleRate,f=m.f,g=m.g,t=m.t;let k=0;
+    for(let i=0;i<f.length&&k<MAXM;i++){
+      if(f[i]>=fs*.45||f[i]<=0)continue;
+      const r=Math.exp(-LN1000/(Math.max(.01,t[i])*fs)),w=TAU*f[i]/fs;
+      this.kr[b+k]=r*Math.cos(w);this.ki[b+k]=r*Math.sin(w);this.xg[b+k]=g[i]*m.amp;k++;
+    }
+    this.nm[v]=k;
+    const len=Math.max(8,Math.round((m.c||.002)*fs));this.cLen[v]=len;this.cN[v]=len;
+    const p=Math.max(-1,Math.min(1,m.p||0)),a=(p+1)*Math.PI/4;this.plT[v]=Math.cos(a);this.prT[v]=Math.sin(a);
+  }
+  start(m){
+    this.strikes++;
+    const V=this.V;
+    for(let v=0;v<V;v++)if(this.on[v]&&this.key[v]===m.k&&this.fade[v]===0){this.load(v,m);return}
+    let free=-1;for(let v=0;v<V;v++)if(!this.on[v]){free=v;break}
+    const n=this.active(),poly=Math.sqrt(8/Math.max(8,n+1));m.amp*=poly;
+    if(free<0){
+      let best=-1,be=Infinity;
+      for(let v=0;v<V;v++)if(this.fade[v]===0&&this.e[v]<be){be=this.e[v];best=v}
+      if(best<0)return;
+      this.steals++;this.fade[best]=1;this.pend[best]=m;return;
+    }
+    this.begin(free,m);
+  }
+  begin(v,m){
+    const b=v*MAXM;for(let k=0;k<MAXM;k++){this.zr[b+k]=0;this.zi[b+k]=0}
+    this.on[v]=1;this.key[v]=m.k;this.fade[v]=0;this.pend[v]=null;this.load(v,m);this.pl[v]=this.plT[v];this.pr[v]=this.prT[v];
+    const a=m.a||0;if(a>.002){this.env[v]=0;this.envStep[v]=1/(a*sampleRate)}else{this.env[v]=1;this.envStep[v]=0}
+  }
+  renderVoice(v,n,L,R){
+    const b=v*MAXM,nm=this.nm[v],exc=this.exc,vb=this.vb,zr=this.zr,zi=this.zi,kr=this.kr,ki=this.ki,xg=this.xg;
+    let cN=this.cN[v];const cLen=this.cLen[v],norm=2/cLen;
+    for(let s=0;s<n;s++){if(cN>0){const ph=(cLen-cN+.5)/cLen;exc[s]=(1-Math.cos(TAU*ph))*.5*norm;cN--}else exc[s]=0;vb[s]=0}
+    const exciting=this.cN[v]>0;this.cN[v]=cN;
+    let e=0,k=0;
+    // Partials ring independently; one that has decayed below -110 dB stops costing.
+    const live=this.live;let nl=0;
+    for(let j=0;j<nm;j++)if(exciting||zr[b+j]*zr[b+j]+zi[b+j]*zi[b+j]>1e-11)live[nl++]=b+j;
+    for(;k+1<nl;k+=2){
+      const p=live[k],q=live[k+1];
+      let r1=zr[p],i1=zi[p],r2=zr[q],i2=zi[q];const a1=kr[p],c1=ki[p],g1=xg[p],a2=kr[q],c2=ki[q],g2=xg[q];
+      if(exciting)for(let s=0;s<n;s++){const x=exc[s],n1=a1*r1-c1*i1+x*g1,n2=a2*r2-c2*i2+x*g2;i1=a1*i1+c1*r1;i2=a2*i2+c2*r2;r1=n1;r2=n2;vb[s]+=r1+r2}
+      else for(let s=0;s<n;s++){const n1=a1*r1-c1*i1,n2=a2*r2-c2*i2;i1=a1*i1+c1*r1;i2=a2*i2+c2*r2;r1=n1;r2=n2;vb[s]+=r1+r2}
+      zr[p]=r1;zi[p]=i1;zr[q]=r2;zi[q]=i2;e+=r1*r1+i1*i1+r2*r2+i2*i2;
+    }
+    if(k<nl){
+      const p=live[k];let r=zr[p],i=zi[p];const a=kr[p],c=ki[p],g=xg[p];
+      if(exciting)for(let s=0;s<n;s++){const nr=a*r-c*i+exc[s]*g;i=a*i+c*r;r=nr;vb[s]+=r}
+      else for(let s=0;s<n;s++){const nr=a*r-c*i;i=a*i+c*r;r=nr;vb[s]+=r}
+      zr[p]=r;zi[p]=i;e+=r*r+i*i;
+    }
+    let env=this.env[v],es=this.envStep[v],fl=this.fade[v],pl=this.pl[v],pr=this.pr[v];const fstep=1/96,dl=(this.plT[v]-pl)/n,dr=(this.prT[v]-pr)/n;
+    for(let s=0;s<n;s++){
+      if(es>0){env+=es;if(env>=1){env=1;es=0}}
+      let g=env;if(fl>0){fl=Math.max(1e-9,fl-fstep);g*=fl<=1e-9?0:fl}
+      pl+=dl;pr+=dr;const x=vb[s]*g;L[s]+=x*pl;R[s]+=x*pr;
+    }
+    this.pl[v]=pl;this.pr[v]=pr;this.env[v]=env;this.envStep[v]=es;this.e[v]=e;
+    if(fl>0){
+      this.fade[v]=fl;
+      if(fl<=1e-9){const m=this.pend[v];this.on[v]=0;this.fade[v]=0;if(m)this.begin(v,m)}
+    }else if(!exciting&&cN===0&&e<1e-11)this.on[v]=0;
+  }
+  process(inputs,outputs){
+    const out=outputs[0],L=out[0],R=out[1]||out[0],n=L.length;
+    const end=this.frame+n;
+    while(this.queue.length&&(this.queue[0].at||0)<end)this.start(this.queue.shift());
+    const dL=this.dryL,dR=this.dryR;dL.fill(0);dR.fill(0);
+    let voices=0;
+    for(let v=0;v<this.V;v++)if(this.on[v]){voices++;this.renderVoice(v,n,dL,dR)}
+    // The tail outlives its input by the predelay plus a full pass of the longest line,
+    // so idling waits for that many consecutive silent blocks.
+    const quiet=voices===0&&this.space.energy<1e-14&&this.space.cur.freeze<.5;
+    this.quietBlocks=quiet?this.quietBlocks+1:0;
+    this.idle=this.quietBlocks>this.space.holdBlocks;
+    if(!this.idle)this.space.process(dL,dR,L,R,n);
+    this.frame=end;
+    if(++this.levelBlocks>=8){
+      this.levelBlocks=0;const d=new Float64Array(voices*2);let j=0;
+      for(let v=0;v<this.V;v++)if(this.on[v]){d[j++]=this.key[v];d[j++]=Math.sqrt(this.e[v])}
+      this.port.postMessage({type:'levels',d},[d.buffer]);
+    }
+    if(this.frame-this.statAt>=sampleRate*.25){this.statAt=this.frame;this.port.postMessage({type:'stats',voices,steals:this.steals,strikes:this.strikes,idle:this.idle})}
+    return true;
+  }
+}
+registerProcessor('monad-engine',MonadEngine);
 </script>
 
 <script>
@@ -1564,7 +1819,7 @@ function boot(){
   try{resize()}catch(err){console.error('monad: resize',err)}
   requestAnimationFrame(frame);
   try{new ResizeObserver(resize).observe(stage)}catch(err){}
-  try{initFluid()}catch(err){}
+  try{initAura()}catch(err){console.error('monad: aura',err)}
   try{seedWorld()}catch(err){console.error('monad: seed',err)}
   // Build the ENTIRE audio graph now, while nothing is audible. Contexts are
   // allowed to exist suspended before any gesture; only resume() needs one.
@@ -1612,7 +1867,19 @@ const motion={
   playStart:0
 };
 
-const SOURCE={wave:'sine',attack:.039,decay:6,level:.234,sizeRing:1.68,maxVoices:55};
+const SOURCE={wave:'sine',attack:.004,hardness:.65,decay:6,level:.234,sizeRing:1.68,maxVoices:55};
+// Worklet engine space. decay is the measured mid-band T60; low/high are multiples of it.
+const SPACE={dry:1,wet:.85,predelay:40,size:1.6,decay:11,lowMult:1.1,highMult:.55,lowCross:200,highCross:4500,
+  diffusion:.78,density:.55,modRate:.3,modDepth:.5,shimmer:0,shimmerPitch:12,freeze:0,width:1.1,duck:.15,lowCut:110,highCut:15000};
+let engineKind=/engine=legacy/.test(location.hash)?'legacy':'worklet',engineNode=null,engineState='none',legacyBuilt=false;
+let engineStats={voices:0,steals:0,strikes:0,idle:true};
+const SPACE_DEFS=[['dry','Dry',0,1,.001,''],['wet','Wet',0,1.5,.001,''],['predelay','Predelay',0,500,1,' ms'],
+  ['size','Size',.2,3,.01,'×'],['decay','Decay T60',.3,60,.01,' s'],['lowMult','Low decay',.25,3,.01,'×'],
+  ['highMult','High decay',.05,1.5,.01,'×'],['lowCross','Low crossover',40,1200,1,' Hz'],['highCross','High crossover',800,14000,1,' Hz'],
+  ['diffusion','Diffusion',0,1,.01,''],['density','Density',0,1,.01,''],['modRate','Mod rate',.02,3,.01,' Hz'],
+  ['modDepth','Mod depth',0,3,.01,' ms'],['shimmer','Shimmer',0,1,.01,''],['shimmerPitch','Shimmer pitch',-12,24,1,' st'],
+  ['freeze','Freeze',0,1,1,''],['width','Width',0,1.5,.01,''],['duck','Ducking',0,1,.01,''],
+  ['lowCut','Wet low cut',20,1000,1,' Hz'],['highCut','Wet high cut',1500,20000,1,' Hz']];
 const R={input:.55,dry:1,wet:.92,output:.85,predelay:55,size:3.89,decay:20,feedback:73.8,lowRatio:.6,highRatio:.18,lowCross:102.804,highCross:6380.1304,damping:2800,diffusion:.82,modRate:.0706,modDepth:6,drift:.8,outHP:110,outLP:9000,delays:[83.1,96.8,113.9,132.9,154.2,178.1,205.3,236.9]};
 // Delay lengths are near-geometric (ratio ~1.16, jittered off simple fractions).
 // The previous set had two near-duplicate pairs (114.5/113.9, 132.9/138.3):
@@ -1625,6 +1892,16 @@ const R={input:.55,dry:1,wet:.92,output:.85,predelay:55,size:3.89,decay:20,feedb
 // 2) nearby bodies exchange energy when their modal spectra overlap
 // 3) real impacts launch visible pressure fronts that physically push other bodies
 const PHYS={modalMix:.32,sympathy:.73,pressure:.47,waveSpeed:520};
+// Partial ratios of struck bodies, fundamental first. Saturation bends a
+// harmonic series toward the family that hue picks; luminance sets brightness
+// and ring.
+const HARMONIC=[1,2,3,4,5];
+const BODY_FAMILIES=[
+  [1,1.183,1.506,2.0,2.514],     // bell: tierce, quint, nominal
+  [1,1.594,2.136,2.653,3.156],   // circular plate
+  [1,2.756,5.404,8.933,13.34],   // free-free bar: tubular chime
+  [1,2.32,4.25,6.63,9.38]        // singing bowl
+];
 function materialFor(o){
   const key=((o&&o.color)||'#C39A61').toUpperCase();
   if(o&&o._materialKey===key&&o._material)return o._material;
@@ -1634,21 +1911,24 @@ function materialFor(o){
   const r=((n>>16)&255)/255,g=((n>>8)&255)/255,b=(n&255)/255;
   const hi=Math.max(r,g,b),lo=Math.min(r,g,b),sat=hi-lo;
   const lum=.2126*r+.7152*g+.0722*b;
-  const ratio2=1.34+.34*b+.20*g+.13*(1-r)+.11*sat;
-  const ratio3=1.88+1.08*r+.38*b+.28*(1-g)+.20*sat;
+  let hue=0;
+  if(sat>0)hue=(hi===r?((g-b)/sat+6)%6:hi===g?(b-r)/sat+2:(r-g)/sat+4)/6;
+  const family=BODY_FAMILIES[hue<.17||hue>=.92?0:hue<.45?1:hue<.75?2:3];
+  const bend=clamp(sat*1.6,0,1),bright=.32+.5*lum;
   const m={
-    ratios:[1,ratio2,Math.max(ratio2+.28,ratio3)],
-    weights:[1,.30+.34*lum+.16*b,.10+.31*sat+.17*lum],
-    decay:.62+1.18*lum+.46*b+.34*sat
+    ratios:HARMONIC.map((h,k)=>h+(family[k]-h)*bend),
+    weights:HARMONIC.map((h,k)=>k?Math.pow(bright,k)*(.6+.4*b):1),
+    decay:.62+1.18*lum+.46*b+.34*sat,
+    damp:.55+.6*(1-lum)
   };
-  if(o){o._materialKey=key;o._material=m}
+  if(o){o._materialKey=key;o._material=m;o.lobes=[3,4,2,5][BODY_FAMILIES.indexOf(family)]}
   return m;
 }
 function orbHz(o){
   if(o._hzNote!==o.note){o._hzNote=o.note;o._hz=hz(o.note)}
   return o._hz;
 }
-function modeLabel(o){const m=materialFor(o);return m.ratios[1].toFixed(2)+'× · '+m.ratios[2].toFixed(2)+'×'}
+function modeLabel(o){const m=materialFor(o);return m.ratios.slice(1,4).map(x=>x.toFixed(2)+'×').join(' · ')}
 const pressureWaves=[],pressureWavePool=[],resonanceLinks=[];
 const MAX_PRESSURE_WAVES=8,PRESSURE_WAVE_MIN_INTERVAL_MS=24,MAX_RESONANCE_LINKS=56,MAX_MODAL_EVENTS=LOW_POWER?6:10,MAX_MODAL_PARTIALS=MAX_MODAL_EVENTS;
 let lastPressureWaveAt=-1e9;
@@ -1693,6 +1973,13 @@ function nextNote(){
   if(!stack.length||stackIndex>=6){stack=makeStack();stackIndex=0}
   return stack[stackIndex++];
 }
+// Bigger bodies take lower notes of the voicing; a little randomness keeps neighbours apart.
+function noteForSize(r){
+  const MV=window.MonadVoicing,set=MV?MV.noteSet():[];
+  if(!set.length)return nextNote();
+  const size=clamp((r-MIN_R)/(MAX_R-MIN_R),0,1),jitter=(Math.random()*2-1)*.18;
+  return set[Math.round(clamp(1-Math.sqrt(size)+jitter,0,1)*(set.length-1))];
+}
 function randomColour(){return PALETTE[Math.floor(Math.random()*PALETTE.length)]}
 
 // Changing the voicing retunes the world, not just future orbs: every body on
@@ -1724,12 +2011,17 @@ function sliderControl(obj,key,label,min,max,step,suffix,onChange){const l=docum
 // SOURCE UI
 const waveLabel=document.createElement('label');waveLabel.className='control';const wl=document.createElement('span');wl.textContent='Waveform';const wave=document.createElement('select');wave.id='wave';['sine','triangle','square','sawtooth'].forEach(w=>{const o=document.createElement('option');o.value=w;o.textContent=w.toUpperCase();wave.append(o)});wave.value=SOURCE.wave;wave.addEventListener('change',()=>{SOURCE.wave=wave.value;sendParams();updateSettings()});waveLabel.append(wl,wave);$('#sourceControls').append(waveLabel);
 $('#sourceControls').append(sliderControl(SOURCE,'attack','Attack',.001,.08,.001,' s',sendParams));
+$('#sourceControls').append(sliderControl(SOURCE,'hardness','Hardness',0,1,.01,'',sendParams));
 $('#sourceControls').append(sliderControl(SOURCE,'decay','Tone decay',.08,6,.01,' s',sendParams));
 $('#sourceControls').append(sliderControl(SOURCE,'level','Source level',.02,.4,.001,'',sendParams));
 $('#sourceControls').append(sliderControl(SOURCE,'sizeRing','Size → ring',0,2,.01,'×',sendParams));
 $('#sourceControls').append(sliderControl(SOURCE,'maxVoices','Max voices',8,64,1,'',sendParams));
 
-// REVERB UI
+// SPACE UI
+SPACE_DEFS.forEach(d=>$('#spaceControls').append(sliderControl(SPACE,d[0],d[1],d[2],d[3],d[4],d[5],sendParams)));
+$('#engine').value=engineKind;
+$('#engine').addEventListener('change',e=>setEngine(e.target.value));
+// LEGACY REVERB UI
 const primaryDefs=[['input','Input',0,1.2,.001,''],['dry','Dry',0,1,.001,''],['wet','Wet',0,1.2,.001,''],['output','Output',0,1.2,.001,''],['predelay','Predelay',0,250,.1,' ms'],['size','Size',.25,4,.001,'×'],['decay','Decay',.25,120,.01,' s'],['feedback','Feedback',0,100,.1,'%']];
 const spectrumDefs=[['lowRatio','Low decay ratio',.05,4,.001,'×'],['highRatio','High decay ratio',.01,2,.001,'×'],['lowCross','Low crossover',40,1800,1,' Hz'],['highCross','High crossover',800,18000,1,' Hz'],['damping','Loop damping',300,20000,1,' Hz']];
 const motionDefs=[['diffusion','Diffusion',0,.86,.001,''],['modRate','Mod rate',.005,2,.001,' Hz'],['modDepth','Mod depth',0,12,.01,' ms'],['drift','Random drift',0,1,.001,'']];
@@ -1810,6 +2102,7 @@ function updateSettings(){
       size_ring:SOURCE.sizeRing,
       max_voices:SOURCE.maxVoices
     },
+    space:Object.assign({},SPACE),
     reverb:{
       input:R.input,dry:R.dry,wet:R.wet,output:R.output,
       predelay_ms:R.predelay,size:R.size,decay_s:R.decay,feedback_percent:R.feedback,
@@ -1859,9 +2152,10 @@ function buildPreset(){
       model:'impact → material modes → sympathetic transfer → pressure impulse → new collisions'
     },
     source:{
-      waveform:SOURCE.wave,attack_s:SOURCE.attack,decay_s:SOURCE.decay,
+      waveform:SOURCE.wave,attack_s:SOURCE.attack,hardness:SOURCE.hardness,decay_s:SOURCE.decay,
       level:SOURCE.level,size_ring:SOURCE.sizeRing,max_voices:SOURCE.maxVoices
     },
+    space:Object.assign({},SPACE),
     reverb:{
       input:R.input,dry:R.dry,wet:R.wet,output:R.output,predelay_ms:R.predelay,
       size:R.size,decay_s:R.decay,feedback_percent:R.feedback,
@@ -1882,7 +2176,7 @@ function buildPreset(){
       palette:[...PALETTE]
     },
     voicing:{
-      mode:window.MonadVoicing?window.MonadVoicing.current:'quintal',
+      mode:window.MonadVoicing?window.MonadVoicing.current:'barron_m11',
       custom:window.MonadVoicing?window.MonadVoicing.getCustomNotes():[],
       octave_spread:window.MonadVoicing?window.MonadVoicing.octaveSpread:0,
       transpose:window.MonadVoicing?window.MonadVoicing.transpose:0
@@ -1940,7 +2234,10 @@ function applyPresetObject(p){
   const so=p.source||{};
   if(['sine','triangle','square','sawtooth'].includes(so.waveform))SOURCE.wave=so.waveform;
   if(Number.isFinite(+so.attack_s))SOURCE.attack=clamp(+so.attack_s,.001,.08);
+  if(Number.isFinite(+so.hardness))SOURCE.hardness=clamp(+so.hardness,0,1);
   if(Number.isFinite(+so.decay_s))SOURCE.decay=clamp(+so.decay_s,.08,6);
+  const sp=p.space||{};
+  for(const [key,,lo,hi] of SPACE_DEFS)if(Number.isFinite(+sp[key]))SPACE[key]=clamp(+sp[key],lo,hi);
   if(Number.isFinite(+so.level))SOURCE.level=clamp(+so.level,.02,.4);
   if(Number.isFinite(+so.size_ring))SOURCE.sizeRing=clamp(+so.size_ring,0,2);
   if(Number.isFinite(+so.max_voices))SOURCE.maxVoices=clamp(Math.round(+so.max_voices),8,VOICE_POOL_SIZE);
@@ -2006,7 +2303,7 @@ function applyPresetObject(p){
       const y=clamp(Number.isFinite(+spec.y)?+spec.y:.5,0,1)*H;
       const rr=clamp((Number.isFinite(+spec.radius)?+spec.radius:.06)*minDim,MIN_R,MAX_R);
       const o=makeOrb(x,y,rr);
-      if(Number.isFinite(+spec.note))o.note=clamp(Math.round(+spec.note),24,84);
+      o.note=Number.isFinite(+spec.note)?clamp(Math.round(+spec.note),12,108):noteForSize(rr);
       const c=spec.colour??spec.color;if(typeof c==='string'&&/^#[0-9a-f]{6}$/i.test(c))o.color=c.toUpperCase();
       if(Number.isFinite(+spec.vx))o.vx=+spec.vx*W;
       if(Number.isFinite(+spec.vy))o.vy=+spec.vy*H;
@@ -2060,6 +2357,7 @@ let voiceDrops=0,modalDrops=0,collisionCount=0,strikeCount=0,contactEvents=0;
 let voiceSteals=0,stealBlocked=0;
 window.__monadAudioStats=function(){return{
   state:ac?ac.state:'none',
+  engine:engineKind,engineState:engineState,engineIdle:engineStats.idle,engineSteals:engineStats.steals,engineStrikes:engineStats.strikes,
   voices:activeVoiceCount(),
   modals:activeModalCount(),
   voiceDrops:voiceDrops,modalDrops:modalDrops,collisionCount:collisionCount,strikeCount:strikeCount,contactEvents:contactEvents,
@@ -2110,6 +2408,7 @@ function initAudio(){
   // 20-40ms of latency is inaudible against the reverb tail, underrun crackle
   // is not. Desktop keeps the shorter buffer.
   ac=new AC({latencyHint:LOW_POWER?'playback':'balanced'});
+  // Master and limiter are shared; the engine behind them is chosen by setEngine.
 
   master=ac.createGain();
   master.gain.value=.68;
@@ -2124,6 +2423,17 @@ function initAudio(){
   limiter.attack.value=.015;
   limiter.release.value=.30;
 
+  master.connect(limiter);
+  limiter.connect(ac.destination);
+  setEngine(engineKind);
+
+  window.__monadBuses={get ac(){return ac},get revIn(){return revIn},get wetBus(){return wetBus},get master(){return master},get engine(){return engineNode}};
+  const ms=(ac.baseLatency||0)*1000;
+  $('#statLatency').textContent=ms?ms.toFixed(1)+' ms':'browser';
+}
+
+// The pre-worklet graph, kept for A/B listening until it is retired.
+function initLegacy(){
   dryBus=ac.createGain();
   wetBus=ac.createGain();
   revIn=ac.createGain();
@@ -2152,10 +2462,6 @@ function initAudio(){
   finalLP2.type='lowpass';
   finalLP2.Q.value=1.30656296;
 
-  dryBus.connect(master);
-  wetBus.connect(master);
-  master.connect(limiter);
-  limiter.connect(ac.destination);
 
   // WARM POOL. Everything is permanent: gains AND oscillators, started once
   // and running forever behind gain 0. A strike is retune + envelope ramps —
@@ -2201,13 +2507,59 @@ function initAudio(){
 
   buildReverb();
   sendParams();
+}
 
-  // verify-*.js harness handle (dev tooling reaches the bus graph through
-  // this; nothing in the instrument reads it)
-  window.__monadBuses={get ac(){return ac},get revIn(){return revIn},get wetBus(){return wetBus},get master(){return master}};
-
-  const ms=(ac.baseLatency||0)*1000;
-  $('#statLatency').textContent=ms?ms.toFixed(1)+' ms':'browser';
+function spaceMessage(){return Object.assign({type:'space'},SPACE,{predelay:SPACE.predelay/1000})}
+function setEngine(kind){
+  engineKind=kind;
+  if(!ac)return;
+  if(kind==='legacy'){
+    if(!legacyBuilt){initLegacy();legacyBuilt=true}
+    dryBus.connect(master);wetBus.connect(master);
+    if(engineNode){engineNode.disconnect();engineNode.port.postMessage({type:'silence'})}
+  }else{
+    if(legacyBuilt){dryBus.disconnect();wetBus.disconnect()}
+    if(engineNode)engineNode.connect(master);else loadWorklet();
+  }
+  if($('#engine'))$('#engine').value=kind;
+  sendParams();
+}
+function loadWorklet(){
+  if(engineState!=='none')return;
+  if(!ac.audioWorklet){engineState='unsupported: no AudioWorklet in this context';setEngine('legacy');return}
+  engineState='loading';
+  // Chrome refuses blob: worklet modules on file:// pages; a data: URL loads there and over https.
+  const url='data:text/javascript;charset=utf-8,'+encodeURIComponent($('#monad-engine').textContent);
+  ac.audioWorklet.addModule(url).then(()=>{
+    engineNode=new AudioWorkletNode(ac,'monad-engine',{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[2],
+      processorOptions:{voices:LOW_POWER?32:64,lines:LOW_POWER?8:16,space:spaceMessage()}});
+    engineNode.port.onmessage=e=>{const m=e.data;if(m.type==='levels')applyLevels(m.d);else if(m.type==='stats')engineStats=m};
+    engineNode.onprocessorerror=e=>{engineState='processor error';console.error('monad: engine',e);setEngine('legacy')};
+    engineState='ready';
+    if(engineKind==='worklet')engineNode.connect(master);
+  }).catch(err=>{
+    engineState='failed: '+err.message;console.error('monad: engine',err);
+    if(engineKind==='worklet')setEngine('legacy');
+  });
+}
+// Engine levels are [key, amplitude] pairs; key is uid*128+midi. -54 dB maps to 0, -12 dB to 1.
+function applyLevels(d){
+  const byUid=new Map();
+  for(let i=0;i<d.length;i+=2){const uid=Math.floor(d[i]/128),v=clamp((20*Math.log10(d[i+1]+1e-9)+54)/42,0,1);if(v>(byUid.get(uid)||0))byUid.set(uid,v)}
+  for(const o of orbs)o.ringTarget=byUid.get(o.uid)||0;
+}
+function workletLive(){return engineKind==='worklet'&&engineState==='ready'&&ac&&ac.state==='running'}
+// One message per strike. The key is the orb and the pitch it sounds, so a
+// re-hit drives the same ringing resonators and a retuned orb rings out.
+function workletStrike(o,amp,midi,impact,sympathetic){
+  const m=materialFor(o),f0=hz(midi),sizeNorm=clamp((o.r-MIN_R)/(MAX_R-MIN_R),0,1);
+  const ring=Math.max(.03,SOURCE.decay*(1+SOURCE.sizeRing*sizeNorm))*.5*m.decay;
+  const partials=PHYS.modalMix*3,n=m.ratios.length,f=new Array(n),g=new Array(n),t=new Array(n);
+  for(let k=0;k<n;k++){f[k]=f0*m.ratios[k];g[k]=k?m.weights[k]*partials:1;t[k]=ring*Math.pow(m.ratios[k],-m.damp)}
+  // Contact time sets brightness: a hard, fast hit is a short pulse that reaches the high partials.
+  const contact=sympathetic?.008:clamp((.0016-.0014*SOURCE.hardness)*Math.pow(Math.max(1,impact)/60,-.35),.00012,.004);
+  engineNode.port.postMessage({type:'strike',k:o.uid*128+midi,f,g,t,amp,c:contact,
+    a:sympathetic?.02:SOURCE.attack,p:clamp((o.x/Math.max(1,W))*2-1,-.88,.88)});
 }
 
 function buildReverb(){
@@ -2430,7 +2782,8 @@ function flushAudioParams(now){
   if(!audioParamsDirty||!ac)return;
   if(now-lastParamFlush<30)return;
   lastParamFlush=now;audioParamsDirty=false;
-  applyReverb();
+  if(engineNode)engineNode.port.postMessage(spaceMessage());
+  if(legacyBuilt)applyReverb();
 }
 
 function impactAmplitude(v){
@@ -2450,6 +2803,7 @@ function impactAmplitude(v){
 // load where a correct count matters most.
 function activeVoiceCount(){
   if(!ac)return 0;
+  if(engineKind==='worklet')return engineStats.voices;
   const now=ac.currentTime;let n=0;
   for(let i=0;i<WARM_VOICES;i++)if(now<voices[i].end)n++;
   return n;
@@ -2535,6 +2889,10 @@ function resonanceAffinity(a,b){
 // per-orb cooldown stops one busy body from monopolising the layer with
 // chirps.
 function playModalBody(o,impact,sympathetic=false,noteOverride=null){
+  if(engineKind==='worklet'){
+    if(sympathetic&&workletLive())workletStrike(o,impactAmplitude(impact)*.45,o.note,impact,true);
+    return;
+  }
   if(!ac||ac.state!=='running'||!modalBus||PHYS.modalMix<=.001)return;
   const strength=clamp((impact-2)/130,0,1);
   if(strength<=.008)return;
@@ -2575,7 +2933,6 @@ function addPressureWave(o,impact){
   lastPressureWaveAt=now;
 
   // Cull before admitting new work. The active list is a strict fixed budget.
-  if(fluidOn&&window.MonadFluid){try{window.MonadFluid.ring(o.x,o.y,Math.max(2,o.r),amp)}catch(err){}}
   prunePressureWaves();
   let w;
   if(pressureWaves.length>=MAX_PRESSURE_WAVES){
@@ -2623,13 +2980,15 @@ function sympatheticTransfer(source,impact){
     target.energy=clamp(target.energy+transfer/190,0,1.6);
     target.resonance=Math.max(target.resonance,clamp(transfer/88,0,.9));
     playModalBody(target,transfer,true);
-    resonanceLinks.push({a:source,b:target,life:.62,maxLife:.62,strength:clamp(transfer/90,.08,1)});
+    resonanceLinks.push({a:source,b:target,life:.62,maxLife:.62,strength:clamp(transfer/90,.08,1),alpha:0});
+    if(auraOn)window.MonadAura.link(source,target,clamp(transfer/90,.08,1));
     if(resonanceLinks.length>MAX_RESONANCE_LINKS)resonanceLinks.shift();
     fieldDirty=true;
   }
 }
 
 function excitePhysicalEcosystem(o,impact){
+  if(auraOn)window.MonadAura.impulse(o,impact);
   const e=clamp((impact-5)/135,0,1);
   o.energy=clamp(o.energy+e,0,1.8);
   o.resonance=Math.max(o.resonance,e);
@@ -2642,14 +3001,17 @@ function strikeNow(o,impact,physical=true,massScale=1,pitch=null){
   if(physical)excitePhysicalEcosystem(o,impact);
   if(!ac||ac.state!=='running'||amp<=0)return;
 
-  // An orb is a MIDI TRIGGER, not a note-holder: unless a caller pins the
-  // pitch (auditions, dev previews), each impact asks the voicing engine for
-  // its note — drawn from the active pool/mode, then octave-scattered by the
-  // spread knob. This is the per-trigger decision seam; more per-strike
-  // discrete variables (level, decay, timbre) hang off it later.
+  // An orb owns its pitch; the octave-spread knob scatters it per impact.
   const MV=window.MonadVoicing;
-  const snote=pitch!=null?pitch:MV?MV.scatterNote(MV.nextNote()):o.note;
+  const snote=pitch!=null?pitch:MV?MV.scatterNote(o.note):o.note;
   lastStrikeMidi=snote;
+
+  if(engineKind==='worklet'){
+    if(!workletLive()){voiceDrops++;return}
+    workletStrike(o,amp,snote,impact,false);
+    strikeCount++;o.hit=clamp(impact/120,0,1);fieldDirty=true;
+    return;
+  }
 
   // The existing saw voice remains the canonical excitation layer; the new
   // modal body rings alongside it and is independently bounded for mobile.
@@ -3220,7 +3582,7 @@ function draw(){
   // This prevents stale ring pixels surviving transient canvas/layout resizes.
   bctx.save();bctx.setTransform(1,0,0,1,0,0);bctx.clearRect(0,0,body.width,body.height);bctx.restore();
 
-  if(!fluidOn)compositeField();
+  if(!auraOn)compositeField();
 
   for(const w of pressureWaves){
     const fade=pressureWaveStrength(w);
@@ -3249,7 +3611,7 @@ function draw(){
 }
 body.addEventListener('pointerdown',e=>{e.preventDefault();const p=pt(e);pointer.id=e.pointerId;pointer.down=true;try{if(body.setPointerCapture)body.setPointerCapture(e.pointerId)}catch(err){}const o=hit(p.x,p.y);if(o){selectOrb(o);pointer.orb=o;pointer.spawn=null;pointer.gx=p.x-o.x;pointer.gy=p.y-o.y;o.held=true;o.tx=o.x;o.ty=o.y;body.style.cursor='grabbing';beginHold(o,p)}else{selectOrb(null);pointer.spawn=makeOrb(p.x,p.y,MIN_R);pointer.orb=null;if(devVisible()){$('#note').value=pointer.spawn.note;$('#selection').textContent=noteName(pointer.spawn.note)}fieldDirty=true}});
 body.addEventListener('pointermove',e=>{if(!pointer.down||e.pointerId!==pointer.id)return;const p=pt(e);if(holdFrom&&Math.hypot(p.x-holdFrom.x,p.y-holdFrom.y)>HOLD_SLOP)cancelHold();if(pointer.orb){pointer.orb.tx=p.x-pointer.gx;pointer.orb.ty=p.y-pointer.gy}else if(pointer.spawn){setOrbRadius(pointer.spawn,clamp(Math.hypot(p.x-pointer.spawn.x,p.y-pointer.spawn.y),MIN_R,MAX_R));fieldDirty=true}});
-function end(e){cancelHold();if(!pointer.down||e.pointerId!==pointer.id)return;if(pointer.orb)pointer.orb.held=false;else if(pointer.spawn){admitOrb(pointer.spawn);selectOrb(pointer.spawn);refreshPresetBox()}pointer.id=null;pointer.down=false;pointer.orb=null;pointer.spawn=null;body.style.cursor='crosshair';fieldDirty=true}
+function end(e){cancelHold();if(!pointer.down||e.pointerId!==pointer.id)return;if(pointer.orb)pointer.orb.held=false;else if(pointer.spawn){pointer.spawn.note=noteForSize(pointer.spawn.r);admitOrb(pointer.spawn);selectOrb(pointer.spawn);refreshPresetBox()}pointer.id=null;pointer.down=false;pointer.orb=null;pointer.spawn=null;body.style.cursor='crosshair';fieldDirty=true}
 body.addEventListener('pointerup',end);body.addEventListener('pointercancel',end);
 function removeOrb(o){
   if(!o||o.deleted)return;
@@ -3258,7 +3620,7 @@ function removeOrb(o){
   if(i>=0)orbs.splice(i,1);
   if(selected===o)selectOrb(null);
   // let the atmosphere remember it for a moment
-  if(fluidOn)fluidPuff(o,.55);
+  if(auraOn)window.MonadAura.impulse(o,90);
   // gesture-gated: the long-press timer fires before the pointerup that grants
   // activation, so the first-ever press has none. Sticky activation covers the rest.
   try{
@@ -3303,8 +3665,8 @@ ecosystemControl('modalMix','modalMix','modalV');ecosystemControl('sympathy','sy
 // unavailable the 2D blurred-sprite path above stays in charge — the product
 // must degrade, never break.
 // ================================================================
-let fluidOn=false;
-const fluidCanvas=$('#fluid');
+let auraOn=false;
+const auraCanvas=$('#aura');
 function hexRGB(hex){
   const n=parseInt(String(hex).slice(1),16);
   if(!Number.isFinite(n))return[.76,.60,.38];
@@ -3314,85 +3676,28 @@ function orbRGB(o){
   if(o._rgbKey!==o.color){o._rgbKey=o.color;o._rgb=hexRGB(o.color)}
   return o._rgb;
 }
-function initFluid(){
-  const F=window.MonadFluid;
-  if(!F||typeof F.init!=='function')return false;
-  let ok=false;
-  try{ok=!!F.init(fluidCanvas)}catch(err){ok=false}
-  if(!ok)return false;
-  fluidOn=true;
-  fluidCanvas.style.display='block';
-  document.body.classList.add('fluid');
-  F.onContextLost=()=>{
-    fluidOn=false;
-    fluidCanvas.style.display='none';
-    document.body.classList.remove('fluid');
-    fieldDirty=true;
-  };
-  F.onContextRestored=()=>{
-    fluidOn=true;
-    fluidCanvas.style.display='block';
-    document.body.classList.add('fluid');
-    try{F.resize(W,H,DPR)}catch(err){}
-  };
-  try{F.resize(W,H,DPR)}catch(err){}
+function initAura(){
+  const A=window.MonadAura;
+  if(!A||!A.init(auraCanvas,{lowPower:LOW_POWER}))return false;
+  const show=on=>{auraOn=on;auraCanvas.style.display=on?'block':'none';document.body.classList.toggle('aura',on);fieldDirty=true;lastSizeKey='';resize()};
+  A.onContextLost=()=>show(false);
+  A.onContextRestored=()=>show(true);
+  show(true);
   return true;
 }
-// Dye is injected as a RATE and integrated over dt, not as a fixed amount per
-// frame. Per-frame injection made the equilibrium brightness depend on frame
-// rate: the same scene that looked right at 30fps bleached to a flat white
-// cloud at 60. Equilibrium is now rate/dissipation, independent of frame rate.
-// SPARSE emission. The old constant per-body drizzle filled the field with a
-// uniform haze; the target is a handful of discrete, very large, very soft
-// masses of colour folding into each other. So: a low idle rate, big bursts
-// when a body is actually struck or resonating, and a much wider aura.
-function fluidSplatOrb(o,dt){
-  const F=window.MonadFluid;
-  if(!fluidOn||!F)return;
-  const energy=(o.hit||0)+.7*(o.resonance||0);
-  const spd=Math.hypot(o.vx||0,o.vy||0);
-  // Soft knee on the hot end: a hard strike used to inject ~25 units/s, which
-  // saturated the dye and washed the impact toward white. Energy now saturates,
-  // so impacts bloom brighter but bounded, and the luminance tone map keeps
-  // whatever brightness survives fully saturated in colour.
-  const knee=energy/(1+.85*energy);
-  const rate=.50+12.5*knee+.50*Math.min(1,spd/260);
-  const s=rate*dt;
-  if(s<=.0004)return;
-  // Wide aura: the dye is heavily blurred, so a large soft source reads as an
-  // atmospheric mass rather than a disc.
-  // Deliberately NOT huge: the display blur spreads it. An emission radius over
-  // half the screen made every source overlap into one uniform wash instead of
-  // discrete masses of colour.
-  const radius=o.r*Math.max(1.65,fieldAtmo*1.12)*(1+.38*energy);
-  F.splat(o.x,o.y,o.vx||0,o.vy||0,orbRGB(o),radius,s);
-}
-// one-shot impulse (a body leaving, a palette arriving) — not rate integrated
-function fluidPuff(o,s){
-  const F=window.MonadFluid;
-  if(!fluidOn||!F)return;
-  F.splat(o.x,o.y,o.vx||0,o.vy||0,orbRGB(o),o.r*Math.max(1.2,fieldAtmo),s);
-}
-function fluidFrame(dt){
-  const F=window.MonadFluid;
-  if(!fluidOn||!F)return;
-  for(const o of orbs){if(!o.deleted)fluidSplatOrb(o,dt)}
-  if(pointer.spawn)fluidSplatOrb(pointer.spawn,dt);
-  F.step(dt);
-  F.render({atmosphere:fieldAtmo,strength:fieldStrength,haze:fieldHaze,
-    grain:.5,warp:.6,background:hexRGB(background)});
-}
-// A new palette should arrive as a visible event, not a silent swap.
-function fluidBloomPalette(list,at){
-  const F=window.MonadFluid;
-  if(!fluidOn||!F||!list)return;
-  const cx=(at&&at.x)||W*.5,cy=(at&&at.y)||H*.5;
-  const R0=Math.min(W,H)*.22;
-  list.forEach((hex,i)=>{
-    const a=(i/list.length)*Math.PI*2;
-    F.splat(cx+Math.cos(a)*R0,cy+Math.sin(a)*R0,
-      Math.cos(a)*150,Math.sin(a)*150,hexRGB(hex),Math.min(W,H)*.1,.75);
-  });
+// Orb ring levels come from the engine; they ease so the visuals breathe with the sound.
+const auraScene={orbs,spawn:null,selected:null,waves:pressureWaves,links:resonanceLinks,background,look:{}};
+function auraFrame(dt){
+  const ease=Math.min(1,dt*14),measured=engineKind==='worklet';
+  for(const o of orbs){
+    const target=measured?(o.ringTarget||0):.6*o.hit;
+    o.ring=(o.ring||0)+(target-(o.ring||0))*ease;
+  }
+  for(const w of pressureWaves)w.fade=pressureWaveStrength(w);
+  for(const l of resonanceLinks)l.alpha=(l.a.deleted||l.b.deleted)?0:clamp(l.life/l.maxLife,0,1)*l.strength;
+  auraScene.spawn=pointer.spawn;auraScene.selected=selected;auraScene.background=background;
+  const k=auraScene.look;k.atmo=fieldAtmo;k.blur=+elBlur.value;k.strength=fieldStrength;k.haze=fieldHaze;k.mix=fieldMix;k.wind=windValue;
+  window.MonadAura.frame(auraScene,dt);
 }
 
 // ================================================================
@@ -3408,6 +3713,8 @@ function sv(tag,attrs,cls){const n=document.createElementNS(NS,tag);if(cls)n.set
 
 const FILL='style="fill:var(--ink)"';
 const ICON={
+  pFreeze:`<path d="M12 2.5v19"/><path d="M3.8 7.2l16.4 9.6"/><path d="M3.8 16.8l16.4-9.6"/><path d="M9.4 4.2L12 6.8l2.6-2.6"/><path d="M9.4 19.8L12 17.2l2.6 2.6"/>`,
+  pHard:`<circle cx="12" cy="12" r="3.2"/><path d="M12 2.4v4.4"/><path d="M12 17.2v4.4"/><path d="M2.4 12h4.4"/><path d="M17.2 12h4.4"/>`,
   // --- hubs ---
   hubSource:`<path d="M2 12c2.6-8 5.7-8 8.3 0s5.7 8 8.3 0"/><path d="M18.6 12H22"/>`,
   hubSpace:`<path d="M4 18a10 10 0 0 1 16 0"/><path d="M7.6 18a5.6 5.6 0 0 1 8.8 0"/><circle cx="12" cy="18" r="1.5" ${FILL}/>`,
@@ -3892,6 +4199,7 @@ const GROUPS=[
   {id:'source',icon:'hubSource',span:168,items:[
     {t:'choice',el:'#wave',icons:['wSine','wTriangle','wSquare','wSawtooth'],a:'waveform'},
     {t:'knob',obj:SOURCE,key:'attack',icon:'pAttack',curve:'log',a:'attack'},
+    {t:'knob',obj:SOURCE,key:'hardness',icon:'pHard',a:'hardness'},
     {t:'knob',obj:SOURCE,key:'decay',icon:'pDecay',curve:'log',a:'tone decay'},
     {t:'knob',obj:SOURCE,key:'level',icon:'pLevel',a:'level'},
     {t:'knob',obj:SOURCE,key:'sizeRing',icon:'pRing',a:'size to pitch'},
@@ -3899,13 +4207,14 @@ const GROUPS=[
     {t:'knob',el:'#sympathy',icon:'pSympathy',a:'sympathy'}
   ]},
   {id:'space',icon:'hubSpace',span:168,items:[
-    {t:'knob',obj:R,key:'dry',icon:'pDry',a:'dry'},
-    {t:'knob',obj:R,key:'wet',icon:'pWet',a:'wet'},
-    {t:'knob',obj:R,key:'predelay',icon:'pPredelay',a:'predelay'},
-    {t:'knob',obj:R,key:'size',icon:'pSize',a:'size'},
-    {t:'knob',obj:R,key:'decay',icon:'pTail',curve:'log',a:'decay'},
-    {t:'knob',obj:R,key:'feedback',icon:'pFeedback',a:'feedback'},
-    {t:'knob',obj:R,key:'damping',icon:'pDamping',curve:'log',a:'damping'}
+    {t:'knob',obj:SPACE,key:'dry',icon:'pDry',a:'dry'},
+    {t:'knob',obj:SPACE,key:'wet',icon:'pWet',a:'wet'},
+    {t:'knob',obj:SPACE,key:'predelay',icon:'pPredelay',a:'predelay'},
+    {t:'knob',obj:SPACE,key:'size',icon:'pSize',a:'size'},
+    {t:'knob',obj:SPACE,key:'decay',icon:'pTail',curve:'log',a:'decay'},
+    {t:'knob',obj:SPACE,key:'highMult',icon:'pDamping',a:'high decay'},
+    {t:'knob',obj:SPACE,key:'shimmer',icon:'pFeedback',a:'shimmer'},
+    {t:'action',icon:()=>'pFreeze',tint:()=>SPACE.freeze?'var(--accent)':'',run:()=>{const i=bindingInput(SPACE,'freeze');i.value=SPACE.freeze?0:1;fire(i)},a:'freeze'}
   ]},
   {id:'weather',icon:'hubWeather',span:168,items:[
     {t:'knob',el:'#wind',icon:'pWind',a:'wind'},
@@ -4160,7 +4469,7 @@ function applyPhotoPalette(hexes,at){
   importPalette(list);
   // darkest swatch becomes the ground
   const bgEl=$('#bgColor');bgEl.value=list[0];fire(bgEl);
-  fluidBloomPalette(list,at);
+  if(auraOn)window.MonadAura.burst(list,at);
   fieldDirty=true;paintPaletteGroup();
 }
 
@@ -4176,14 +4485,8 @@ layoutShell();
 
 let lastSizeKey='';
 function resize(){const r=stage.getBoundingClientRect();W=Math.max(1,r.width);H=Math.max(1,r.height);
-  // Fill rate is the entire cost on a phone (CPU per frame measured at 0.3ms
-  // total: physics 0.06, draw 0.11, fluid 0.14), so it is tempting to starve
-  // this layer. Do not: that was tried and reverted. The bodies layer draws
-  // hard-edged circles — the one thing that MUST be
-  // panel-sharp. A DPR cap of 1 on phones meant a 390px canvas stretched
-  // 2.75x onto a 1080px panel: every orb edge visibly pixelated, and the
-  // cleaner the atmosphere got, the worse it read. Orbs are a few dozen
-  // arc+fill calls; native resolution is cheap. The ATMOSPHERE stays low-res
+  // Bodies render at native DPR on both paths: a DPR cap of 1 on phones was
+  // tried and reverted, every orb edge visibly pixelated. The atmosphere stays low-res
   // by design — softness belongs there, never on the bodies.
   DPR=Math.min(devicePixelRatio||1,3);
   // Mobile browsers fire ResizeObserver for URL-bar show/hide and momentary
@@ -4192,8 +4495,9 @@ function resize(){const r=stage.getBoundingClientRect();W=Math.max(1,r.width);H=
   const key=Math.round(W*DPR)+'x'+Math.round(H*DPR);
   if(key===lastSizeKey){try{layoutShell()}catch(err){}return}
   lastSizeKey=key;
-  body.width=Math.round(W*DPR);body.height=Math.round(H*DPR);bctx.setTransform(DPR,0,0,DPR,0,0);FW=Math.ceil(W*FIELD_SCALE);FH=Math.ceil(H*FIELD_SCALE);field.width=FW;field.height=FH;haze.width=FW;haze.height=FH;glowC.width=FW;glowC.height=FH;
-  if(fluidOn&&window.MonadFluid){try{window.MonadFluid.resize(W,H,DPR)}catch(err){}}
+  // Under the aura the bodies canvas is only an input surface; a 1x1 store keeps it out of the compositor's fill.
+  body.width=auraOn?1:Math.round(W*DPR);body.height=auraOn?1:Math.round(H*DPR);bctx.setTransform(DPR,0,0,DPR,0,0);FW=Math.ceil(W*FIELD_SCALE);FH=Math.ceil(H*FIELD_SCALE);field.width=FW;field.height=FH;haze.width=FW;haze.height=FH;glowC.width=FW;glowC.height=FH;
+  if(auraOn)window.MonadAura.resize(W,H,DPR);
   prunePressureWaves();fieldDirty=true;
   try{layoutShell()}catch(err){}}
 // The loop reschedules itself in a finally: requestAnimationFrame used to be the
@@ -4229,11 +4533,10 @@ function frame(now){
 
   captureMotionSample(now);
   updateVoiceStat(now);
-  draw();
-  if(fluidOn)fluidFrame(dt);else renderField(now);
+  if(auraOn)auraFrame(dt);else{draw();renderField(now)}
   }catch(err){
-    if(fluidOn&&window.MonadFluid&&window.MonadFluid.onContextLost)window.MonadFluid.onContextLost();
-    else fluidOn=false;
+    if(auraOn&&window.MonadAura.onContextLost)window.MonadAura.onContextLost();
+    else auraOn=false;
     if(!frame.warned){frame.warned=true;console.error('monad: frame fault, atmosphere disabled',err)}
   }finally{
     requestAnimationFrame(frame);
@@ -4242,7 +4545,7 @@ function frame(now){
 // ---------------------------------------------------------------------------
 // ADAPTIVE QUALITY. The target device is unknown and has to hold a high refresh
 // rate, so the instrument measures itself and sheds work until it does.
-//   3 full | 2 no bloom | 1 no bloom + 70% buffer | 0 fluid off (2D) | -1 bare
+//   3 full | 2 no bloom | 1..-1 no bloom, smaller aura buffer. Bodies stay native.
 // ---------------------------------------------------------------------------
 let qLevel=3,qSlow=0,qLastChange=0;
 // The frame budget tracks the panel, not a fixed 50 fps floor. panelMs is the
@@ -4252,10 +4555,8 @@ let qLevel=3,qSlow=0,qLastChange=0;
 // sitting "close enough" at a juddery 70.
 let panelMs=16.7;
 function frameBudgetMs(){return Math.max(11,panelMs*1.45)}
-// Measured: the 2D atmosphere costs ~1.7x the WebGL fluid on a phone viewport
-// (47.7ms vs 27.8ms), so the old bottom rungs - "turn the fluid off" - made a
-// struggling device SLOWER. The ladder now only ever shrinks the fluid. Falling
-// back to 2D is for absent WebGL2, never for performance.
+// The 2D atmosphere measured ~1.7x the WebGL cost on a phone, so falling back
+// to 2D is for absent WebGL2, never for performance.
 const QUALITY_STEPS=[
   {bloom:false,scale:.40},   // -1
   {bloom:false,scale:.55},   //  0
@@ -4265,10 +4566,10 @@ const QUALITY_STEPS=[
 ];
 const qTransitions=[];
 function applyQuality(){
-  const F=window.MonadFluid;
+  const F=window.MonadAura;
   const step=QUALITY_STEPS[clamp(qLevel+1,0,QUALITY_STEPS.length-1)];
   if(F&&F.quality){try{F.quality(step)}catch(err){}}
-  if(!fluidOn&&qLevel<=0)fieldHaze=0;   // only the 2D path needs this
+  if(!auraOn&&qLevel<=0)fieldHaze=0;   // only the 2D path needs this
   qTransitions.push(qLevel);
   if(qTransitions.length>8)qTransitions.shift();
 }
@@ -4307,10 +4608,10 @@ function perfTick(now,frameMs){
   }
   const srt=perfSamples.slice().sort((a,b)=>a-b);
   const p50=srt[srt.length>>1]||0,p95=srt[Math.floor(srt.length*.95)]||0;
-  const F=window.MonadFluid;
+  const F=window.MonadAura;
   perfEl.textContent=
     'fps '+(1000/Math.max(.001,p50)).toFixed(0)+'   frame p50 '+p50.toFixed(1)+'ms  p95 '+p95.toFixed(1)+'ms\n'+
-    'quality '+qLevel+' ['+qTransitions.join('>')+']  atmosphere '+(fluidOn?'webgl':'2d')+'\n'+
+    'quality '+qLevel+' ['+qTransitions.join('>')+']  atmosphere '+(auraOn?'webgl':'2d')+'\n'+
     'bodies '+orbs.length+'   dpr '+DPR+'   '+innerWidth+'x'+innerHeight+'\n'+
     'buffer '+(F&&F.info?F.info():'-');
 }
@@ -4321,7 +4622,7 @@ function perfTick(now,frameMs){
 const DEFAULT_PRESET={
   format:'monad-preset',version:1,
   resonant_ecosystem:{modal_body_mix:.32,sympathetic_coupling:.73,acoustic_pressure_feedback:.47,pressure_wave_speed_px_s:520},
-  source:{waveform:'sine',attack_s:.039,decay_s:6,level:.234,size_ring:1.68,max_voices:55},
+  source:{waveform:'sine',attack_s:.004,hardness:.65,decay_s:6,level:.234,size_ring:1.68,max_voices:55},
   reverb:{
     input:.55,dry:1,wet:.92,output:.85,predelay_ms:55,size:3.89,decay_s:20,
     feedback_percent:73.8,final_highpass_hz:110,final_lowpass_24db_hz:9000,
@@ -4331,26 +4632,26 @@ const DEFAULT_PRESET={
   },
   environment:{drag:.06,wind:.36,atmosphere:3.4,blur_px:30,field_strength:.84,over_light:.25,mix:'screen'},
   colour:{background:'#221202',palette:['#221202','#3A280D','#556979','#77807D','#878D80','#AB7F48','#C39A61','#E8C882']},
-  voicing:{mode:'custom',custom:[26,36,48,51,55,56,60,63,67,68,72,75,79,80,84,87,91,92],octave_spread:0,transpose:0},
+  voicing:{mode:'barron_m11',custom:[40,47,54,55,62,64,66,67,69,71,74,76,78,79,83,86,88,90],octave_spread:0,transpose:0},
   scene:{coordinate_space:'normalized',orbs:[
-    {x:0.589848,y:0.922568,radius:0.071202,note:48,colour:'#AB7F48',vx:0.054417,vy:0.011424},
-    {x:0.2473,y:0.904469,radius:0.134508,note:48,colour:'#221202',vx:0.020756,vy:-0.006961},
-    {x:0.330656,y:0.261376,radius:0.107685,note:48,colour:'#C39A61',vx:0.04907,vy:-0.033829},
-    {x:0.887222,y:0.67679,radius:0.057173,note:48,colour:'#AB7F48',vx:0.004506,vy:-0.026723},
-    {x:0.564439,y:0.644477,radius:0.033333,note:55,colour:'#C39A61',vx:0.031957,vy:-0.02762},
-    {x:0.911108,y:0.019852,radius:0.033333,note:51,colour:'#221202',vx:0.11551,vy:-0.077186},
-    {x:0.966667,y:0.974175,radius:0.033333,note:63,colour:'#AB7F48',vx:-0.00007,vy:-0.004379},
-    {x:0.855587,y:0.246513,radius:0.086446,note:26,colour:'#77807D',vx:0.005976,vy:-0.051427},
-    {x:0.803445,y:0.928994,radius:0.033333,note:51,colour:'#878D80',vx:-0.048127,vy:-0.001568},
-    {x:0.128769,y:0.638573,radius:0.086714,note:26,colour:'#3A280D',vx:0.012302,vy:-0.016591},
-    {x:0.940365,y:0.721372,radius:0.033333,note:48,colour:'#77807D',vx:-0.003487,vy:-0.021402},
-    {x:0.8588,y:0.976943,radius:0.033333,note:56,colour:'#3A280D',vx:-0.009292,vy:-0.002713},
-    {x:0.161624,y:0.468002,radius:0.033333,note:63,colour:'#C39A61',vx:0.047543,vy:-0.03357},
-    {x:0.2342,y:0.415911,radius:0.033333,note:48,colour:'#556979',vx:0.045427,vy:-0.031929},
-    {x:0.050304,y:0.91557,radius:0.033333,note:60,colour:'#AB7F48',vx:0.021364,vy:-0.016884},
-    {x:0.177615,y:0.296764,radius:0.033333,note:51,colour:'#77807D',vx:0.035336,vy:-0.024584},
-    {x:0.966606,y:0.806901,radius:0.033333,note:55,colour:'#3A280D',vx:0.00728,vy:-0.018038},
-    {x:0.934183,y:0.396595,radius:0.033333,note:26,colour:'#3A280D',vx:0.007493,vy:-0.034074}
+    {x:0.589848,y:0.922568,radius:0.071202,colour:'#AB7F48',vx:0.054417,vy:0.011424},
+    {x:0.2473,y:0.904469,radius:0.134508,colour:'#221202',vx:0.020756,vy:-0.006961},
+    {x:0.330656,y:0.261376,radius:0.107685,colour:'#C39A61',vx:0.04907,vy:-0.033829},
+    {x:0.887222,y:0.67679,radius:0.057173,colour:'#AB7F48',vx:0.004506,vy:-0.026723},
+    {x:0.564439,y:0.644477,radius:0.033333,colour:'#C39A61',vx:0.031957,vy:-0.02762},
+    {x:0.911108,y:0.019852,radius:0.033333,colour:'#221202',vx:0.11551,vy:-0.077186},
+    {x:0.966667,y:0.974175,radius:0.033333,colour:'#AB7F48',vx:-0.00007,vy:-0.004379},
+    {x:0.855587,y:0.246513,radius:0.086446,colour:'#77807D',vx:0.005976,vy:-0.051427},
+    {x:0.803445,y:0.928994,radius:0.033333,colour:'#878D80',vx:-0.048127,vy:-0.001568},
+    {x:0.128769,y:0.638573,radius:0.086714,colour:'#3A280D',vx:0.012302,vy:-0.016591},
+    {x:0.940365,y:0.721372,radius:0.033333,colour:'#77807D',vx:-0.003487,vy:-0.021402},
+    {x:0.8588,y:0.976943,radius:0.033333,colour:'#3A280D',vx:-0.009292,vy:-0.002713},
+    {x:0.161624,y:0.468002,radius:0.033333,colour:'#C39A61',vx:0.047543,vy:-0.03357},
+    {x:0.2342,y:0.415911,radius:0.033333,colour:'#556979',vx:0.045427,vy:-0.031929},
+    {x:0.050304,y:0.91557,radius:0.033333,colour:'#AB7F48',vx:0.021364,vy:-0.016884},
+    {x:0.177615,y:0.296764,radius:0.033333,colour:'#77807D',vx:0.035336,vy:-0.024584},
+    {x:0.966606,y:0.806901,radius:0.033333,colour:'#3A280D',vx:0.00728,vy:-0.018038},
+    {x:0.934183,y:0.396595,radius:0.033333,colour:'#3A280D',vx:0.007493,vy:-0.034074}
   ]}
 };
 function seedWorld(){
@@ -4359,10 +4660,11 @@ function seedWorld(){
 }
 boot();
 // verify-*.js harness hook (dev tooling only; nothing in the instrument reads it)
-window.__monadTest={buildPreset,applyPresetObject,R,applyReverb:()=>{if(ac)applyReverb()},
+window.__monadTest={buildPreset,applyPresetObject,R,SPACE,spaceMessage,setEngine,
+  get orbs(){return orbs},applyReverb:()=>{if(ac)applyReverb()},
   get orbNotes(){return orbs.map(o=>o.note)},
   get lastStrikeMidi(){return lastStrikeMidi},
-  strike(imp=60){const o=orbs[0];if(o)strikeNow(o,imp,false);return lastStrikeMidi}};
+  strike(imp=60,i=0){const o=orbs[i%Math.max(1,orbs.length)];if(o)strikeNow(o,imp,false);return lastStrikeMidi}};
 })();
 </script>
 </body>

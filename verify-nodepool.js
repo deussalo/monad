@@ -4,9 +4,9 @@
 // reintroduces the crackle without any visible symptom in other tests.
 const { chromium } = require('/srv/rig/monad/node_modules/playwright-core');
 const path = require('path');
-const FILE = process.argv[2] || ('file://' + path.join(__dirname, 'monad.html'));
+const FILE = (process.argv[2] || ('file://' + path.join(__dirname, 'monad.html'))) + '#engine=legacy';
 (async () => {
-  const b = await chromium.launch({ executablePath:'/srv/rig/.cache/ms-playwright/chromium-1187/chrome-linux/chrome',
+  const b = await chromium.launch({ executablePath:(process.env.MONAD_CHROME||'/srv/rig/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome'),
     args:['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader'] });
   const ctx = await b.newContext({viewport:{width:390,height:844},deviceScaleFactor:3,hasTouch:true,isMobile:true});
   const p = await ctx.newPage();

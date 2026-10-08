@@ -7,7 +7,7 @@
 // Run:  node perf-suite.js [--phones] [--audio-load <n>] [--orbs <max>]
 const { chromium } = require('/srv/rig/monad/node_modules/playwright-core');
 const FILE = 'file://' + '/srv/rig/monad/monad.html';
-const CHROME = '/srv/rig/.cache/ms-playwright/chromium-1187/chrome-linux/chrome';
+const CHROME = (process.env.MONAD_CHROME||'/srv/rig/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome');
 const LIBS = [
   '/srv/rig/lit/tools/render-bench/vendor-libs/extracted/usr/lib/x86_64-linux-gnu',
   '/srv/rig/lit/tools/render-bench/vendor-libs/lib'
