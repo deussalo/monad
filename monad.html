@@ -2018,19 +2018,16 @@ function noteForSize(r){
 }
 function randomColour(){return PALETTE[Math.floor(Math.random()*PALETTE.length)]}
 
-// Changing the voicing retunes the world, not just future orbs: every body on
-// the canvas quantizes to the nearest note the new voicing can produce (ties
-// resolve downward). Runs on mode pick, keyboard edits, and preset import.
-function retuneOrbs(){
+// An orb on the old voicing keeps its place in it: the note at the same relative
+// position in the new set, so a transposition moves every orb by exactly the
+// shift. An orb off the old voicing takes the nearest new note.
+function nearestNote(set,note){let best=set[0];for(const n of set)if(Math.abs(n-note)<Math.abs(best-note))best=n;return best}
+function changeVoicing(apply){
   const MV=window.MonadVoicing;if(!MV)return;
-  const set=MV.noteSet();if(!set.length)return;
-  for(const o of orbs){
-    let best=set[0],bd=Infinity;
-    for(const n of set){
-      const d=Math.abs(n-o.note);
-      if(d<bd||(d===bd&&n<best)){bd=d;best=n}
-    }
-    o.note=best;
+  const from=MV.noteSet();apply(MV);const to=MV.noteSet();
+  if(to.length)for(const o of orbs){
+    const i=from.indexOf(o.note);
+    o.note=i<0?nearestNote(to,o.note):to[Math.round(from.length>1?i/(from.length-1)*(to.length-1):(to.length-1)/2)];
   }
   paintSelection();
   refreshPresetBox();
@@ -2324,24 +2321,21 @@ function applyPresetObject(p){
   if(Number.isFinite(+env.over_light))setInputValue('hazeAmt',clamp(+env.over_light,0,.6));
   if(['screen','lighter','source-over'].includes(env.mix))setInputValue('mix',env.mix);
 
-  if(p.voicing&&window.MonadVoicing){
+  if(p.voicing&&window.MonadVoicing)changeVoicing(MV=>{
     // custom pool first, so mode:'custom' has notes to stick to
     if(Array.isArray(p.voicing.custom)){
-      window.MonadVoicing.setCustomNotes(p.voicing.custom);
-      noteSel.set=new Set(window.MonadVoicing.getCustomNotes());
+      MV.setCustomNotes(p.voicing.custom);
+      noteSel.set=new Set(MV.getCustomNotes());
     }
-    if(typeof p.voicing.mode==='string')window.MonadVoicing.setMode(p.voicing.mode);
-    if(Number.isFinite(+p.voicing.transpose))window.MonadVoicing.setTranspose(+p.voicing.transpose);
+    if(typeof p.voicing.mode==='string')MV.setMode(p.voicing.mode);
+    if(Number.isFinite(+p.voicing.transpose))MV.setTranspose(+p.voicing.transpose);
     if(Number.isFinite(+p.voicing.octave_spread)){
       const v=clamp(+p.voicing.octave_spread,0,1);
       window.MonadVoicing.setOctaveSpread(v);
       octSpreadInput.value=v;
       octSpreadInput.dispatchEvent(new Event('input',{bubbles:false}));   // repaint the rotary
     }
-    // presets without a scene keep the current orbs — quantize them to the
-    // imported voicing (a scene, if present, overwrites notes right below)
-    retuneOrbs();
-  }
+  });
   const colour=p.colour||p.color||{};
   importPalette(colour.palette);
   if(typeof colour.background==='string'&&/^#[0-9a-f]{6}$/i.test(colour.background)){
@@ -4117,8 +4111,7 @@ function makeVoicingNode(mode){
   }
   function pick(){
     const MV=window.MonadVoicing;if(!MV)return;
-    MV.setMode(mode.id);
-    retuneOrbs();
+    changeVoicing(MV=>MV.setMode(mode.id));
     itemNodes.forEach(n=>n.paint&&n.paint());
   }
   pad.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();pick()});
@@ -4161,8 +4154,7 @@ function makeToneNode(t){
   }
   function pick(){
     const MV=window.MonadVoicing;if(!MV)return;
-    MV.setTranspose(t);
-    retuneOrbs();
+    changeVoicing(MV=>MV.setTranspose(t));
     itemNodes.forEach(n=>n.paint&&n.paint());
   }
   // pointerdown, not click: the wheel is an instrument — the root must be
@@ -4187,10 +4179,7 @@ const noteSel={oct:2,set:new Set([26,36,48,51,55,56,60,63,67,68,72,75,79,80,84,8
 function noteSelSync(){
   const MV=window.MonadVoicing;if(!MV)return;
   const arr=[...noteSel.set].sort((a,b)=>a-b);
-  MV.setCustomNotes(arr);
-  if(arr.length)MV.setMode('custom');
-  retuneOrbs();
-  refreshPresetBox();
+  changeVoicing(MV=>{MV.setCustomNotes(arr);if(arr.length)MV.setMode('custom')});
 }
 function paintNoteSelGroup(){if(activeGroup==='notesel')itemNodes.forEach(n=>n.paint&&n.paint())}
 function noteSelPcElsewhere(pc){

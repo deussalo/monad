@@ -156,7 +156,8 @@ const path = require('path');
     orbsRetuned: window.__monadTest.orbNotes.every(n => window.MonadVoicing.noteSet().includes(n))
   }));
   out.afterTone.silence = await silence();
-  if (JSON.stringify(out.afterTone.notes) === JSON.stringify(out.notesBefore)) errors.push('tone press left every orb note unchanged');
+  out.afterTone.notMovedBy5 = out.notesBefore.filter((n, i) => out.afterTone.notes[i] !== n - 5).length;
+  if (out.afterTone.notMovedBy5) errors.push(out.afterTone.notMovedBy5 + ' of ' + out.notesBefore.length + ' orbs did not move by the -5 transposition');
   if (out.afterTone.silence.messages || out.afterTone.silence.strikes) errors.push('tone press sounded: ' + JSON.stringify(out.afterTone.silence));
   if (out.afterTone.transpose !== -5) errors.push('tone press set transpose ' + out.afterTone.transpose + ', expected -5');
   if (!out.afterTone.orbsRetuned) errors.push('tone press did not retune the world');
@@ -183,6 +184,13 @@ const path = require('path');
   if (out.built.mode !== 'lydian_13') errors.push('voicing press picked ' + out.built.mode + ', expected lydian_13');
 
   await page.screenshot({ path: 'shot-tonewheel.png' });
+
+  // ── every orb plays its retuned note (after the silence checks: this strikes) ──
+  out.played = await page.evaluate(() => {
+    const T = window.__monadTest;
+    return T.orbs.map((o, i) => [o.note, T.strike(60, i)]).filter(([n, m]) => n !== m);
+  });
+  if (out.played.length) errors.push(out.played.length + ' orbs play a note other than their own: ' + JSON.stringify(out.played));
 
   // ── preset round-trip keeps transpose ───────────────────────────────────
   out.preset = await page.evaluate(() => {
