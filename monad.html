@@ -1203,6 +1203,9 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     progCopy = compile(VERT_FULL, FRAG_COPY);
     progComp = compile(VERT_FULL, FRAG_COMP);
     if (!progGround || !progShape || !progSplat || !progBlur || !progResolve || !progCopy || !progComp) { gl = null; return false; }
+    [[progBlur, 'uSrc'], [progResolve, 'uAcc'], [progCopy, 'uSrc'], [progComp, 'uSrc']].forEach(function (b) {
+      gl.useProgram(b[0].p); gl.uniform1i(b[0].u[b[1]], 0);
+    });
 
     quadBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
@@ -1232,13 +1235,14 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     return true;
   }
 
-  function allocate() {
-    dropTarget(acc); dropTarget(blurA); dropTarget(blurB); dropTarget(ground);
+  function allocate(resized) {
+    dropTarget(acc); dropTarget(blurA); dropTarget(blurB);
     var div = lowPower ? 8 : 6;
     auraW = Math.max(16, Math.min(lowPower ? 220 : 360, Math.round(cssW/div*Math.sqrt(renderScale))));
     auraH = Math.max(16, Math.round(auraW*cssH/cssW));
     acc = makeTarget(auraW, auraH); blurA = makeTarget(auraW, auraH); blurB = makeTarget(auraW, auraH);
-    ground = makeTarget(GROUND_W, Math.max(8, Math.round(GROUND_W*cssH/cssW))); groundAge = 1e9;
+    if (resized) { dropTarget(ground); ground = makeTarget(GROUND_W, Math.max(8, Math.round(GROUND_W*cssH/cssW))); }
+    groundAge = 1e9;
     if (!acc || !blurA || !blurB || !ground) { ok = false; api.available = false; if (typeof api.onContextLost === 'function') api.onContextLost(); }
   }
 
@@ -1249,14 +1253,14 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     dispW = Math.max(1, Math.round(cssW*px)); dispH = Math.max(1, Math.round(cssH*px));
     if (canvas.width !== dispW) canvas.width = dispW;
     if (canvas.height !== dispH) canvas.height = dispH;
-    allocate();
+    allocate(true);
   }
 
   function quality(step) {
     if (!step) return;
     bloom = !!step.bloom;
     var s = Math.max(0.3, Math.min(1, +step.scale || 1));
-    if (s !== renderScale) { renderScale = s; if (ok) allocate(); }
+    if (s !== renderScale) { renderScale = s; if (ok) allocate(false); }
   }
 
   /* ---- particle life ---------------------------------------------------- */
@@ -1307,7 +1311,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
         s.x[i] += s.vx[i]*dt; s.y[i] += s.vy[i]*dt;
       }
     }
-    swarms.forEach(function (s, uid) { if (s.seen !== frame) swarms.delete(uid); });
+    for (var entry of swarms) if (entry[1].seen !== frame) swarms.delete(entry[0]);
     for (var m = motes.length - 1; m >= 0; m--) {
       var p = motes[m];
       p.age += dt;
@@ -1378,12 +1382,9 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     shapeData[b+12] = d0; shapeData[b+13] = d1; shapeData[b+14] = 0; shapeData[b+15] = 0;
     return n + 1;
   }
-  var WHITE = [1, 1, 1];
+  var WHITE = [1, 1, 1], BLOOM_STRIDES = [1, 2, 4], STRIDES = [1, 3];
 
-  function drawFull() {
-    gl.bindVertexArray(vaoFull);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-  }
+  function drawFull() { gl.drawArrays(gl.TRIANGLES, 0, 3); }
 
   /* scene: {orbs, spawn, selected, waves:[{x,y,r,fade}], links:[{a,b,alpha}], background, look:{atmo,blur,strength,haze,mix,wind}} */
   function frame(scene, dt) {
@@ -1407,6 +1408,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
       gl.uniform3f(progGround.u.uBg, bg[0], bg[1], bg[2]);
       gl.uniform1f(progGround.u.uTime, time);
       gl.uniform2f(progGround.u.uRes, cssW, cssH);
+      gl.bindVertexArray(vaoFull);
       drawFull();
     }
     // aura: accumulate
@@ -1439,13 +1441,13 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     // aura: blur at its own resolution; widening strides compose one broad Gaussian
     gl.disable(gl.BLEND);
     gl.useProgram(progBlur.p);
-    var src = acc, strides = bloom ? [1, 2, 4] : [1, 3];
+    gl.bindVertexArray(vaoFull);
+    var src = acc, strides = bloom ? BLOOM_STRIDES : STRIDES;
     var px = Math.max(0.5, look.blur/24);
     for (var b = 0; b < strides.length; b++) {
       var st = strides[b]*px;
       gl.bindFramebuffer(gl.FRAMEBUFFER, blurA.fb);
-      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, src.tex);
-      gl.uniform1i(progBlur.u.uSrc, 0);
+      gl.bindTexture(gl.TEXTURE_2D, src.tex);
       gl.uniform2f(progBlur.u.uDir, st/auraW, 0);
       drawFull();
       gl.bindFramebuffer(gl.FRAMEBUFFER, blurB.fb);
@@ -1459,8 +1461,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     gl.bindFramebuffer(gl.FRAMEBUFFER, blurA.fb);
     gl.viewport(0, 0, auraW, auraH);
     gl.useProgram(progResolve.p);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, src.tex);
-    gl.uniform1i(progResolve.u.uAcc, 0);
+    gl.bindTexture(gl.TEXTURE_2D, src.tex);
     var veil = look.mix === 'lighter' ? 0.0 : look.mix === 'screen' ? 0.55 : 1.0;
     gl.uniform1f(progResolve.u.uDensity, 1.6);
     gl.uniform1f(progResolve.u.uStrength, Math.min(1, look.strength*0.78));
@@ -1472,8 +1473,7 @@ Monad is a live instrument and cannot run without it. The page you are looking a
     gl.viewport(0, 0, dispW, dispH);
     gl.disable(gl.BLEND);
     gl.useProgram(progCopy.p);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ground.tex);
-    gl.uniform1i(progCopy.u.uSrc, 0);
+    gl.bindTexture(gl.TEXTURE_2D, ground.tex);
     drawFull();
 
     // rings, then links and bodies
@@ -1510,8 +1510,8 @@ Monad is a live instrument and cannot run without it. The page you are looking a
 
     gl.useProgram(progComp.p);
     gl.bindTexture(gl.TEXTURE_2D, blurA.tex);
-    gl.uniform1i(progComp.u.uSrc, 0);
     gl.uniform1f(progComp.u.uTime, time);
+    gl.bindVertexArray(vaoFull);
     drawFull();
     gl.bindVertexArray(null);
   }
@@ -4553,8 +4553,9 @@ function resize(){const r=stage.getBoundingClientRect();W=Math.max(1,r.width);H=
   if(key===lastSizeKey){try{layoutShell()}catch(err){}return}
   lastSizeKey=key;
   // Under the aura the bodies canvas is only an input surface; a 1x1 store keeps it out of the compositor's fill.
-  body.width=auraOn?1:Math.round(W*DPR);body.height=auraOn?1:Math.round(H*DPR);bctx.setTransform(DPR,0,0,DPR,0,0);FW=Math.ceil(W*FIELD_SCALE);FH=Math.ceil(H*FIELD_SCALE);field.width=FW;field.height=FH;haze.width=FW;haze.height=FH;glowC.width=FW;glowC.height=FH;
+  body.width=auraOn?1:Math.round(W*DPR);body.height=auraOn?1:Math.round(H*DPR);bctx.setTransform(DPR,0,0,DPR,0,0);
   if(auraOn)window.MonadAura.resize(W,H,DPR);
+  else{FW=Math.ceil(W*FIELD_SCALE);FH=Math.ceil(H*FIELD_SCALE);field.width=FW;field.height=FH;haze.width=FW;haze.height=FH;glowC.width=FW;glowC.height=FH}
   prunePressureWaves();fieldDirty=true;
   try{layoutShell()}catch(err){}}
 // The loop reschedules itself in a finally: requestAnimationFrame used to be the
