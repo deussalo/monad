@@ -14,20 +14,14 @@ const FILE = process.argv[2] || ('file://' + path.join(__dirname, 'monad.html'))
   await p.touchscreen.tap(195,800); await p.waitForTimeout(900);
   if (await p.evaluate(()=>window.__monadAudio()) !== 'running') { console.log('AUDIO NOT RUNNING'); await b.close(); process.exit(1); }
   await p.touchscreen.tap(195,800); await p.waitForTimeout(400);
-  const has = await p.evaluate(()=>window.__monadAudioStats().contactEvents!==undefined);
-  if (!has) { console.log('stats counters absent (pre-patch build) - reporting drops only'); }
-  // Isolate from the factory scene (18 orbs). This harness measures
-  // "new contacts become strikes" on a known sparse world, then adds 12.
-  await p.evaluate(()=>window.__monadTest.applyPresetObject({scene:{orbs:[
-    {x:.30,y:.40,radius:.06},{x:.50,y:.45,radius:.06},{x:.70,y:.40,radius:.06},
-    {x:.35,y:.60,radius:.06},{x:.55,y:.65,radius:.06},{x:.65,y:.55,radius:.06}
-  ]}}));
-  // storm: many bodies, max wind, minimal drag
-  await p.evaluate(()=>{const set=(i,v)=>{const e=document.querySelector(i);e.value=v;e.dispatchEvent(new Event('input',{bubbles:true}))};
-    set('#wind','1'); set('#drag','0.02');});
-  for (let i=0;i<12;i++){ await p.touchscreen.tap(50+((i*61)%290), 150+((i*83)%460)); await p.waitForTimeout(70); }
-  const base = await p.evaluate(()=>window.__monadAudioStats());
-  await p.waitForTimeout(12000);
+  // Wind off and six pairs launched head-on from close range: software GL runs the
+  // simulation at about a tenth of real time, so a long course never closes.
+  await p.evaluate(()=>{const e=document.querySelector('#wind');e.value='0';e.dispatchEvent(new Event('input',{bubbles:true}))});
+  const PAIRS = 6;
+  const base = await p.evaluate(n=>{const orbs=[];
+    for(let i=0;i<n;i++){const y=.15+i*.14;orbs.push({x:.38,y,radius:.05,vx:.5,vy:0},{x:.62,y,radius:.05,vx:-.5,vy:0})}
+    const s=window.__monadAudioStats();window.__monadTest.applyPresetObject({scene:{orbs}});return s},PAIRS);
+  await p.waitForTimeout(6000);
   const end = await p.evaluate(()=>window.__monadAudioStats());
   const dc = (end.contactEvents||0)-(base.contactEvents||0);
   const ds = (end.strikeCount||0)-(base.strikeCount||0);
@@ -38,7 +32,8 @@ const FILE = process.argv[2] || ('file://' + path.join(__dirname, 'monad.html'))
   console.log('modalDrops           :', end.modalDrops, '(>0 by design: modal layer drops, never steals)');
   console.log('AudioContext state   :', end.state);
   console.log('errors               :', errs.length?errs.slice(0,2):'NONE');
-  const ok = end.state==='running' && end.voiceDrops===0 && (!dc || ds/dc > 0.9);
+  console.log('designed contacts    :', 2*PAIRS, '(at least)');
+  const ok = end.state==='running' && end.voiceDrops===0 && dc >= 2*PAIRS && ds/dc > 0.9;
   console.log(ok?'\nSTRIKES: PASS':'\nSTRIKES: FAIL');
   await b.close(); process.exit(ok?0:1);
 })();
