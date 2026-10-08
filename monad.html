@@ -1710,6 +1710,7 @@ class MonadEngine extends AudioWorkletProcessor{
     this.pl=new Float64Array(V);this.pr=new Float64Array(V);this.plT=new Float64Array(V);this.prT=new Float64Array(V);this.e=new Float64Array(V);
     this.exc=new Float64Array(BLOCK);this.live=new Int32Array(MAXM);this.vb=new Float64Array(BLOCK);
     this.dryL=new Float32Array(BLOCK);this.dryR=new Float32Array(BLOCK);
+    this.maxStarts=4*V;this.maxWait=8*BLOCK;
     this.reset(o);this.warm(o);
     this.port.onmessage=ev=>{const m=ev.data;if(m.type==='strikes')this.queue.push(m.d);else if(m.type==='space')this.space.set(m);else if(m.type==='silence')this.silence()};
   }
@@ -1737,7 +1738,7 @@ class MonadEngine extends AudioWorkletProcessor{
       this.pl,this.pr,this.plT,this.prT,this.e,this.exc,this.live,this.vb,this.dryL,this.dryR,this.pendAt])a.fill(0);
     this.pend.fill(null);this.space.clear(o.space);
     this.queue=[packStrikes((o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0)))];this.queueAt=0;this.queueOff=0;
-    this.frame=0;this.levelBlocks=0;this.quietBlocks=0;this.steals=0;this.drops=0;this.strikes=0;this.statAt=0;this.idle=false;this.muted=false;this.ringing=false;this.idleReported=false;
+    this.frame=0;this.levelBlocks=0;this.quietBlocks=0;this.steals=0;this.drops=0;this.strikes=0;this.statAt=0;this.idle=false;this.muted=false;this.ringing=false;this.idleReported=false;this.waitFrom=-1;
   }
   post(m,transfer){if(!this.muted)this.port.postMessage(m,transfer)}
   silence(){this.on.fill(0);this.zr.fill(0);this.zi.fill(0);this.pend.fill(null)}
@@ -1753,19 +1754,19 @@ class MonadEngine extends AudioWorkletProcessor{
     const len=Math.max(8,Math.round((d[o+3]||.002)*fs));this.cLen[v]=len;this.cN[v]=len;
     const p=Math.max(-1,Math.min(1,d[o+5]||0)),a=(p+1)*Math.PI/4;this.plT[v]=Math.cos(a);this.prT[v]=Math.sin(a);
   }
+  // false: every voice is already fading out, so the strike has to wait.
   start(d,o){
-    this.strikes++;
     const V=this.V,key=d[o+1];
-    for(let v=0;v<V;v++)if(this.on[v]&&this.key[v]===key&&this.fade[v]===0){this.load(v,d,o);return}
+    for(let v=0;v<V;v++)if(this.on[v]&&this.key[v]===key&&this.fade[v]===0){this.strikes++;this.load(v,d,o);return true}
     let free=-1;for(let v=0;v<V;v++)if(!this.on[v]){free=v;break}
-    const n=this.active(),poly=Math.sqrt(8/Math.max(8,n+1));d[o+2]*=poly;
+    const n=this.active(),poly=Math.sqrt(8/Math.max(8,n+1));
     if(free<0){
       let best=-1,be=Infinity;
       for(let v=0;v<V;v++)if(this.fade[v]===0&&this.e[v]<be){be=this.e[v];best=v}
-      if(best<0){this.drops++;return}
-      this.steals++;this.fade[best]=1;this.pend[best]=d;this.pendAt[best]=o;return;
+      if(best<0)return false;
+      this.strikes++;d[o+2]*=poly;this.steals++;this.fade[best]=1;this.pend[best]=d;this.pendAt[best]=o;return true;
     }
-    this.begin(free,d,o);
+    this.strikes++;d[o+2]*=poly;this.begin(free,d,o);return true;
   }
   begin(v,d,o){
     const b=v*MAXM;for(let k=0;k<MAXM;k++){this.zr[b+k]=0;this.zi[b+k]=0}
@@ -1811,12 +1812,18 @@ class MonadEngine extends AudioWorkletProcessor{
   process(inputs,outputs){
     const out=outputs[0],L=out[0],R=out[1]||out[0],n=L.length;
     const end=this.frame+n;
-    const q=this.queue;
-    while(this.queueAt<q.length){
+    const q=this.queue;let starts=0;
+    while(this.queueAt<q.length&&starts<this.maxStarts){
       const d=q[this.queueAt];
       if(this.queueOff>=d.length){this.queueAt++;this.queueOff=0;continue}
       if(d[this.queueOff]>=end)break;
-      this.start(d,this.queueOff);this.queueOff+=strikeSize(d,this.queueOff);
+      starts++;
+      if(!this.start(d,this.queueOff)){
+        if(this.waitFrom<0)this.waitFrom=this.frame;
+        if(this.frame-this.waitFrom<this.maxWait)break;
+        this.strikes++;this.drops++;
+      }
+      this.waitFrom=-1;this.queueOff+=strikeSize(d,this.queueOff);
     }
     if(this.queueAt===q.length){q.length=0;this.queueAt=0}
     const dL=this.dryL,dR=this.dryR;dL.fill(0);dR.fill(0);
