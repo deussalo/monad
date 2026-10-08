@@ -1715,7 +1715,7 @@ class MonadEngine extends AudioWorkletProcessor{
       this.pl,this.pr,this.plT,this.prT,this.e,this.exc,this.live,this.vb,this.dryL,this.dryR])a.fill(0);
     this.pend.fill(null);this.space.clear(o.space);
     this.queue=(o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0));
-    this.frame=0;this.levelBlocks=0;this.quietBlocks=0;this.steals=0;this.strikes=0;this.statAt=0;this.idle=false;this.muted=false;
+    this.frame=0;this.levelBlocks=0;this.quietBlocks=0;this.steals=0;this.strikes=0;this.statAt=0;this.idle=false;this.muted=false;this.ringing=false;
   }
   post(m,transfer){if(!this.muted)this.port.postMessage(m,transfer)}
   silence(){this.on.fill(0);this.zr.fill(0);this.zi.fill(0);this.pend.fill(null)}
@@ -1798,8 +1798,9 @@ class MonadEngine extends AudioWorkletProcessor{
     this.idle=this.quietBlocks>this.space.holdBlocks;
     if(!this.idle)this.space.process(dL,dR,L,R,n);
     this.frame=end;
-    if(++this.levelBlocks>=8){
-      this.levelBlocks=0;const d=new Float64Array(voices*2);let j=0;
+    // Silence is reported once, not every 8 blocks until the next strike.
+    if(++this.levelBlocks>=8&&(this.levelBlocks=0,voices||this.ringing)){
+      this.ringing=voices>0;const d=new Float64Array(voices*2);let j=0;
       for(let v=0;v<this.V;v++)if(this.on[v]){d[j++]=this.key[v];d[j++]=Math.sqrt(this.e[v])}
       this.post({type:'levels',d},[d.buffer]);
     }
@@ -2563,9 +2564,11 @@ function loadWorklet(){
 }
 // Engine levels are [key, amplitude] pairs; key is uid*128+midi. -54 dB maps to 0, -12 dB to 1.
 function applyLevels(d){
-  const byUid=new Map();
-  for(let i=0;i<d.length;i+=2){const uid=Math.floor(d[i]/128),v=clamp((20*Math.log10(d[i+1]+1e-9)+54)/42,0,1);if(v>(byUid.get(uid)||0))byUid.set(uid,v)}
-  for(const o of orbs)o.ringTarget=byUid.get(o.uid)||0;
+  for(const o of orbs){
+    const lo=o.uid*128,hi=lo+128;let peak=-1;
+    for(let i=0;i<d.length;i+=2)if(d[i]>=lo&&d[i]<hi&&d[i+1]>peak)peak=d[i+1];
+    o.ringTarget=peak<0?0:clamp((20*Math.log10(peak+1e-9)+54)/42,0,1);
+  }
 }
 function workletLive(){return engineKind==='worklet'&&engineState==='ready'&&ac&&ac.state==='running'}
 // One message per strike. The key is the orb and the pitch it sounds, so a
