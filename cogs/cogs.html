@@ -362,8 +362,8 @@ const wrap=a=>((a%TAU)+TAU)%TAU;
 const hz=m=>440*Math.pow(2,(m-69)/12);
 const radius=c=>c.n*TOOTH/TAU;
 
-const S={meshTol:4,coaxTol:6,snapTol:16,vRef:500,velCurve:.72,master:.7,lookahead:.06,maxStep:.05,zoom:1,windows:1,ids:0,grid:0};
-const S_DEFS=[['meshTol','mesh tol',0,20,.5],['coaxTol','coax tol',0,20,.5],['snapTol','snap tol',0,60,1],
+const S={bpm:0,beats:4,seed:1,meshTol:4,coaxTol:6,snapTol:16,vRef:500,velCurve:.72,master:.7,lookahead:.06,maxStep:.05,zoom:1,windows:1,ids:0,grid:0};
+const S_DEFS=[['bpm','bpm lock',0,300,1],['beats','beats/bar',1,16,1],['seed','seed',0,9999,1],['meshTol','mesh tol',0,20,.5],['coaxTol','coax tol',0,20,.5],['snapTol','snap tol',0,60,1],
   ['vRef','v ref px/s',20,3000,1],['velCurve','vel curve',.1,3,.01],['master','master',0,1.5,.01],
   ['lookahead','lookahead s',.01,.3,.005],['maxStep','step rad',.005,.3,.005],['zoom','zoom',.25,4,.01],
   ['windows','windows',0,1,1],['ids','ids',0,1,1],['grid','grid',0,1,1]];
@@ -393,7 +393,7 @@ const COMMON_DEFS=[['level','level',0,1.5,.01],['velSense','vel sense',0,1,.01]]
 const makeVoice=(kind,common={level:.7,velSense:.7})=>({...common,...VOICES[kind],kind});
 
 /* ---------- world ---------- */
-const W={cogs:[],arms:[],pads:[],readers:[],next:1};
+const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],next:1};
 let simT=0,tool='select',sel=null,draft=null;
 const view={x:0,y:0};
 const stats={events:0,late:0,steps:0,stepsTick:0,log:[]};
@@ -402,7 +402,10 @@ const clock={off:0,shift:0,audio:false,view:0,paused:false};
 const stackOf=c=>W.cogs.filter(o=>Math.hypot(o.x-c.x,o.y-c.y)<=S.coaxTol);
 const renderTh=c=>c.th-c.w*(simT-clock.view);
 const ringR=(c,i)=>{const n=c.track.rings,r=radius(c);return n>1?r*(.25+.65*i/(n-1)):r*.6};
-const ringNote=(t,i)=>{const sc=SCALES[t.scale];return t.base+sc[i%sc.length]+12*Math.floor(i/sc.length)};
+const scaleNote=(base,scale,i)=>{const sc=SCALES[scale];return base+sc[i%sc.length]+12*Math.floor(i/sc.length)};
+const ringNote=(t,i)=>scaleNote(t.base,t.scale,i);
+const motorRpm=c=>S.bpm&&c.revs?c.revs*S.bpm/S.beats:c.motor;
+function chance(...n){let h=(S.seed|0)^0x9e3779b9;for(const x of n){h=Math.imul(h^Math.round(x*4096),0x85ebca6b);h^=h>>>13;h=Math.imul(h,0xc2b2ae35);h^=h>>>16}return (h>>>0)/4294967296}
 
 function solve(){
   const cs=W.cogs,adj=new Map(cs.map(c=>[c,[]]));
@@ -415,15 +418,16 @@ function solve(){
     if(Math.abs(gap)<=S.meshTol){adj.get(a).push([b,-a.n/b.n]);adj.get(b).push([a,-b.n/a.n])}
     else if(gap<0)a.jam=b.jam=true;
   }
+  for(const b of W.belts){const s=b.cross?-1:1;adj.get(b.a).push([b.b,s*b.a.n/b.b.n]);adj.get(b.b).push([b.a,s*b.b.n/b.a.n])}
   for(const root of cs){
     if(root.k!==null)continue;
     root.k=1;const comp=[root];let jam=false;
     for(let q=0;q<comp.length;q++){const a=comp[q];for(const[b,ratio]of adj.get(a)){const k=a.k*ratio;
       if(b.k===null){b.k=k;comp.push(b)}else if(Math.abs(b.k-k)>1e-9*Math.abs(k))jam=true}}
     if(comp.some(c=>c.jam))jam=true;
-    const drivers=comp.filter(c=>c.motor),driver=drivers[0]||null;
-    const wRoot=driver?driver.motor*TAU/60/driver.k:0;
-    for(const d of drivers)if(Math.abs(d.k*wRoot-d.motor*TAU/60)>1e-9*Math.abs(wRoot))jam=true;
+    const drivers=comp.filter(c=>motorRpm(c)),driver=drivers[0]||null;
+    const wRoot=driver?motorRpm(driver)*TAU/60/driver.k:0;
+    for(const d of drivers)if(Math.abs(d.k*wRoot-motorRpm(d)*TAU/60)>1e-9*Math.abs(wRoot))jam=true;
     for(const c of comp){c.jam=jam;c.w=jam?0:c.k*wRoot;c.driver=driver}
   }
 }
@@ -454,27 +458,55 @@ function armHit(p,t){
   const {c,arm,pad,edge,s}=p,px=c.x+Math.cos(edge)*s,py=c.y+Math.sin(edge)*s;
   const nl=Math.hypot(px-pad.x,py-pad.y)||1,nx=(px-pad.x)/nl,ny=(py-pad.y)/nl;
   const vn=Math.abs(c.w*s*(-Math.sin(edge)*nx+Math.cos(edge)*ny));
-  pad.hits++;pad.lastV=vn;pad.flash=arm.flash=t;
-  fire(pad.voice,pad.voice.note,t,vn,pad.x,pad.id*128+(pad.voice.note|0),'arm'+arm.id+'>pad'+pad.id);
+  pad.hits++;pad.lastV=vn;pad.flash=arm.flash=t;flex(arm,t,vn);
+  const v=pad.voice,key=pad.id*128+(v.note|0);
+  fire(v,t,vn,pad.x,'arm'+arm.id+'>pad'+pad.id,1,(when,amp,pan,vx)=>v.kind==='modal'?modal(v,v.note,when,amp,pan,key,vx):drum(v,when,amp,pan));
 }
 
+function circleCross(c,R,a0,dt,seg){
+  const a1=a0+c.w*dt,x0=c.x+Math.cos(a0)*R,y0=c.y+Math.sin(a0)*R,x1=c.x+Math.cos(a1)*R,y1=c.y+Math.sin(a1)*R;
+  const ex=seg.x2-seg.x1,ey=seg.y2-seg.y1,s0=ex*(y0-seg.y1)-ey*(x0-seg.x1),s1=ex*(y1-seg.y1)-ey*(x1-seg.x1);
+  if(!(s0<0&&s1>=0||s0>0&&s1<=0))return null;
+  const f=s0/(s0-s1),qx=x0+(x1-x0)*f,qy=y0+(y1-y0)*f,L2=ex*ex+ey*ey,u=((qx-seg.x1)*ex+(qy-seg.y1)*ey)/L2;
+  if(u<0||u>1)return null;
+  const am=a0+c.w*dt*f;
+  return {f,u,x:qx,am,vn:Math.abs(c.w*R*(Math.sin(am)*ey+Math.cos(am)*ex))/Math.sqrt(L2)};
+}
 function dotCross(c,dot,rd,dt){
-  const R=ringR(c,dot.ring),a0=c.th+dot.a,a1=a0+c.w*dt;
-  const x0=c.x+Math.cos(a0)*R,y0=c.y+Math.sin(a0)*R,x1=c.x+Math.cos(a1)*R,y1=c.y+Math.sin(a1)*R;
-  const ex=rd.x2-rd.x1,ey=rd.y2-rd.y1,s0=ex*(y0-rd.y1)-ey*(x0-rd.x1),s1=ex*(y1-rd.y1)-ey*(x1-rd.x1);
-  if(!(s0<0&&s1>=0||s0>0&&s1<=0))return;
-  const f=s0/(s0-s1),qx=x0+(x1-x0)*f,qy=y0+(y1-y0)*f,L2=ex*ex+ey*ey,u=((qx-rd.x1)*ex+(qy-rd.y1)*ey)/L2;
-  if(u<0||u>1)return;
-  const am=a0+c.w*dt*f,vn=Math.abs(c.w*R*(Math.sin(am)*ey+Math.cos(am)*ex))/Math.sqrt(L2),t=simT+dt*f,midi=ringNote(c.track,dot.ring);
-  rd.hits++;rd.lastV=vn;dot.flash=rd.flash=t;
-  fire(rd.voice,midi,t,vn,qx,rd.id*128+midi,'cog'+c.id+'.ring'+dot.ring+'>reader'+rd.id);
+  const hit=circleCross(c,ringR(c,dot.ring),c.th+dot.a,dt,rd);if(!hit)return;
+  const t=simT+dt*hit.f,turn=c.turns+Math.floor((c.th+c.w*dt*hit.f)/TAU);
+  if(dot.p<1&&chance(c.id,dot.ring,dot.a,turn)>=dot.p)return;
+  const midi=rd.tines?scaleNote(rd.combBase,rd.combScale,Math.min(rd.tines-1,Math.floor(hit.u*rd.tines))):ringNote(c.track,dot.ring);
+  rd.hits++;rd.lastV=hit.vn;rd.lastMidi=midi;dot.flash=rd.flash=t;
+  const v=rd.voice,key=rd.id*128+midi;
+  fire(v,t,hit.vn,hit.x,'cog'+c.id+'.ring'+dot.ring+'>reader'+rd.id,dot.v,
+    (when,amp,pan,vx)=>v.kind==='modal'?modal(v,midi,when,amp,pan,key,vx):drum(v,when,amp,pan));
 }
+const stringLen=s=>Math.hypot(s.x2-s.x1,s.y2-s.y1);
+function stringMidi(s){
+  const L=Math.max(1,stringLen(s)),f0=s.kind==='bar'?s.f200*(200/L)**2:s.f200*200/L,m=69+12*Math.log2(f0/440);
+  return s.quant?Math.round(m):m;
+}
+function pluck(arm,s,dt){
+  const c=arm.cog,hit=circleCross(c,arm.r0+arm.len,c.th+arm.a,dt,s);if(!hit)return;
+  const t=simT+dt*hit.f,midi=stringMidi(s),ratios=s.kind==='bar'?BODIES.bar:BODIES.harmonic;
+  s.hits++;s.lastV=hit.vn;s.lastU=hit.u;s.flash=t;flex(arm,t,hit.vn*.5);
+  fire(s,t,hit.vn,hit.x,'arm'+arm.id+'>string'+s.id,1,(when,amp,pan,vx)=>{
+    const f0=hz(midi),f=[],g=[],tt=[];
+    for(let k=0;k<ratios.length;k++){f.push(f0*ratios[k]);g.push(Math.abs(Math.sin((k+1)*Math.PI*hit.u))/(k+1));tt.push(s.decay*Math.pow(ratios[k],-s.damp))}
+    strike(f,g,tt,when,amp,pan,s.id*128+Math.round(midi),contactTime(s.hard,vx));
+  });
+}
+function flex(arm,t,vn){arm.bendT=t;arm.bendA=Math.min(.6,vn/S.vRef*.5)*arm.flex*(arm.cog.w>0?-1:1)}
 
+function turn(c,dt){const th=c.th+c.w*dt,k=Math.floor(th/TAU);c.th=th-k*TAU;c.turns+=k}
 function advance(tEnd){
-  if(tEnd-simT>.5){const gap=tEnd-S.lookahead-simT;for(const c of W.cogs)c.th+=c.w*gap;simT+=gap}
+  if(tEnd-simT>.5){const gap=tEnd-S.lookahead-simT;for(const c of W.cogs)turn(c,gap);simT+=gap}
   const pairs=[];
   for(const arm of W.arms){const c=arm.cog;if(!c.w)continue;
     for(const pad of W.pads){const h=hitWindow(c,arm,pad);if(h)pairs.push({c,arm,pad,s:h.s,edge:c.w>0?h.beta-h.half:h.beta+h.half})}}
+  const plucks=[];
+  for(const arm of W.arms)if(arm.cog.w)for(const s of W.strings)plucks.push([arm,s]);
   const tracks=W.readers.length?W.cogs.filter(c=>c.track&&c.w&&c.track.dots.length):[];
   let maxW=0;for(const c of W.cogs)maxW=Math.max(maxW,Math.abs(c.w));
   stats.stepsTick=0;
@@ -485,7 +517,8 @@ function advance(tEnd){
       if(d0>0&&d0<=span)armHit(p,simT+dt*d0/span);
     }
     for(const c of tracks)for(const dot of c.track.dots)for(const rd of W.readers)dotCross(c,dot,rd,dt);
-    for(const c of W.cogs)c.th=(c.th+c.w*dt)%TAU;
+    for(const[arm,s]of plucks)pluck(arm,s,dt);
+    for(const c of W.cogs)turn(c,dt);
     simT+=dt;stats.steps++;stats.stepsTick++;
   }
 }
@@ -517,12 +550,15 @@ function initAudio(){
   ac.resume();
 }
 function flushStrikes(){const d=new Float64Array(strikes);strikes.length=0;engineNode.port.postMessage({type:'strikes',d},[d.buffer])}
-function modal(v,midi,when,amp,pan,key,x){
-  const H=BODIES.harmonic,F=BODIES[v.body],f0=hz(midi),n=H.length,f=[],g=[],t=[];
-  const contact=clamp((.0016-.0014*v.hard)*Math.pow(Math.max(.02,x),-.35),.00012,.004);
-  for(let k=0;k<n;k++){const r=H[k]+(F[k]-H[k])*v.bend;f.push(f0*r);g.push(k?Math.pow(v.bright,k):1);t.push(v.decay*Math.pow(r,-v.damp))}
+const contactTime=(hard,x)=>clamp((.0016-.0014*hard)*Math.pow(Math.max(.02,x),-.35),.00012,.004);
+function strike(f,g,t,when,amp,pan,key,contact){
   if(!strikes.length)queueMicrotask(flushStrikes);
-  strikes.push(when*ac.sampleRate,key,amp*.3,contact,0,pan,n,...f,...g,...t);
+  strikes.push(when*ac.sampleRate,key,amp*.3,contact,0,pan,f.length,...f,...g,...t);
+}
+function modal(v,midi,when,amp,pan,key,x){
+  const H=BODIES.harmonic,F=BODIES[v.body],f0=hz(midi),f=[],g=[],t=[];
+  for(let k=0;k<H.length;k++){const r=H[k]+(F[k]-H[k])*v.bend;f.push(f0*r);g.push(k?Math.pow(v.bright,k):1);t.push(v.decay*Math.pow(r,-v.damp))}
+  strike(f,g,t,when,amp,pan,key,contactTime(v.hard,x));
 }
 function drum(v,when,amp,pan){
   const g=ac.createGain(),p=ac.createStereoPanner(),end=when+v.decay;
@@ -541,16 +577,15 @@ function drum(v,when,amp,pan){
   }
   for(const s of src){s.start(when);s.stop(end+.02)}
 }
-function fire(v,midi,t,vn,x,key,src){
+function fire(v,t,vn,x,src,gain,play){
   stats.events++;
   stats.log.push({t,src,vn});if(stats.log.length>256)stats.log.shift();
   if(!clock.audio||engineState!=='ready')return;
-  const vx=clamp(vn/S.vRef,0,1),amp=v.level*(1-v.velSense+v.velSense*Math.pow(vx,S.velCurve));
+  const vx=clamp(vn/S.vRef,0,1),amp=gain*v.level*(1-v.velSense+v.velSense*Math.pow(vx,S.velCurve));
   if(amp<=0)return;
   let when=t+clock.off-clock.shift;
   if(when<ac.currentTime){stats.late++;when=ac.currentTime}
-  const pan=clamp((x-view.x)/300,-.9,.9);
-  if(v.kind==='modal')modal(v,midi,when,amp,pan,key,vx);else drum(v,when,amp,pan);
+  play(when,amp,clamp((x-view.x)/300,-.9,.9),vx);
 }
 
 /* ---------- clock ---------- */
@@ -577,6 +612,12 @@ readPalette();
 const glow=t=>t==null||clock.view<t?0:Math.exp(-(clock.view-t)/.12);
 function hot(t,base,g=cx){const e=glow(t);if(e<=.03)return base;g.globalAlpha=.35+.65*e;return HOT}
 const isSel=o=>sel&&sel.o===o;
+function beltLines(b){
+  const A=b.a,B=b.b,ra=radius(A)+3,rb=radius(B)+3,d=Math.hypot(B.x-A.x,B.y-A.y),base=Math.atan2(B.y-A.y,B.x-A.x);
+  const cosA=(b.cross?ra+rb:ra-rb)/d;if(!(Math.abs(cosA)<1))return [];
+  const al=Math.acos(cosA);
+  return [1,-1].map(s=>{const a=base+s*al,aB=b.cross?a+Math.PI:a;return [A.x+ra*Math.cos(a),A.y+ra*Math.sin(a),B.x+rb*Math.cos(aB),B.y+rb*Math.sin(aB)]});
+}
 function line(x1,y1,x2,y2){cx.beginPath();cx.moveTo(x1,y1);cx.lineTo(x2,y2);cx.stroke()}
 function circle(x,y,r,fill){cx.beginPath();cx.arc(x,y,r,0,TAU);fill?cx.fill():cx.stroke()}
 function draw(){
@@ -600,8 +641,21 @@ function draw(){
       for(let i=0;i<t.rings;i++)circle(c.x,c.y,ringR(c,i));
       const rIn=ringR(c,0),rOut=ringR(c,t.rings-1);
       for(let k=0;k<t.div;k++){const a=th+k*TAU/t.div;line(c.x+Math.cos(a)*rIn,c.y+Math.sin(a)*rIn,c.x+Math.cos(a)*rOut,c.y+Math.sin(a)*rOut)}
-      for(const d of t.dots){const R=ringR(c,d.ring),a=th+d.a;cx.fillStyle=hot(d.flash,FG);circle(c.x+Math.cos(a)*R,c.y+Math.sin(a)*R,(3+2*glow(d.flash))*px,true);cx.globalAlpha=1}
+      for(const d of t.dots){const R=ringR(c,d.ring),a=th+d.a;cx.fillStyle=hot(d.flash,FG);cx.globalAlpha*=.3+.7*d.p;circle(c.x+Math.cos(a)*R,c.y+Math.sin(a)*R,(1.5+1.5*d.v+2*glow(d.flash))*px,true);cx.globalAlpha=1}
     }
+  }
+  for(const b of W.belts){
+    cx.strokeStyle=isSel(b)?SEL:DIM;cx.lineWidth=2*px;cx.setLineDash([6*px,5*px]);cx.lineDashOffset=-renderTh(b.a)*(radius(b.a)+3);
+    for(const[x1,y1,x2,y2]of beltLines(b))line(x1,y1,x2,y2);
+    cx.setLineDash([]);cx.lineWidth=px;
+  }
+  for(const s of W.strings){
+    const ex=s.x2-s.x1,ey=s.y2-s.y1,L=Math.hypot(ex,ey)||1,age=clock.view-(s.flash??-9);
+    const amp=age>=0&&age<2?Math.min(8,(s.lastV||0)/60)*Math.exp(-age/.35)*Math.sin(age*TAU*11):0;
+    const u=s.lastU??.5,px2=s.x1+ex*u-ey/L*amp,py2=s.y1+ey*u+ex/L*amp;
+    cx.strokeStyle=isSel(s)?SEL:hot(s.flash,FG);cx.lineWidth=(s.kind==='bar'?4:1.5)*px;
+    cx.beginPath();cx.moveTo(s.x1,s.y1);cx.lineTo(px2,py2);cx.lineTo(s.x2,s.y2);cx.stroke();cx.globalAlpha=1;
+    cx.fillStyle=DIM;circle(s.x1,s.y1,2.5*px,true);circle(s.x2,s.y2,2.5*px,true);cx.lineWidth=px;
   }
   if(S.windows){
     cx.strokeStyle=FAINT;
@@ -611,10 +665,17 @@ function draw(){
   }
   for(const p of W.pads){cx.fillStyle=hot(p.flash,PAD);circle(p.x,p.y,p.r,true);cx.globalAlpha=1;cx.strokeStyle=isSel(p)?SEL:FG;circle(p.x,p.y,p.r)}
   cx.lineWidth=3*px;
-  for(const a of W.arms){const c=a.cog,ang=renderTh(c)+a.a,ux=Math.cos(ang),uy=Math.sin(ang);
-    cx.strokeStyle=isSel(a)?SEL:hot(a.flash,FG);line(c.x+ux*a.r0,c.y+uy*a.r0,c.x+ux*(a.r0+a.len),c.y+uy*(a.r0+a.len));cx.globalAlpha=1}
+  for(const a of W.arms){
+    const c=a.cog,ang=renderTh(c)+a.a,age=clock.view-(a.bendT??-9),bend=age>=0&&age<2?a.bendA*Math.exp(-age/.25)*Math.cos(age*TAU*9):0;
+    const bx=c.x+Math.cos(ang)*a.r0,by=c.y+Math.sin(ang)*a.r0,mx=bx+Math.cos(ang)*a.len/2,my=by+Math.sin(ang)*a.len/2;
+    cx.strokeStyle=isSel(a)?SEL:hot(a.flash,FG);
+    cx.beginPath();cx.moveTo(bx,by);cx.quadraticCurveTo(mx,my,bx+Math.cos(ang+bend)*a.len,by+Math.sin(ang+bend)*a.len);cx.stroke();cx.globalAlpha=1}
   cx.lineWidth=2*px;
-  for(const r of W.readers){cx.strokeStyle=isSel(r)?SEL:hot(r.flash,READ);line(r.x1,r.y1,r.x2,r.y2);cx.globalAlpha=1}
+  for(const r of W.readers){
+    cx.strokeStyle=isSel(r)?SEL:hot(r.flash,READ);line(r.x1,r.y1,r.x2,r.y2);cx.globalAlpha=1;
+    const ex=r.x2-r.x1,ey=r.y2-r.y1,L=Math.hypot(ex,ey)||1;cx.lineWidth=px;
+    for(let i=1;i<r.tines;i++){const u=i/r.tines;line(r.x1+ex*u-ey/L*4,r.y1+ey*u+ex/L*4,r.x1+ex*u+ey/L*4,r.y1+ey*u-ex/L*4)}
+    cx.lineWidth=2*px}
   cx.lineWidth=px;
   if(S.ids){cx.fillStyle=DIM;cx.font=`${10*px}px monospace`;
     for(const c of W.cogs)cx.fillText('c'+c.id,c.x+4*px,c.y-4*px);
@@ -632,6 +693,8 @@ function hitTest(p){
   const tol=6/S.zoom;
   for(const o of W.pads)if(Math.hypot(o.x-p.x,o.y-p.y)<=o.r+tol)return {type:'pad',o};
   for(const o of W.readers)if(segDist(p,o.x1,o.y1,o.x2,o.y2)<=tol)return {type:'reader',o};
+  for(const o of W.strings)if(segDist(p,o.x1,o.y1,o.x2,o.y2)<=tol)return {type:'string',o};
+  for(const o of W.belts)if(beltLines(o).some(l=>segDist(p,...l)<=tol))return {type:'belt',o};
   for(const o of W.arms){const c=o.cog,a=renderTh(c)+o.a,ux=Math.cos(a),uy=Math.sin(a);
     if(segDist(p,c.x+ux*o.r0,c.y+uy*o.r0,c.x+ux*(o.r0+o.len),c.y+uy*(o.r0+o.len))<=tol)return {type:'arm',o}}
   const c=pickCog(p);return c?{type:'cog',o:c}:null;
@@ -656,7 +719,8 @@ const TOOLS={
       return {move:(q,e2)=>{view.x=vx-(e2.clientX-sx)/S.zoom;view.y=vy-(e2.clientY-sy)/S.zoom},up:()=>changed()}}
     select(h.type,h.o);const o=h.o;
     if(h.type==='pad'){const dx=o.x-p.x,dy=o.y-p.y;return {move:q=>{o.x=q.x+dx;o.y=q.y+dy;refreshInspector()},up:()=>changed()}}
-    if(h.type==='reader'){
+    if(h.type==='belt')return {move(){},up(){}};
+    if(h.type==='reader'||h.type==='string'){
       const end=Math.hypot(p.x-o.x1,p.y-o.y1)<10/S.zoom?1:Math.hypot(p.x-o.x2,p.y-o.y2)<10/S.zoom?2:0,s={...o};
       return {move:q=>{const dx=q.x-p.x,dy=q.y-p.y;
         if(end!==2){o.x1=s.x1+dx;o.y1=s.y1+dy}if(end!==1){o.x2=s.x2+dx;o.y2=s.y2+dy}refreshInspector()},up:()=>changed()}}
@@ -670,7 +734,7 @@ const TOOLS={
   disc:p=>newCog(p,true),
   arm(p){
     const c=pickCog(p);if(!c)return null;
-    const a={id:W.next++,cog:c,a:0,r0:0,len:4};W.arms.push(a);select('arm',a);
+    const a={id:W.next++,cog:c,a:0,r0:0,len:4,flex:.5};W.arms.push(a);select('arm',a);
     const set=q=>{a.a=wrap(Math.atan2(q.y-c.y,q.x-c.x)-renderTh(c));a.len=Math.max(4,Math.hypot(q.x-c.x,q.y-c.y))};
     set(p);return {move:set,up:()=>changed(true),cancel:removeSel};
   },
@@ -679,25 +743,36 @@ const TOOLS={
     return {move:q=>{const r=Math.hypot(q.x-p.x,q.y-p.y);if(r>4)o.r=r},up:()=>changed(true),cancel:removeSel};
   },
   reader(p){
-    const o={id:W.next++,x1:p.x,y1:p.y,x2:p.x,y2:p.y,voice:makeVoice('modal'),hits:0,lastV:0};W.readers.push(o);select('reader',o);
+    const o={id:W.next++,x1:p.x,y1:p.y,x2:p.x,y2:p.y,voice:makeVoice('modal'),tines:0,combBase:60,combScale:'major',hits:0,lastV:0};W.readers.push(o);select('reader',o);
     return {move:q=>{o.x2=q.x;o.y2=q.y},cancel:removeSel,up:()=>{if(Math.hypot(o.x2-o.x1,o.y2-o.y1)<4)removeSel();changed(true)}};
+  },
+  belt(p){
+    const a=pickCog(p);if(!a)return null;
+    return {move(){},cancel(){},up:q=>{const b=pickCog(q);if(!b||b===a||stackOf(a).includes(b))return;
+      const o={id:W.next++,a,b,cross:0};W.belts.push(o);select('belt',o);changed(true)}};
+  },
+  string(p){
+    const o={id:W.next++,x1:p.x,y1:p.y,x2:p.x,y2:p.y,kind:'string',f200:220,quant:1,decay:2.5,damp:.5,hard:.5,level:.7,velSense:.7,hits:0,lastV:0};
+    W.strings.push(o);select('string',o);
+    return {move:q=>{o.x2=q.x;o.y2=q.y},cancel:removeSel,up:()=>{if(stringLen(o)<8)removeSel();changed()}};
   },
   dot(p){
     const c=pickCog(p,c=>c.track);if(!c)return null;
     const t=c.track,d=Math.hypot(p.x-c.x,p.y-c.y),r=radius(c);
     const ring=t.rings>1?clamp(Math.round((d/r-.25)/.65*(t.rings-1)),0,t.rings-1):0;
     const step=TAU/t.div,a=wrap(Math.round(wrap(Math.atan2(p.y-c.y,p.x-c.x)-renderTh(c))/step)*step);
-    const on=dotAt(t,ring,a)<0;setDot(t,{ring,a},on);
+    const on=dotAt(t,ring,a)<0;setDot(t,{ring,a,...brush},on);
     select('cog',c);changed();return {move(){},up(){},cancel:()=>{setDot(t,{ring,a},!on);changed()}};
   }
 };
 function removeSel(){
   if(!sel)return;const o=sel.o;
-  if(sel.type==='cog'){W.cogs=W.cogs.filter(c=>c!==o);W.arms=W.arms.filter(a=>a.cog!==o)}
+  if(sel.type==='cog'){W.cogs=W.cogs.filter(c=>c!==o);W.arms=W.arms.filter(a=>a.cog!==o);W.belts=W.belts.filter(b=>b.a!==o&&b.b!==o)}
   else W[sel.type+'s']=W[sel.type+'s'].filter(x=>x!==o);
   select(null);changed(true);
 }
 
+const brush={p:1,v:1},eu={ring:0,k:3,rot:0};
 const dotAt=(t,ring,a)=>t.dots.findIndex(o=>o.ring===ring&&Math.abs(wrap(o.a-a+Math.PI)-Math.PI)<1e-6);
 function setDot(t,cell,on){const i=dotAt(t,cell.ring,cell.a);if(on&&i<0)t.dots.push(cell);else if(!on&&i>=0)t.dots.splice(i,1)}
 
@@ -742,7 +817,8 @@ function drawRoll(){
   for(let r=0;r<=t.rings;r++){x.beginPath();x.moveTo(ROLL_LABEL,r*ROLL_ROW+.5);x.lineTo(ROLL_LABEL+gw,r*ROLL_ROW+.5);x.stroke()}
   for(const d of t.dots){
     if(d.ring>=t.rings)continue;
-    x.fillStyle=hot(d.flash,FG,x);x.fillRect(ROLL_LABEL+rollU(c,d.a)*gw+1,(t.rings-1-d.ring)*ROLL_ROW+1,g.cw-1,ROLL_ROW-1);x.globalAlpha=1;
+    const hgt=(ROLL_ROW-1)*(.35+.65*d.v);
+    x.fillStyle=hot(d.flash,FG,x);x.globalAlpha*=.3+.7*d.p;x.fillRect(ROLL_LABEL+rollU(c,d.a)*gw+1,(t.rings-d.ring)*ROLL_ROW-hgt,g.cw-1,hgt);x.globalAlpha=1;
   }
   x.lineWidth=2;
   for(const p of readerPlayheads(c)){x.strokeStyle=hot(p.rd.flash,READ,x);x.beginPath();x.moveTo(ROLL_LABEL+p.u*gw,0);x.lineTo(ROLL_LABEL+p.u*gw,g.H);x.stroke();x.globalAlpha=1}
@@ -751,11 +827,20 @@ function rollSection(f,c){
   const t=c.track,cv2=el('canvas'),box=el('div',{},cv2);
   box.style.cssText='overflow-x:auto;margin:4px 0';cv2.style.cssText='display:block;touch-action:none;cursor:crosshair';
   roll={cv:cv2,box,c};let paint=null;
-  cv2.onpointerdown=e=>{const cell=rollCell(e);if(!cell)return;cv2.setPointerCapture(e.pointerId);paint=dotAt(t,cell.ring,cell.a)<0;setDot(t,cell,paint)};
-  cv2.onpointermove=e=>{if(paint===null)return;const cell=rollCell(e);if(cell)setDot(t,cell,paint)};
+  cv2.onpointerdown=e=>{const cell=rollCell(e);if(!cell)return;cv2.setPointerCapture(e.pointerId);paint=dotAt(t,cell.ring,cell.a)<0;setDot(t,{...cell,...brush},paint)};
+  cv2.onpointermove=e=>{if(paint===null)return;const cell=rollCell(e);if(cell)setDot(t,{...cell,...brush},paint)};
   cv2.onpointerup=cv2.onpointercancel=()=>{if(paint!==null){paint=null;changed()}};
   const shift=k=>()=>{const s=rollDir(c)*TAU/t.div;for(const d of t.dots)d.a=wrap(d.a-k*s);changed()};
   f.append(box,el('button',{textContent:'shift <',onclick:shift(-1)}),el('button',{textContent:'shift >',onclick:shift(1)}));
+  numRow(f,'brush p',0,1,.01,...bind(brush,'p'));
+  numRow(f,'brush vel',0,1,.01,...bind(brush,'v'));
+  numRow(f,'euclid ring',0,35,1,...bind(eu,'ring'));
+  numRow(f,'euclid k',0,96,1,...bind(eu,'k'));
+  numRow(f,'euclid rot',0,95,1,...bind(eu,'rot'));
+  f.append(el('button',{textContent:'euclid fill',onclick:()=>{
+    const n=t.div,ring=Math.min(eu.ring,t.rings-1);t.dots=t.dots.filter(d=>d.ring!==ring);
+    for(let j=0;j<n;j++)if(((j+eu.rot)*eu.k)%n<eu.k)t.dots.push({ring,a:wrap(-rollDir(c)*j*TAU/n),...brush});
+    changed()}}));
   for(const rd of new Set(readerPlayheads(c).map(p=>p.rd)))f.append(el('button',{textContent:'reader '+rd.id+' patch',onclick:()=>select('reader',rd)}));
 }
 
@@ -768,20 +853,26 @@ function changed(structural){
 }
 function serialize(){
   return {S,SPACE,view,
-    cogs:W.cogs.map(c=>({id:c.id,x:c.x,y:c.y,n:c.n,motor:c.motor,layer:c.layer,th:wrap(c.th),
-      track:c.track&&{...c.track,dots:c.track.dots.map(d=>({ring:d.ring,a:d.a}))}})),
-    arms:W.arms.map(a=>({id:a.id,cog:a.cog.id,a:a.a,r0:a.r0,len:a.len})),
+    cogs:W.cogs.map(c=>({id:c.id,x:c.x,y:c.y,n:c.n,motor:c.motor,revs:c.revs,layer:c.layer,th:wrap(c.th),
+      track:c.track&&{...c.track,dots:c.track.dots.map(d=>({ring:d.ring,a:d.a,p:d.p,v:d.v}))}})),
+    arms:W.arms.map(a=>({id:a.id,cog:a.cog.id,a:a.a,r0:a.r0,len:a.len,flex:a.flex})),
     pads:W.pads.map(p=>({id:p.id,x:p.x,y:p.y,r:p.r,voice:p.voice})),
-    readers:W.readers.map(r=>({id:r.id,x1:r.x1,y1:r.y1,x2:r.x2,y2:r.y2,voice:r.voice}))};
+    readers:W.readers.map(r=>({id:r.id,x1:r.x1,y1:r.y1,x2:r.x2,y2:r.y2,voice:r.voice,tines:r.tines,combBase:r.combBase,combScale:r.combScale})),
+    belts:W.belts.map(b=>({id:b.id,a:b.a.id,b:b.b.id,cross:b.cross})),
+    strings:W.strings.map(({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})=>({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense}))};
 }
 function deserialize(j){
-  const cogs=j.cogs.map(c=>({...c,w:0}));
+  const cogs=j.cogs.map(c=>({revs:0,...c,w:0,turns:0}));
   const byId=new Map(cogs.map(c=>[c.id,c]));
-  const arms=j.arms.map(a=>{const c=byId.get(a.cog);if(!c)throw new Error(`arm ${a.id}: no cog ${a.cog}`);return {...a,cog:c}});
+  const cog=(id,who)=>{const c=byId.get(id);if(!c)throw new Error(`${who}: no cog ${id}`);return c};
+  const arms=j.arms.map(a=>({flex:.5,...a,cog:cog(a.cog,'arm '+a.id)}));
+  W.belts=(j.belts||[]).map(b=>({...b,a:cog(b.a,'belt '+b.id),b:cog(b.b,'belt '+b.id)}));
+  W.strings=(j.strings||[]).map(s=>({...s,hits:0,lastV:0}));
+  for(const c of cogs)if(c.track)for(const d of c.track.dots){d.p??=1;d.v??=1}
   for(const o of [...j.pads,...j.readers])if(!VOICES[o.voice.kind])throw new Error(`${o.id}: voice kind ${o.voice.kind}`);
   W.cogs=cogs;W.arms=arms;
-  W.pads=j.pads.map(p=>({...p,hits:0,lastV:0}));W.readers=j.readers.map(r=>({...r,hits:0,lastV:0}));
-  W.next=1+Math.max(0,...[...W.cogs,...W.arms,...W.pads,...W.readers].map(o=>o.id));
+  W.pads=j.pads.map(p=>({...p,hits:0,lastV:0}));W.readers=j.readers.map(r=>({tines:0,combBase:60,combScale:'major',...r,hits:0,lastV:0}));
+  W.next=1+Math.max(0,...[...W.cogs,...W.arms,...W.pads,...W.readers,...W.belts,...W.strings].map(o=>o.id));
   Object.assign(S,j.S);Object.assign(SPACE,j.SPACE);Object.assign(view,j.view);
   select(null);solve();applyAudioSettings();syncRows();changed();
 }
@@ -798,8 +889,18 @@ function demo(){
     pads:[{id:10,x:A.x,y:A.y-50,r:10,voice:makeVoice('kick',{level:.9,velSense:.5})},
       {id:11,x:B.x-30,y:B.y+75,r:10,voice:makeVoice('snare')},
       {id:12,x:C.x+28,y:C.y-24,r:7,voice:makeVoice('hat',{level:.35,velSense:.8})}],
-    readers:[{id:13,x1:D.x+18,y1:D.y,x2:D.x+d,y2:D.y,voice:makeVoice('modal',{level:.6,velSense:.3})}]});
+    readers:[{id:13,x1:D.x+18,y1:D.y,x2:D.x+d,y2:D.y,voice:makeVoice('modal',{level:.6,velSense:.3})}],
+    strings:[{id:14,x1:B.x-95,y1:B.y+60,x2:B.x+40,y2:B.y+60,kind:'string',f200:176,quant:1,decay:2.5,damp:.5,hard:.5,level:.5,velSense:.7}]});
 }
+
+const b64url={enc:u=>{let s='';for(const b of u)s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')},
+  dec:s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0))};
+const pipe=(bytes,stream)=>new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer();
+async function shareURL(){
+  const packed=new Uint8Array(await pipe(new TextEncoder().encode(JSON.stringify(serialize())),new CompressionStream('deflate-raw')));
+  return location.href.split('#')[0]+'#w='+b64url.enc(packed);
+}
+async function loadShared(code){deserialize(JSON.parse(new TextDecoder().decode(await pipe(b64url.dec(code),new DecompressionStream('deflate-raw')))))}
 
 /* ---------- panel ---------- */
 const panel=$('#panel'),rows=[],readouts=[];
@@ -832,8 +933,8 @@ function buildPanel(){
   const tr=section('transport');
   const btn=(label,fn)=>{const b=el('button',{textContent:label,onclick:fn});b.dataset.act=label;tr.append(b);return b};
   btn('audio',initAudio);btn('pause',()=>setPaused(!clock.paused));btn('del',removeSel);
-  btn('demo',demo);btn('clear',()=>deserialize({S:{...S},SPACE:{...SPACE},view:{x:0,y:0},cogs:[],arms:[],pads:[],readers:[]}));
-  btn('reset hits',()=>{for(const o of [...W.pads,...W.readers])o.hits=0;stats.events=stats.late=0;stats.log.length=0});
+  btn('demo',demo);btn('clear',()=>deserialize({S:{...S},SPACE:{...SPACE},view:{x:0,y:0},cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[]}));
+  btn('reset hits',()=>{for(const o of [...W.pads,...W.readers,...W.strings])o.hits=0;stats.events=stats.late=0;stats.log.length=0});
   const st=section('stats');
   roRow(st,'audio',()=>`${ac?ac.state:'off'} ${engineState}${ac?' '+ac.sampleRate+'Hz '+(1000*(ac.baseLatency||0)).toFixed(1)+'ms':''}`);
   roRow(st,'clock',()=>`${clock.audio?'audio':'perf'} ${clock.paused?'paused':'run'} t=${clock.view.toFixed(2)}`);
@@ -843,21 +944,25 @@ function buildPanel(){
   roRow(st,'engine',()=>`v${engineStats.voices??'-'} s${engineStats.strikes??'-'} st${engineStats.steals??'-'} dr${engineStats.drops??'-'}`);
   roRow(st,'peak dB',()=>peak>0?(20*Math.log10(peak)).toFixed(1):'-inf');
   roRow(st,'storage',()=>storage.ok?'local':'off: '+storage.why+', use json export');
-  roRow(st,'world',()=>`c${W.cogs.length} a${W.arms.length} p${W.pads.length} r${W.readers.length}`);
+  roRow(st,'world',()=>`c${W.cogs.length} a${W.arms.length} p${W.pads.length} r${W.readers.length} b${W.belts.length} s${W.strings.length}`);
   inspector=section('selection');
   const wf=section('world');
-  for(const[k,l,mn,mx,st2]of S_DEFS)numRow(wf,l,mn,mx,st2,...bind(S,k,()=>{applyAudioSettings();if(/Tol/.test(k))solve()}));
+  for(const[k,l,mn,mx,st2]of S_DEFS)numRow(wf,l,mn,mx,st2,...bind(S,k,()=>{applyAudioSettings();if(/Tol|bpm|beats/.test(k))solve()}));
   const sp=section('space');
   for(const[k,l,mn,mx,st2]of SPACE_DEFS)numRow(sp,l,mn,mx,st2,...bind(SPACE,k,applyAudioSettings));
   const js=section('json'),ta=el('textarea'),msg=el('b');
   js.append(ta,el('button',{textContent:'export',onclick:()=>{ta.value=JSON.stringify(serialize());msg.textContent='ok'}}),
-    el('button',{textContent:'import',onclick:()=>{try{deserialize(JSON.parse(ta.value));msg.textContent='ok'}catch(e){msg.textContent=e.message}}}),msg);
+    el('button',{textContent:'import',onclick:()=>{try{deserialize(JSON.parse(ta.value));msg.textContent='ok'}catch(e){msg.textContent=e.message}}}),
+    el('button',{textContent:'share',onclick:async()=>{ta.value=await shareURL();
+      try{await navigator.clipboard.writeText(ta.value);msg.textContent='url copied'}catch(e){msg.textContent='url in box; clipboard: '+e.name}}}),msg);
 }
 function applyAudioSettings(){
   if(master)master.gain.value=S.master;
   if(engineNode)engineNode.port.postMessage({type:'space',...SPACE});
 }
 let inspector=null,inspectorReadouts=[];
+const REVS=['-2','-1','-1/2','-1/3','-1/4','0','1/8','1/6','1/4','1/3','1/2','2/3','3/4','1','4/3','3/2','2','3','4','6','8'];
+const frac=s=>{const[a,b=1]=s.split('/').map(Number);return a/b};
 function select(type,o){sel=type?{type,o}:null;buildInspector()}
 function voiceRows(f,owner,withNote){
   const v=owner.voice;
@@ -877,6 +982,7 @@ function buildInspector(){
   if(sel&&sel.type==='cog'){
     numRow(f,'teeth',6,240,1,...bind(o,'n',()=>changed(true)));
     numRow(f,'motor rpm',-600,600,.1,...bind(o,'motor',()=>changed(true)));
+    selRow(f,'revs/bar',REVS,()=>REVS.reduce((a,b)=>Math.abs(frac(b)-o.revs)<Math.abs(frac(a)-o.revs)?b:a),v=>{o.revs=frac(v);changed(true)});
     numRow(f,'layer',0,7,1,...bind(o,'layer',()=>changed(true)));
     numRow(f,'x',-3000,3000,.5,...bind(o,'x',()=>changed(true)));
     numRow(f,'y',-3000,3000,.5,...bind(o,'y',()=>changed(true)));
@@ -901,6 +1007,7 @@ function buildInspector(){
     numRow(f,'angle deg',0,360,.1,()=>o.a*180/Math.PI,v=>{o.a=v*Math.PI/180;changed()});
     numRow(f,'r0',0,500,.5,...bind(o,'r0',changed));
     numRow(f,'len',1,800,.5,...bind(o,'len',changed));
+    numRow(f,'flex',0,1,.01,...bind(o,'flex',changed));
     roRow(f,'cog',()=>'c'+o.cog.id);
     roRow(f,'tip px/s',()=>(Math.abs(o.cog.w)*(o.r0+o.len)).toFixed(1));
   }else if(sel&&sel.type==='pad'){
@@ -913,8 +1020,25 @@ function buildInspector(){
   }else if(sel&&sel.type==='reader'){
     for(const k of ['x1','y1','x2','y2'])numRow(f,k,-3000,3000,.5,...bind(o,k,changed));
     voiceRows(f,o,false);
+    numRow(f,'comb tines',0,36,1,...bind(o,'tines',changed));
+    numRow(f,'comb base',12,108,1,...bind(o,'combBase',changed));
+    roRow(f,'last note',()=>o.lastMidi==null?'-':noteName(o.lastMidi));
+    selRow(f,'comb scale',Object.keys(SCALES),()=>o.combScale,v=>{o.combScale=v;changed()});
     roRow(f,'hits',()=>o.hits);
     roRow(f,'last vn',()=>o.lastV.toFixed(1));
+  }else if(sel&&sel.type==='belt'){
+    numRow(f,'crossed',0,1,1,...bind(o,'cross',()=>changed(true)));
+    roRow(f,'ratio',()=>`c${o.b.id}/c${o.a.id} = ${(o.a.w?o.b.w/o.a.w:(o.cross?-1:1)*o.a.n/o.b.n).toFixed(4)}`);
+  }else if(sel&&sel.type==='string'){
+    selRow(f,'kind',['string','bar'],()=>o.kind,v=>{o.kind=v;changed()});
+    numRow(f,'f @200px',20,2000,1,...bind(o,'f200',changed));
+    numRow(f,'quantize',0,1,1,...bind(o,'quant',changed));
+    for(const k of ['decay','damp','hard','level','velSense'])numRow(f,k,0,k==='decay'?8:k==='damp'?2:k==='level'?1.5:1,.01,...bind(o,k,changed));
+    for(const k of ['x1','y1','x2','y2'])numRow(f,k,-3000,3000,.5,...bind(o,k,changed));
+    roRow(f,'length',()=>stringLen(o).toFixed(1));
+    roRow(f,'note',()=>{const m=stringMidi(o);return noteName(Math.round(m))+' '+m.toFixed(2)});
+    roRow(f,'hits',()=>o.hits);
+    roRow(f,'last u',()=>(o.lastU??0).toFixed(3));
   }
   inspectorReadouts=readouts.slice(before);
 }
@@ -978,8 +1102,9 @@ function frame(){
   requestAnimationFrame(frame);
 }
 buildPanel();resize();
-const saved=storage.get();
+const saved=storage.get(),shared=location.hash.match(/^#w=([\w-]+)/);
 if(saved)try{deserialize(JSON.parse(saved))}catch(e){console.error('cogs: saved world rejected:',e.message);demo()}else demo();
+if(shared)loadShared(shared[1]).catch(e=>console.error('cogs: shared world rejected:',e.message));
 clock.off=nowSec()-simT;
 window.__cogs={W,S,SPACE,stats,clock,get simT(){return simT},serialize,deserialize,solve,
   engine:()=>({state:engineState,ac:ac&&ac.state,...engineStats})};
