@@ -6,8 +6,8 @@ const stage=()=>({l:0,r:barLeft(),t:0,b:dock.hidden?CH:dock.getBoundingClientRec
 const offStage=s=>s.x>=barLeft();
 const chromeHit=()=>null;
 function reveal(){}
-const panelOpen=()=>true;
-function togglePanel(open=!bar.classList.contains('open')){bar.classList.toggle('open',open)}
+const panelShown=()=>bar.classList.contains('open'),inspectorLive=()=>true;
+function togglePanel(open=!panelShown()){bar.classList.toggle('open',open);if(open)syncRows()}
 function placeRoll(c){
   const t=c.track;
   dockTools.replaceChildren(el('h3',{textContent:`disc ${c.id} · ${t.rings} rings · ${t.div} steps`}));dockStrip.replaceChildren();

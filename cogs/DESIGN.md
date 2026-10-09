@@ -94,4 +94,4 @@ Both builds keep the last 500 world states. A step is one finished action: it se
 `cogs.html` (phone) and `desk.html` (desktop) are build outputs: `node cogs/build.js`, which `make cogs` runs first, inlines `cogs/src` into each, because the artifact sandbox loads one self-contained file. Edit `src/`, never the outputs.
 - `engine.worklet.js` and `sim.js`: the audio worklet, the world, solver, audio, clock, persistence, demo and share.
 - `stage.js`: what both builds draw and do on the canvas: look, render, gestures, keys, the roll, the panel widgets and inspector, the frame loop.
-- `phone.js` / `desk.js`: each build's chrome. Each defines the hooks the stage calls: `onResize`, `stage`, `offStage`, `chromeHit`, `drawChrome`, `reveal`, `panelOpen`, `togglePanel`, `placeRoll`, `mount`, `PROBE`.
+- `phone.js` / `desk.js`: each build's chrome. Each defines the hooks the stage calls: `onResize`, `stage`, `offStage`, `chromeHit`, `drawChrome`, `reveal`, `panelShown`, `inspectorLive`, `togglePanel`, `placeRoll`, `mount`, `PROBE`.

@@ -6,7 +6,7 @@ const shelfTop=()=>CH-SHELF_H-safeBot;
 const stage=()=>({l:0,r:CW,t:safeTop,b:shelfTop()});
 const offStage=s=>s.y>=shelfTop();
 function drawChrome(){const b=activeBezel();if(b)drawBezel(b);if(ui.carry&&ui.carry.ghost)drawGhost(ui.carry.ghost);drawShelf();drawGlyph()}
-const panelOpen=()=>!$('#dev').hidden;
+const panelShown=()=>!$('#dev').hidden,inspectorLive=panelShown;
 function togglePanel(open=$('#dev').hidden){$('#dev').hidden=$('#scrim').hidden=!open;if(open){syncRows();buildInspector()}}
 const placeRoll=(c,f)=>rollSection(c,{strip:f,tools:f,row:11,label:30});
 const mount=()=>{buildPanel(btn=>btn('close',()=>togglePanel(false)));$('#scrim').onclick=()=>togglePanel(false)};

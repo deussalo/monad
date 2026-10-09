@@ -664,7 +664,7 @@ function section(title,parent=panel){const f=el('fieldset',{},el('legend',{textC
 // shift-drag on the slider moves ten times finer; double-click resets to `def` when there is one.
 function numRow(parent,label,min,max,step,get,set,def){
   const range=el('input',{type:'range',min,max,step}),num=el('input',{type:'number',min,max,step});
-  const sync=()=>{const v=get();range.value=v;num.value=+(+v).toFixed(4)};
+  const sync=()=>{const v=get(),shown=+(+v).toFixed(4);if(+range.value!==+v)range.value=v;if(+num.value!==shown)num.value=shown};
   const put=v=>{if(!Number.isFinite(v))return;set(clamp(+(Math.round(v/step)*step).toFixed(6),min,max));sync()};
   range.oninput=()=>put(+range.value);num.oninput=()=>{const v=+num.value;if(Number.isFinite(v)){set(clamp(v,min,max));sync()}};num.onchange=sync;
   const coarse=Math.max(1,Math.round((max-min)/100/step))*step;
@@ -728,7 +728,7 @@ function applyAudioSettings(){
 let inspector=null,panelRows=0,panelReadouts=0;
 const REVS=['-2','-1','-1/2','-1/3','-1/4','0','1/8','1/6','1/4','1/3','1/2','2/3','3/4','1','4/3','3/2','2','3','4','6','8'];
 const frac=s=>{const[a,b=1]=s.split('/').map(Number);return a/b};
-function select(type,o){sel=type?{type,o}:null;group=[];if(panelOpen())buildInspector()}
+function select(type,o){sel=type?{type,o}:null;group=[];if(inspectorLive())buildInspector()}
 function voiceRows(f,owner,withNote){
   const v=owner.voice;
   selRow(f,'kind',Object.keys(VOICES),()=>v.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense});buildInspector();changed()});
@@ -805,7 +805,7 @@ function buildInspector(){
     roRow(f,'last u',()=>(o.lastU??0).toFixed(3));
   }
 }
-function refreshInspector(){if(panelOpen())syncRows()}
+function refreshInspector(){if(panelShown())syncRows()}
 
 /* ---------- loop ---------- */
 let roAt=0;const meterBuf=new Float32Array(2048);
@@ -832,6 +832,6 @@ function frame(ts){
   stepCamera();draw();drawGroup();
   const now=performance.now();
   if(roll&&roll.cv.offsetParent)drawRoll();
-  if(panelOpen()&&now-roAt>250){roAt=now;readPalette();for(const[b,fn]of readouts)b.textContent=fn()}
+  if(panelShown()&&now-roAt>250){roAt=now;readPalette();for(const[b,fn]of readouts)b.textContent=fn()}
   requestAnimationFrame(frame);
 }
