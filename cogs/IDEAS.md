@@ -309,6 +309,129 @@ Each entry gives what it is, then why it is interesting, then cost and timing.
 
 ---
 
+## Round 2: new ideas after the alpha decision
+
+The lead fixed the alpha as belts, tempo lock, length-tuned strings and bars, comb, probability dots, Euclidean and polyrhythm presets, visual flappers and share-by-URL. Next come WAV export, latches and clutches, then retractable strikes. Round 2 adds only ideas that are not in the list above. Many of them complement that plan directly.
+
+Two facts from the code shape the ratings. Cog radius derives from an integer tooth count `n` and every mesh ratio is `-a.n/b.n`, so every ratio in a train is already rational. And `dotCross` detects crossings in both directions, so a disc spinning backwards already plays its pattern in retrograde.
+
+### Round 2 top 10
+
+| # | Idea | Cost | Timing | Why |
+|---|------|------|--------|-----|
+| R1 | **Scale lock for geometric pitch** | S | exact | Length-tuned strings are in the alpha, and free lengths give microtonal mush. A machine-wide key and scale, plus a snap-strength control, keeps "tune by dragging" musical. Snapping can also nudge the endpoint so that the geometry stays honest. |
+| R2 | **Friction-wheel drive** (wheel on a disc face) | S | exact | The ratio is `r/R`, where `r` is the wheel's radius on the disc. Drag the wheel along the disc and you have a continuous, visible tempo fader. It is a solver edge whose ratio comes from position. |
+| R3 | **Tumbler reverse → retrograde** | S | exact | A swing-arm idler flips a train's direction, and the disc then plays backwards. That is a classical canon transformation as a mechanism, and the readers already support it. |
+| R4 | **Linked disc instances** (edit once, play everywhere) | S | exact | A disc can reference another disc's pattern. Put the copy on a 2:1 or 3:2 gear and you get a mensuration canon, so augmentation and diminution come from gear choice. |
+| R5 | **Next-hit ticks** | S | exact | Faint marks on each pad and reader show where and when the next N strikes will land, with size ∝ `vn`. Because time is closed-form, you see the music before it sounds while you drag. |
+| R6 | **Exact loop point and sync flash** | S | exact | Tooth counts are integers, so the machine's period is an exact rational LCM. Flash the canvas at the moment every cog returns to its start pose. That also gives the WAV export its length. |
+| R7 | **Damper arm** (mechanical note-off) | M | exact | An arm or felt that touches a ringing bar or string chokes it. This gives staccato, choke groups and the hi-hat foot, from geometry. It needs a worklet `damp(key, t)` event. |
+| R8 | **Seebeck siren disc** | M | exact | A disc with rings of holes and an air jet. Pitch = holes × rev/s, so the ratio of hole counts *is* the interval (8:10:12 is a major triad). Harmony comes from counting and transposition from rpm, in the most literal form of the thesis. |
+| R9 | **Arm-on-arm clash** (counter-rotating coaxial cogs) | S | exact | Two arms on coaxial cogs in different layers strike when their angle difference crosses zero, so the hit rate is `|wA − wB|`. That gives a beat-frequency rhythm, which slows to a crawl when the two speeds are nearly equal. |
+| R10 | **Cut-out export** (laser-cut SVG and music-box punch strip) | M | exact | Export involute gear profiles and pad mounts as SVG, and discs as a standard 15/20/30-note paper strip. The real machine would play the same piece, because the timing is pure geometry. |
+
+### Mechanisms (round 2)
+
+- **Friction-wheel drive**: as R2. Variant: a **cone pulley** (Evans cone), where the belt position along the cone sets the ratio.
+  - Cost: S, an edge with a position-derived ratio. Timing: exact when static; live, or scheduled if a cam moves the wheel (P1).
+- **Tumbler reverse gear**: as R3. A latch (P2) can throw the tumbler, so a piece plays forwards, then backwards.
+  - Cost: S static, M thrown at run time. Timing: exact or scheduled.
+- **Intermittent (mutilated) gear**: a gear with a toothless sector drives its follower for only part of each turn.
+  - Why: rests and gated phrases from shape. A 3/4-toothed driver gives "play three beats, hold one".
+  - Cost: M (P3, a piecewise-linear angle map). Timing: exact.
+- **Lantern or pin wheel as beater**: the teeth themselves strike a pad, giving `n` hits per revolution with no arms.
+  - Why: dense rolls and gear "drums". Tooth count becomes subdivision.
+  - Cost: S. It is `n` virtual arms at the pitch radius. Timing: exact.
+- **Scotch yoke carriage**: a pad mounted on a slider that a crank drives sinusoidally, so it moves in and out of an arm's path.
+  - Why: a periodic swell or accent wave, because contact depth sets velocity.
+  - Cost: M. The pad position is closed-form, and so is the contact solve per sweep. Timing: exact.
+- **Bobbin and weight timer**: thread on a cog winds or unwinds, so a weight drops after `length / rim speed` and strikes at the bottom.
+  - Why: a visible fuse or delay, which is Rube Goldberg timing without free-body physics.
+  - Cost: M (P2). Timing: scheduled.
+- **Seesaw lever**: a hit on one end raises the other end into an arm's path; a hit there tips it back.
+  - Why: a flip-flop, the 1-bit memory of chain-reaction logic. Two seesaws give a call and response.
+  - Cost: M (P2), with discrete states. Timing: scheduled.
+- **Carry wheels (odometer)**: digit wheels where one full turn advances the next wheel one step, as in the Pascaline.
+  - Why: a hierarchical meter of beat, bar and phrase, readable on the machine itself. It drives section cogs.
+  - Cost: M (P1 or P3, a stepped angle map). Timing: exact.
+- **Jacquard card chain**: a belt whose links each carry one row of dots and pass a reader.
+  - Why: sequences longer than one disc revolution, with a non-repeating song on a loop of cards. It builds on the alpha belts.
+  - Cost: M. The links are dots on a moving path, and crossing is closed-form per straight run. Timing: exact.
+
+### Sound (round 2)
+
+- **Scale lock**: as R1.
+  - Cost: S. A `quantise(midi)` sits between geometry and `fire()`, and a "snap geometry to note" drag mode nudges the endpoint instead. Timing: exact.
+- **Tension-tuned string**: pitch ∝ √T / L (Mersenne), with tension from a hanging weight or a cam.
+  - Why: vibrato and pitch bends driven by mechanism, so a cam on a slow cog bends a bassline.
+  - Cost: M, a continuously scheduled pitch parameter. Timing: exact.
+- **Damper arm**: as R7.
+- **Siren disc**: as R8.
+  - Cost: M, a sustained worklet oscillator whose frequency follows `w`. Timing: exact.
+- **Prepared objects**: drop a bolt, paper or eraser token on a string or bar to buzz, mute or detune particular partials (prepared piano).
+  - Why: timbre as placement. It answers "free objects you move around" in sound.
+  - Cost: S. It changes the partial weights that `modal()` builds. Timing: exact.
+- **Reverb plate and spring tank as objects**: pads within reach of a plate send to it, with send ∝ proximity.
+  - Why: the mix is spatial and visible, alongside the listener object from round 1.
+  - Cost: S. It replaces a global send with per-pad sends. Timing: exact.
+- **Tuned tine bend by lever**: a lever pressing a comb tine raises its pitch while held, the way a kalimba player bends.
+  - Why: expressive pitch from mechanism, on the alpha comb.
+  - Cost: M. Timing: exact if a cam drives it, live if a hand does.
+
+### Composition (round 2)
+
+- **Linked disc instances**: as R4.
+  - Cost: S. A disc stores `track: {ref: id}`, and `serialize()` keeps one pattern. Timing: exact.
+- **Reader-offset canon**: a second reader at angle φ on the same disc plays the same line `φ/w` seconds later, optionally on another voice or an octave up.
+  - Why: it already works mechanically, but nobody will find it. Surface it as a preset and a "canon reader" tool whose inspector shows the delay in beats.
+  - Cost: S. Timing: exact.
+- **Exact loop point**: as R6.
+  - Cost: S. Rational `n` and rational rpm give the LCM directly. Timing: exact.
+- **Ratio solver**: pick two cogs, type "5:3", and the editor inserts or resizes gears (an idler or compound pair) to realise that ratio within the mesh rules.
+  - Why: the musician thinks in ratios and the machine needs radii. This bridges the two and teaches gear trains.
+  - Cost: M. It is a small search over integer tooth counts and layouts. Timing: exact.
+- **Mutate and breed**: seeded mutations of a machine (move a pad, retooth a gear, flip a dot) give 6 variants to audition side by side. Keep one and repeat.
+  - Why: exploration for people who can't yet design, and the variants are reproducible from `(parent, seed)`.
+  - Cost: M. Each variant is a cloned `serialize()` rendered offline. Timing: exact.
+- **MIDI file → machine**: import a short MIDI loop and get a disc, choosing ring count, scale and gear ratio to fit.
+  - Why: bring your own song into a machine.
+  - Cost: M. Timing: exact.
+
+### Editor and understanding (round 2)
+
+- **Next-hit ticks**: as R5.
+  - Cost: S, by sweeping `advance()` logic on a clone for one loop or N seconds. Timing: exact.
+- **Explain this hit**: click a flash, or an event in the score view, to highlight its causal chain (motor → gears → arm → pad) with the ratio and the `vn` at each link.
+  - Why: once latches and clutches exist, this is the Rube Goldberg debugger. The `src` string `fire()` already carries is the seed of it.
+  - Cost: M. Timing: exact.
+- **Camera follows the chain reaction**: an optional auto-pan and zoom to the most recent trigger chain.
+  - Why: chain reactions are a show, and large machines don't fit on a phone.
+  - Cost: S. Timing: exact (view only).
+- **Keyboard and screen-reader access**: tab through parts, arrow keys nudge, and announcements read "gear 40 teeth, 1.5 revs per bar, meshes gear 20".
+  - Why: a music toy should be playable without a pointer.
+  - Cost: S–M. Timing: n/a.
+
+### Play and sharing (round 2)
+
+- **Cut-out export**: as R10.
+  - Cost: M, for involute profile generation and strip layout. Timing: exact.
+- **Embeddable player**: a read-only, click-to-start mode with the machine in the URL. It suits blog posts and the artifact sandbox `cogs.html` already runs in.
+  - Cost: S, building on share-by-URL. Timing: exact.
+- **Daily machine**: a challenge seeded by date, the same parts bin for everyone, and a shareable result.
+  - Why: a reason to return. Results are exactly comparable because the timing is exact.
+  - Cost: S on top of challenge mode. Timing: exact.
+- **Patina**: parts darken where they are hit most, and the hit counts that `pad.hits` and `rd.hits` already keep become wear.
+  - Why: a machine shows its history. Purely visual, so it stays deterministic.
+  - Cost: S. Timing: exact.
+
+### Infrastructure (round 2)
+
+- **P7. Rational time.** Keep rpm as a rational (revs per bar × BPM) alongside the integer tooth counts, so loop length, sync points and LCM are exact integers and not float approximations. Unlocks R6, loop-exact WAV export and challenge comparison.
+- **P8. Choke events.** A worklet `damp(key, t)` that a voice honours at sample time. Unlocks dampers, choke groups and mute-by-clutch tails.
+- **P9. Pattern references.** Discs (and later card chains) refer to a shared pattern by id. Unlocks linked instances and canon presets without duplicating dots.
+
+---
+
 ## Deliberately ranked low
 
 - **True rigid-body physics (XL)**: it fights the exact-timing thesis. Analytic marbles, dominoes and flappers deliver about 80 % of the Rube Goldberg feel and keep offline render, scrub and share-by-URL exact.
