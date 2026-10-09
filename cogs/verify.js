@@ -16,6 +16,7 @@ const SHOT = process.env.COGS_SHOT || '';
   await p.goto(FILE); await p.waitForTimeout(400);
   await p.click('button[data-act=audio]');
   await p.waitForFunction(() => __cogs.engine().state === 'ready' && __cogs.engine().ac === 'running', null, { timeout: 5000 });
+  await p.waitForTimeout(1000);
   const smooth = await probe(() => new Promise(r => { const s = []; const f = ts => { s.push([ts, __cogs.clock.view * 1000]); if (s.length < 40) requestAnimationFrame(f); else {
     const k = s.slice(1).map(([t, v], i) => (v - s[i][1]) / (t - s[i][0])).filter(Number.isFinite); r(Math.max(...k.map(x => Math.abs(x - 1)))); } }; requestAnimationFrame(f); }));
   check('drawn motion advances with the frame clock (worst frame within 5%)', smooth < .05, +smooth.toFixed(4));
@@ -177,6 +178,31 @@ const SHOT = process.env.COGS_SHOT || '';
   const counts = o => [o.cogs.length, o.arms.length, o.belts.length, o.strings.length, o.readers.length, o.cogs[2].track.dots.length];
   const here = counts(await probe(() => __cogs.serialize())), there = counts(await sp.evaluate(() => __cogs.serialize()));
   check('shared url rebuilds the same world', JSON.stringify(here) === JSON.stringify(there), [here, there]);
+
+  console.log('MARQUEE');
+  await tool('select');
+  const grp = () => p.evaluate(() => group.map(g => g.type).sort().join(','));
+  await p.keyboard.down('Control'); await drag([-140, -70], [140, 30]); await p.keyboard.up('Control');
+  const g1 = await grp();
+  check('ctrl-drag box takes both cogs, their belt and the string', ['belt', 'cog', 'cog', 'string'].every(t => g1.includes(t)) && !g1.includes('reader'), g1);
+  const rpmBefore = await rpm();
+  await drag([-150, -40], [-150, 0]);
+  const moved = await probe(() => ({ ys: __cogs.W.cogs.slice(0, 2).map(c => c.y), sy: __cogs.W.strings[0].y1 }));
+  check('dragging a member moves the whole group', JSON.stringify(moved.ys) === '[40,40]' && moved.sy === 0, moved);
+  check('moved train keeps turning the same', JSON.stringify(await rpm()) === JSON.stringify(rpmBefore), await rpm());
+  await p.keyboard.down('Control'); await tap([100, 40]); await p.keyboard.up('Control');
+  const g2 = await grp();
+  check('ctrl-click toggles a cog out', g2.split(',').filter(t => t === 'cog').length === 1, g2);
+  await p.keyboard.press('Delete');
+  const left = await probe(() => [__cogs.W.cogs.length, __cogs.W.belts.length, __cogs.W.strings.length]);
+  check('delete removes the group, and the belt with its cog', JSON.stringify(left) === '[2,0,0]', left);
+
+  console.log('SHORTCUTS');
+  const keyed = [];
+  for (const [k, t] of [['c', 'cog'], ['d', 'disc'], ['a', 'arm'], ['p', 'pad'], ['r', 'reader'], ['b', 'belt'], ['t', 'string'], ['o', 'dot'], ['s', 'select']]) {
+    await p.keyboard.press(k); keyed.push(await p.evaluate(() => tool));
+  }
+  check('one key per tool', keyed.join() === 'cog,disc,arm,pad,reader,belt,string,dot,select', keyed.join());
 
   console.log('WHEEL');
   const w0 = await probe(() => ({ zoom: __cogs.S.zoom, view: { ...__cogs.serialize().view } }));

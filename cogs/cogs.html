@@ -394,7 +394,7 @@ const makeVoice=(kind,common={level:.7,velSense:.7})=>({...common,...VOICES[kind
 
 /* ---------- world ---------- */
 const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],next:1};
-let simT=0,tool='select',sel=null,draft=null;
+let simT=0,tool='select',sel=null,draft=null,group=[],marquee=null;
 const view={x:0,y:0};
 const stats={events:0,late:0,steps:0,stepsTick:0,log:[]};
 const clock={off:0,shift:0,audio:false,view:0,paused:false};
@@ -611,7 +611,7 @@ function readPalette(){[BG,FG,DIM,FAINT,SEL,BAD,HOT,READ,PAD]=['bg','fg','dim','
 readPalette();
 const glow=t=>t==null||clock.view<t?0:Math.exp(-(clock.view-t)/.12);
 function hot(t,base,g=cx){const e=glow(t);if(e<=.03)return base;g.globalAlpha=.35+.65*e;return HOT}
-const isSel=o=>sel&&sel.o===o;
+const isSel=o=>sel&&sel.o===o||group.some(g=>g.o===o);
 function beltLines(b){
   const A=b.a,B=b.b,ra=radius(A)+3,rb=radius(B)+3,d=Math.hypot(B.x-A.x,B.y-A.y),base=Math.atan2(B.y-A.y,B.x-A.x);
   const cosA=(b.cross?ra+rb:ra-rb)/d;if(!(Math.abs(cosA)<1))return [];
@@ -677,6 +677,7 @@ function draw(){
     for(let i=1;i<r.tines;i++){const u=i/r.tines;line(r.x1+ex*u-ey/L*4,r.y1+ey*u+ex/L*4,r.x1+ex*u+ey/L*4,r.y1+ey*u-ex/L*4)}
     cx.lineWidth=2*px}
   cx.lineWidth=px;
+  if(marquee){const{a,b}=marquee;cx.strokeStyle=SEL;cx.setLineDash([4*px,4*px]);cx.strokeRect(a.x,a.y,b.x-a.x,b.y-a.y);cx.setLineDash([])}
   if(S.ids){cx.fillStyle=DIM;cx.font=`${10*px}px monospace`;
     for(const c of W.cogs)cx.fillText('c'+c.id,c.x+4*px,c.y-4*px);
     for(const p of W.pads)cx.fillText('p'+p.id,p.x+p.r+2*px,p.y);
@@ -717,6 +718,7 @@ const TOOLS={
     const h=hitTest(p);
     if(!h){select(null);const sx=e.clientX,sy=e.clientY,vx=view.x,vy=view.y;
       return {move:(q,e2)=>{view.x=vx-(e2.clientX-sx)/S.zoom;view.y=vy-(e2.clientY-sy)/S.zoom},up:()=>changed()}}
+    if(group.length>1&&group.some(g=>g.o===h.o))return groupDrag(p);
     select(h.type,h.o);const o=h.o;
     if(h.type==='pad'){const dx=o.x-p.x,dy=o.y-p.y;return {move:q=>{o.x=q.x+dx;o.y=q.y+dy;refreshInspector()},up:()=>changed()}}
     if(h.type==='belt')return {move(){},up(){}};
@@ -766,10 +768,37 @@ const TOOLS={
   }
 };
 function removeSel(){
-  if(!sel)return;const o=sel.o;
-  if(sel.type==='cog'){W.cogs=W.cogs.filter(c=>c!==o);W.arms=W.arms.filter(a=>a.cog!==o);W.belts=W.belts.filter(b=>b.a!==o&&b.b!==o)}
-  else W[sel.type+'s']=W[sel.type+'s'].filter(x=>x!==o);
+  const items=group.length?group:sel?[sel]:[];if(!items.length)return;
+  for(const{type,o}of items){
+    W[type+'s']=W[type+'s'].filter(x=>x!==o);
+    if(type==='cog'){W.arms=W.arms.filter(a=>a.cog!==o);W.belts=W.belts.filter(b=>b.a!==o&&b.b!==o)}
+  }
   select(null);changed(true);
+}
+function boxSelect(a,b){
+  const x0=Math.min(a.x,b.x),x1=Math.max(a.x,b.x),y0=Math.min(a.y,b.y),y1=Math.max(a.y,b.y),inside=(x,y)=>x>=x0&&x<=x1&&y>=y0&&y<=y1,g=[];
+  for(const o of W.cogs)if(inside(o.x,o.y))g.push({type:'cog',o});
+  for(const o of W.pads)if(inside(o.x,o.y))g.push({type:'pad',o});
+  for(const type of ['reader','string'])for(const o of W[type+'s'])if(inside((o.x1+o.x2)/2,(o.y1+o.y2)/2))g.push({type,o});
+  for(const o of W.arms){const ang=renderTh(o.cog)+o.a,R=o.r0+o.len;if(inside(o.cog.x+Math.cos(ang)*R,o.cog.y+Math.sin(ang)*R))g.push({type:'arm',o})}
+  for(const o of W.belts)if(g.some(x=>x.o===o.a)&&g.some(x=>x.o===o.b))g.push({type:'belt',o});
+  return g;
+}
+function marqueeDrag(p){
+  marquee={a:p,b:p};
+  return {move:q=>{marquee.b=q},cancel:()=>{marquee=null},up:q=>{
+    const small=Math.hypot(q.x-p.x,q.y-p.y)*S.zoom<4;marquee=null;
+    const current=group.length?group:sel?[sel]:[];
+    if(!small)return setGroup(boxSelect(p,q));
+    const h=hitTest(q);if(!h)return;
+    const rest=current.filter(g=>g.o!==h.o);setGroup(rest.length<current.length?rest:[...current,h]);
+  }};
+}
+function groupDrag(p){
+  const start=group.map(({o})=>({o,s:{x:o.x,y:o.y,x1:o.x1,y1:o.y1,x2:o.x2,y2:o.y2}}));
+  return {move:q=>{const dx=q.x-p.x,dy=q.y-p.y;
+    for(const{o,s}of start){if('x'in o){o.x=s.x+dx;o.y=s.y+dy}if('x1'in o){o.x1=s.x1+dx;o.y1=s.y1+dy;o.x2=s.x2+dx;o.y2=s.y2+dy}}
+    solve()},up:()=>changed(true)};
 }
 
 const brush={p:1,v:1},eu={ring:0,k:3,rot:0};
@@ -924,11 +953,11 @@ function roRow(parent,label,fn){const b=el('b');const row=el('div',{className:'r
 const bind=(o,k,after)=>[()=>o[k],v=>{o[k]=v;after&&after()}];
 const syncRows=()=>{for(const s of rows)s()};
 
-const toolBtns={};
+const toolBtns={},TOOL_KEYS={select:'s',cog:'c',disc:'d',arm:'a',pad:'p',reader:'r',belt:'b',string:'t',dot:'o'};
 function setTool(t){tool=t;for(const k in toolBtns)toolBtns[k].className=k===t?'on':''}
 function buildPanel(){
   const tf=section('tool');
-  for(const t of Object.keys(TOOLS)){toolBtns[t]=el('button',{textContent:t,onclick:()=>setTool(t)});toolBtns[t].dataset.tool=t;tf.append(toolBtns[t])}
+  for(const t of Object.keys(TOOLS)){toolBtns[t]=el('button',{textContent:`${t} ${TOOL_KEYS[t]}`,title:t,onclick:()=>setTool(t)});toolBtns[t].dataset.tool=t;tf.append(toolBtns[t])}
   setTool('select');
   const tr=section('transport');
   const btn=(label,fn)=>{const b=el('button',{textContent:label,onclick:fn});b.dataset.act=label;tr.append(b);return b};
@@ -963,7 +992,8 @@ function applyAudioSettings(){
 let inspector=null,inspectorReadouts=[];
 const REVS=['-2','-1','-1/2','-1/3','-1/4','0','1/8','1/6','1/4','1/3','1/2','2/3','3/4','1','4/3','3/2','2','3','4','6','8'];
 const frac=s=>{const[a,b=1]=s.split('/').map(Number);return a/b};
-function select(type,o){sel=type?{type,o}:null;buildInspector()}
+function select(type,o){sel=type?{type,o}:null;group=[];buildInspector()}
+function setGroup(g){sel=null;group=g;buildInspector()}
 function voiceRows(f,owner,withNote){
   const v=owner.voice;
   selRow(f,'kind',Object.keys(VOICES),()=>v.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense});buildInspector();changed()});
@@ -977,9 +1007,13 @@ function buildInspector(){
   for(const r of inspectorReadouts){const i=readouts.indexOf(r);if(i>=0)readouts.splice(i,1)}
   const before=readouts.length;
   roll=null;
-  inspector.replaceChildren(el('legend',{textContent:sel?`${sel.type} ${sel.o.id}`:'selection'}));
+  inspector.replaceChildren(el('legend',{textContent:group.length?`group ${group.length}`:sel?`${sel.type} ${sel.o.id}`:'selection'}));
   const o=sel&&sel.o,f=inspector;
-  if(sel&&sel.type==='cog'){
+  if(group.length){
+    const n=type=>group.filter(g=>g.type===type).length;
+    roRow(f,'members',()=>['cog','arm','pad','reader','belt','string'].map(t=>t[0]+n(t)).join(' '));
+    f.append(el('button',{textContent:'delete group',onclick:removeSel}));
+  }else if(sel&&sel.type==='cog'){
     numRow(f,'teeth',6,240,1,...bind(o,'n',()=>changed(true)));
     numRow(f,'motor rpm',-600,600,.1,...bind(o,'motor',()=>changed(true)));
     selRow(f,'revs/bar',REVS,()=>REVS.reduce((a,b)=>Math.abs(frac(b)-o.revs)<Math.abs(frac(a)-o.revs)?b:a),v=>{o.revs=frac(v);changed(true)});
@@ -1051,13 +1085,14 @@ const toWorld=e=>screenToWorld(local(e));
 function zoomAt(s,zoom,anchor){S.zoom=clamp(zoom,.25,4);view.x=anchor.x-(s.x-CW/2)/S.zoom;view.y=anchor.y-(s.y-CH/2)/S.zoom;syncRows()}
 const fingers=new Map();let pinch=null;
 function pinchNow(){const[a,b]=[...fingers.values()];return {mid:{x:(a.x+b.x)/2,y:(a.y+b.y)/2},d:Math.hypot(a.x-b.x,a.y-b.y)||1}}
+cv.addEventListener('contextmenu',e=>e.preventDefault());
 cv.addEventListener('pointerdown',e=>{
   cv.setPointerCapture(e.pointerId);fingers.set(e.pointerId,local(e));
   if(fingers.size===2){
     if(draft){const d=draft;draft=null;d.cancel?d.cancel():d.up(toWorld(e),e)}
     const p=pinchNow();pinch={...p,zoom:S.zoom,anchor:screenToWorld(p.mid)};return;
   }
-  if(fingers.size===1&&!pinch&&!draft)draft=TOOLS[tool](toWorld(e),e);
+  if(fingers.size===1&&!pinch&&!draft)draft=e.ctrlKey||e.metaKey?marqueeDrag(toWorld(e)):TOOLS[tool](toWorld(e),e);
 });
 cv.addEventListener('pointermove',e=>{
   if(fingers.has(e.pointerId))fingers.set(e.pointerId,local(e));
@@ -1079,7 +1114,8 @@ document.addEventListener('pointerup',initAudio);
 document.addEventListener('keydown',e=>{
   initAudio();
   if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;
-  const t={v:'select',c:'cog',d:'disc',a:'arm',p:'pad',r:'reader',o:'dot'}[e.key];
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
+  const t=Object.keys(TOOL_KEYS).find(k=>TOOL_KEYS[k]===e.key.toLowerCase());
   if(t)setTool(t);else if(e.key==='Delete'||e.key==='Backspace')removeSel();else if(e.key===' '){e.preventDefault();setPaused(!clock.paused)}
 });
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&ac&&ac.state!=='running')ac.resume()});
@@ -1105,7 +1141,7 @@ function heardAt(frameSec){
 }
 function frame(ts){
   syncClock();
-  if(!clock.paused)clock.view=Math.min(simT,Math.max(clock.view,heardAt(ts/1000)));
+  if(!clock.paused)clock.view=Math.max(clock.view,heardAt(ts/1000));
   if(meter){meter.getFloatTimeDomainData(meterBuf);let m=0;for(const x of meterBuf)m=Math.max(m,Math.abs(x));peak=Math.max(m,peak*.95)}
   draw();drawRoll();
   const now=performance.now();
