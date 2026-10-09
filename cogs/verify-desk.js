@@ -45,6 +45,13 @@ const SHOTS = process.env.COGS_SHOTS || '';
   await p.keyboard.press('?'); await wait(300); const byKey = (await bar()).drawer; await p.keyboard.press('?'); await wait(300);
   is('? hides and shows it', [byKey, (await bar()).drawer], [0, 360]);
 
+  console.log('SPEED FIELD UNDER TEMPO LOCK');
+  const c1 = await probe(() => { const s = __cogs.toScreen(__cogs.W.cogs[0]); return [s.x + 5, s.y + 5]; });
+  await p.mouse.click(...c1); await settle();
+  if (!(await probe(() => __cogs.open))) await rail('panel');
+  await p.fill('#inspector [data-k="motor rpm"] input[type=number]', '40'); await settle();
+  is('type 40 rpm on a cog of the tempo-locked default machine: it turns at 40', await probe(() => +(__cogs.W.cogs[0].w * 60 / (2 * Math.PI)).toFixed(6)), 40);
+
   console.log('PARTS FROM THE TOOLBAR');
   await p.click('button[data-act=clear]');
   await p.fill('#panel [data-k="zoom"] input[type=number]', '1'); await p.fill('#panel [data-k="bpm lock"] input[type=number]', '0'); await settle();

@@ -1064,9 +1064,12 @@ function placeCog(c,p){
   if(!axle)snap(c);solve();
 }
 // The cog you push becomes the train's only motor; under tempo lock it is set in revolutions per bar.
+// A cog's own motor, in the unit the tempo lock reads (revs per bar) as well as in rpm.
+function setMotor(c,rpm){c.motor=rpm;c.revs=S.bpm?rpm*S.beats/S.bpm:0}
+// Cranking hands the whole train to this cog.
 function drive(c,rpm){
-  if(c.driver)for(const o of W.cogs)if(o.driver===c.driver){o.motor=0;o.revs=0}
-  if(S.bpm)c.revs=rpm*S.beats/S.bpm;else c.motor=rpm;solve();
+  if(c.driver)for(const o of W.cogs)if(o.driver===c.driver)setMotor(o,0);
+  setMotor(c,rpm);solve();
 }
 // A released crank keeps its speed; it settles on a step only when let go within DETENT_PULL of one.
 const DETENT_PULL=Math.log(1.06);
@@ -1541,7 +1544,7 @@ function buildInspector(){
   const o=sel&&sel.o,f=inspector;
   if(sel&&sel.type==='cog'){
     numRow(f,'teeth',6,240,1,()=>o.n,v=>{resizer(o).set(v);changed(true)});
-    numRow(f,'motor rpm',-600,600,.1,...bind(o,'motor',()=>changed(true)));
+    numRow(f,'motor rpm',-600,600,.1,()=>motorRpm(o),v=>{setMotor(o,v);changed(true)});
     selRow(f,'revs/bar',REVS,()=>REVS.reduce((a,b)=>Math.abs(frac(b)-o.revs)<Math.abs(frac(a)-o.revs)?b:a),v=>{o.revs=frac(v);changed(true)});
     numRow(f,'layer',0,7,1,...bind(o,'layer',()=>changed(true)));
     numRow(f,'x',-3000,3000,.5,...bind(o,'x',()=>changed(true)));
