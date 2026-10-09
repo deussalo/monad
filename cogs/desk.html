@@ -1225,7 +1225,7 @@ cv.addEventListener('wheel',e=>{
 document.addEventListener('pointerup',initAudio);
 document.addEventListener('keydown',e=>{
   initAudio();
-  if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;
+  if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)||rollKey(e))return;
   const k=e.key.toLowerCase();
   if((e.ctrlKey||e.metaKey)&&!e.altKey&&(k==='z'||k==='y')){e.preventDefault();if(k==='z'&&!e.shiftKey)edits.undo();else edits.redo();return}
   if(e.ctrlKey||e.metaKey||e.altKey)return;
@@ -1258,11 +1258,57 @@ function readerPlayheads(c){
   return out;
 }
 function rollGeom(){const t=roll.c.track,L=roll.label,cw=Math.max(6,Math.floor((roll.box.clientWidth-L)/t.div));return {cw,W:L+cw*t.div,H:roll.row*t.rings}}
+const colAngle=(c,col)=>wrap(-rollDir(c)*col*TAU/c.track.div);
+const rollCol=(c,d)=>Math.round(rollU(c,d.a)*c.track.div)%c.track.div;
+// The pointer in grid units: columns from the first step, rows from the top ring.
+function rollAt(e){const g=rollGeom(),r=roll.cv.getBoundingClientRect();return {x:(e.clientX-r.left-roll.label)/g.cw,y:(e.clientY-r.top)/roll.row}}
 function rollCell(e){
-  const t=roll.c.track,g=rollGeom(),r=roll.cv.getBoundingClientRect();
-  const col=Math.floor((e.clientX-r.left-roll.label)/g.cw),row=Math.floor((e.clientY-r.top)/roll.row);
+  const t=roll.c.track,at=rollAt(e),col=Math.floor(at.x),row=Math.floor(at.y);
   if(col<0||col>=t.div||row<0||row>=t.rings)return null;
-  return {ring:t.rings-1-row,a:wrap(-rollDir(roll.c)*col*TAU/t.div)};
+  return {col,ring:t.rings-1-row,a:colAngle(roll.c,col)};
+}
+const pin=cell=>({ring:cell.ring,a:cell.a,p:brush.p,v:brush.v});
+const sameCell=(a,b)=>a.ring===b.ring&&Math.abs(wrap(a.a-b.a+Math.PI)-Math.PI)<1e-6;
+
+/* roll selection: a set of pins on the rolled disc, edited as one */
+const rollSel=new Set();let rollSelOf=null,rollAnchor=null,rollClip=[];
+const selPins=t=>t.dots.filter(d=>rollSel.has(d));
+function rollEdit(){changed();edits.commit()}
+// Shift a set of pins rigidly from where they started: columns wrap round the disc, rings stop at its edge.
+function moveSel(c,from,dc,dr){
+  const t=c.track,lo=Math.min(...from.map(f=>f[2])),hi=Math.max(...from.map(f=>f[2]));dr=clamp(dr,-lo,t.rings-1-hi);
+  for(const[d,a,ring]of from){d.a=wrap(a-rollDir(c)*dc*TAU/t.div);d.ring=ring+dr}
+}
+// A selected pin landing on another pin replaces it.
+function settleSel(t){t.dots=t.dots.filter(d=>rollSel.has(d)||![...rollSel].some(s=>sameCell(s,d)))}
+function nudgeSel(c,dc,dr){const t=c.track,from=selPins(t).map(d=>[d,d.a,d.ring]);if(!from.length)return;moveSel(c,from,dc,dr);settleSel(t);rollEdit()}
+function deleteSel(t){if(!rollSel.size)return;t.dots=t.dots.filter(d=>!rollSel.has(d));rollSel.clear();rollEdit()}
+function copySel(c){
+  const sel=selPins(c.track);if(!sel.length)return false;
+  const cols=sel.map(d=>rollCol(c,d)),min=Math.min(...cols);rollClip=sel.map((d,i)=>({dc:cols[i]-min,ring:d.ring,p:d.p,v:d.v}));return true;
+}
+function pasteClip(c){
+  const t=c.track;if(!rollClip.length)return;
+  const head=readerPlayheads(c)[0],at=rollAnchor??(head?Math.floor(head.u*t.div):0);
+  rollSel.clear();
+  for(const q of rollClip){const d={ring:Math.min(q.ring,t.rings-1),a:colAngle(c,(at+q.dc)%t.div),p:q.p,v:q.v};t.dots.push(d);rollSel.add(d)}
+  settleSel(t);rollEdit();
+}
+function brushSel(t,k){const sel=selPins(t);if(!sel.length)return;for(const d of sel)d[k]=brush[k];changed()}
+// Keys go to the roll while it has focus or a selection; part keys stay off the canvas then.
+function rollKey(e){
+  if(!roll||!roll.cv.offsetParent)return false;
+  const c=roll.c,t=c.track;if(document.activeElement!==roll.cv&&!selPins(t).length)return false;
+  const k=e.key.toLowerCase();
+  if(e.ctrlKey||e.metaKey){
+    const op={c:()=>copySel(c),x:()=>{if(copySel(c))deleteSel(t)},v:()=>pasteClip(c),a:()=>{for(const d of t.dots)rollSel.add(d)}}[k];
+    if(!op||e.altKey)return false;e.preventDefault();op();return true;
+  }
+  const arrow={arrowleft:[-1,0],arrowright:[1,0],arrowup:[0,1],arrowdown:[0,-1]}[k];
+  if(arrow){e.preventDefault();nudgeSel(c,arrow[0],arrow[1]*(e.shiftKey?SCALES[t.scale].length:1));return true}
+  if(k==='delete'||k==='backspace'){e.preventDefault();deleteSel(t);return true}
+  if(k==='escape'&&rollSel.size){rollSel.clear();return true}
+  return !!PART_KEYS[k]||k==='s';
 }
 function drawRoll(){
   const c=roll.c,t=c.track,g=rollGeom(),cv2=roll.cv,x=cv2.getContext('2d'),gw=g.cw*t.div,L=roll.label,RH=roll.row;
@@ -1281,24 +1327,57 @@ function drawRoll(){
   for(const d of t.dots){
     if(d.ring>=t.rings)continue;
     const hgt=(RH-1)*(.35+.65*d.v);
-    x.fillStyle=hot(d.flash,FG,x);x.globalAlpha*=.3+.7*d.p;x.fillRect(L+rollU(c,d.a)*gw+1,(t.rings-d.ring)*RH-hgt,g.cw-1,hgt);x.globalAlpha=1;
+    const px=L+rollU(c,d.a)*gw+1,on=rollSel.has(d);
+    x.fillStyle=hot(d.flash,on?SEL:FG,x);x.globalAlpha*=.3+.7*d.p;x.fillRect(px,(t.rings-d.ring)*RH-hgt,g.cw-1,hgt);x.globalAlpha=1;
+    if(on){x.strokeStyle=SEL;x.lineWidth=1;x.strokeRect(px+.5,(t.rings-1-d.ring)*RH+1.5,g.cw-2,RH-2)}
   }
   x.lineWidth=2;
   for(const p of readerPlayheads(c)){x.strokeStyle=hot(p.rd.flash,READ,x);x.beginPath();x.moveTo(L+p.u*gw,0);x.lineTo(L+p.u*gw,g.H);x.stroke();x.globalAlpha=1}
+  const m=roll.marquee;
+  if(m){x.lineWidth=1;x.strokeStyle=SEL;x.setLineDash([5,4]);x.strokeRect(L+m.x0*g.cw+.5,m.y0*RH+.5,(m.x1-m.x0)*g.cw,(m.y1-m.y0)*RH);x.setLineDash([])}
 }
 // The strip goes into `strip`, its controls into `tools`; row and label are in CSS px.
 function rollSection(c,{strip,tools,row,label}){
   const t=c.track,cv2=el('canvas'),box=el('div',{className:'roll'},cv2);
   box.style.cssText='overflow-x:auto;margin:4px 0';cv2.style.cssText='display:block;touch-action:none;cursor:crosshair';
-  roll={cv:cv2,box,c,row,label};let paint=null;
-  cv2.onpointerdown=e=>{const cell=rollCell(e);if(!cell)return;cv2.setPointerCapture(e.pointerId);paint=dotAt(t,cell.ring,cell.a)<0;setDot(t,{...cell,...brush},paint)};
-  cv2.onpointermove=e=>{if(paint===null)return;const cell=rollCell(e);if(cell)setDot(t,{...cell,...brush},paint)};
-  cv2.onpointerup=cv2.onpointercancel=()=>{if(paint!==null){paint=null;changed()}};
+  cv2.tabIndex=0;cv2.style.outline='none';
+  roll={cv:cv2,box,c,row,label,marquee:null};
+  if(rollSelOf!==c){rollSel.clear();rollAnchor=null;rollSelOf=c}
+  // A press: ctrl/cmd draws a box (a click toggles one pin), a selected pin drags the set,
+  // anything else clears a selection, or paints when there is none.
+  let press=null;
+  cv2.onpointerdown=e=>{
+    const at=rollAt(e),cell=rollCell(e),hit=cell&&t.dots.find(d=>sameCell(d,cell));
+    cv2.focus({preventScroll:true});cv2.setPointerCapture(e.pointerId);if(cell)rollAnchor=cell.col;
+    if(e.ctrlKey||e.metaKey){press={hit};roll.marquee={x0:at.x,y0:at.y,x1:at.x,y1:at.y};return}
+    if(hit&&rollSel.has(hit)){press={from:selPins(t).map(d=>[d,d.a,d.ring]),col:cell.col,ring:cell.ring,moved:false};return}
+    if(rollSel.size){rollSel.clear();press=null;return}
+    if(!cell){press=null;return}
+    press={paint:!hit};setDot(t,pin(cell),press.paint);
+  };
+  cv2.onpointermove=e=>{
+    if(!press)return;const at=rollAt(e);
+    if(roll.marquee){Object.assign(roll.marquee,{x1:at.x,y1:at.y});return}
+    if(press.from){const dc=Math.floor(at.x)-press.col,dr=t.rings-1-Math.floor(at.y)-press.ring;if(dc||dr||press.moved){press.moved=true;moveSel(c,press.from,dc,dr)}return}
+    const cell=rollCell(e);if(cell)setDot(t,pin(cell),press.paint);
+  };
+  cv2.onpointerup=cv2.onpointercancel=()=>{
+    const p=press,m=roll.marquee;press=null;roll.marquee=null;if(!p)return;
+    if(m){
+      const g=rollGeom(),x0=Math.min(m.x0,m.x1),x1=Math.max(m.x0,m.x1),y0=Math.min(m.y0,m.y1),y1=Math.max(m.y0,m.y1);
+      if(Math.hypot((x1-x0)*g.cw,(y1-y0)*row)<4){if(p.hit&&!rollSel.delete(p.hit))rollSel.add(p.hit);return}
+      rollSel.clear();
+      for(const d of t.dots){const px=rollU(c,d.a)*t.div+.5,py=t.rings-d.ring-.5;if(px>=x0&&px<=x1&&py>=y0&&py<=y1)rollSel.add(d)}
+      return;
+    }
+    if(p.from){if(p.moved){settleSel(t);changed()}return}
+    changed();
+  };
   const shift=k=>()=>{const s=rollDir(c)*TAU/t.div;for(const d of t.dots)d.a=wrap(d.a-k*s);changed()};
   strip.append(box);
   tools.append(el('button',{textContent:'shift <',onclick:shift(-1)}),el('button',{textContent:'shift >',onclick:shift(1)}));
-  numRow(tools,'brush p',0,1,.01,...bind(brush,'p'),BRUSH_DEFAULT.p);
-  numRow(tools,'brush vel',0,1,.01,...bind(brush,'v'),BRUSH_DEFAULT.v);
+  numRow(tools,'brush p',0,1,.01,...bind(brush,'p',()=>brushSel(t,'p')),BRUSH_DEFAULT.p);
+  numRow(tools,'brush vel',0,1,.01,...bind(brush,'v',()=>brushSel(t,'v')),BRUSH_DEFAULT.v);
   for(const[k,max]of [['ring',35],['k',96],['rot',95]])numRow(tools,'euclid '+k,0,max,1,...bind(eu,k),EU_DEFAULT[k]);
   tools.append(el('button',{textContent:'euclid fill',onclick:()=>{
     const n=t.div,ring=Math.min(eu.ring,t.rings-1);t.dots=t.dots.filter(d=>d.ring!==ring);
@@ -1544,7 +1623,8 @@ function mount(){
 const PROBE={stage,
   get open(){return bar.classList.contains('open')},
   get roll(){if(!roll||dock.hidden)return null;const g=rollGeom(),r=roll.cv.getBoundingClientRect();
-    return {x:r.left,y:r.top,label:roll.label,row:roll.row,cw:g.cw,rings:roll.c.track.rings,div:roll.c.track.div,id:roll.c.id}}};
+    return {x:r.left,y:r.top,label:roll.label,row:roll.row,cw:g.cw,rings:roll.c.track.rings,div:roll.c.track.div,id:roll.c.id,
+      pins:roll.c.track.dots.map(d=>[rollCol(roll.c,d),d.ring,rollSel.has(d)?1:0]).sort((a,b)=>a[0]-b[0]||a[1]-b[1])}}};
 /* ---------- boot ---------- */
 mount();resize();
 const saved=storage.get(),shared=location.hash.match(/^#w=([\w-]+)/);

@@ -56,4 +56,5 @@ function mount(){
 const PROBE={stage,
   get open(){return bar.classList.contains('open')},
   get roll(){if(!roll||dock.hidden)return null;const g=rollGeom(),r=roll.cv.getBoundingClientRect();
-    return {x:r.left,y:r.top,label:roll.label,row:roll.row,cw:g.cw,rings:roll.c.track.rings,div:roll.c.track.div,id:roll.c.id}}};
+    return {x:r.left,y:r.top,label:roll.label,row:roll.row,cw:g.cw,rings:roll.c.track.rings,div:roll.c.track.div,id:roll.c.id,
+      pins:roll.c.track.dots.map(d=>[rollCol(roll.c,d),d.ring,rollSel.has(d)?1:0]).sort((a,b)=>a[0]-b[0]||a[1]-b[1])}}};

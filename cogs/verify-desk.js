@@ -130,6 +130,58 @@ const SHOTS = process.env.COGS_SHOTS || '';
   }, [t0]);
   check('30 rpm: the pin plays twice in 4 s, 2 s apart', played.n === 2 && near(played.gap, 2, 1e-6), [played.n, played.gap]);
   check('each at the moment the pin crosses the reader', played.miss.length === 2 && played.miss.every(m => m < 1e-3), played.miss);
+
+  console.log('ROLL SELECTION');
+  await p.click('text=clear dots'); await settle();
+  const R = await probe(() => __cogs.roll), grid = (gx, gy) => [R.x + R.label + gx * R.cw, R.y + gy * R.row];
+  const cellAt = (col, ring) => grid(col + .5, R.rings - 1 - ring + .5), pins = async () => (await probe(() => __cogs.roll)).pins;
+  const rk = [await key()], rs = [await undos()], rmark = async () => { await settle(); rk.push(await key()); rs.push(await undos()); };
+  for (const [col, ring] of [[0, 2], [2, 3], [4, 2], [10, 6]]) { await p.mouse.click(...cellAt(col, ring)); await rmark(); }
+  is('four clicks paint four pins', await pins(), [[0, 2, 0], [2, 3, 0], [4, 2, 0], [10, 6, 0]]);
+  await p.keyboard.down('Control'); await p.mouse.move(...grid(.1, R.rings - 1 - 3 + .1)); await p.mouse.down();
+  await p.mouse.move(...grid(4.9, R.rings - 1 - 2 + .9), { steps: 10 }); await shot('desk-04-roll-marquee'); await p.mouse.up(); await p.keyboard.up('Control');
+  is('ctrl-drag a box over columns 0-4, rings 2-3: exactly those three pins', await pins(), [[0, 2, 1], [2, 3, 1], [4, 2, 1], [10, 6, 0]]);
+  is('selecting is not an undo step', await undos(), rs[rs.length - 1]);
+  await p.keyboard.down('Control'); await p.mouse.click(...cellAt(10, 6)); await p.mouse.click(...cellAt(10, 6)); await p.keyboard.up('Control');
+  is('ctrl-click toggles a pin in and out', (await pins())[3], [10, 6, 0]);
+  await shot('desk-05-roll-selection');
+  await p.mouse.move(...cellAt(2, 3)); await p.mouse.down(); await p.mouse.move(...cellAt(5, 4), { steps: 10 }); await p.mouse.up(); await rmark();
+  is('drag a selected pin 3 columns right, 1 ring up: the set moves', await pins(), [[3, 3, 1], [5, 4, 1], [7, 3, 1], [10, 6, 0]]);
+  await p.click('button[data-act="reset hits"]'); const m0 = await probe(() => __cogs.simT); await wait(4300);
+  const moved = await probe(([t0]) => {
+    const c = __cogs.W.cogs.find(o => o.track), r = __cogs.W.readers[0], phi = Math.atan2(r.y1 - c.y, r.x1 - c.x), TAU = 2 * Math.PI, rings = {}, miss = [];
+    for (const l of __cogs.stats.log.filter(l => l.src.endsWith('>reader' + r.id) && l.t >= t0 && l.t < t0 + 4)) {
+      const ring = +l.src.match(/ring(\d+)/)[1]; rings[ring] = (rings[ring] || 0) + 1;
+      miss.push(Math.min(...c.track.dots.filter(d => d.ring === ring).map(d => { const a = c.th - c.w * (__cogs.simT - l.t) + d.a - phi; return Math.abs(((a % TAU) + TAU + Math.PI) % TAU - Math.PI); })));
+    }
+    return { rings, worst: Math.max(...miss) };
+  }, [m0]);
+  is('the reader plays the moved pins: 2 on ring 3, 1 on ring 4, 1 on ring 6, twice each in 4 s', moved.rings, { 3: 4, 4: 2, 6: 2 });
+  check('each hit lands where a pin crosses the reader', moved.worst < 1e-3, moved.worst);
+  await p.keyboard.press('ArrowRight'); await rmark();
+  await p.keyboard.press('ArrowUp'); await rmark();
+  await p.keyboard.press('Shift+ArrowUp'); await rmark();
+  is('right, up, shift+up (5 pentatonic steps): one column, one ring, an octave', await pins(), [[4, 9, 1], [6, 10, 1], [8, 9, 1], [10, 6, 0]]);
+  await p.keyboard.press('c'); is('part keys stay off the canvas while the roll has a selection', await probe(() => __cogs.armed), null);
+  await p.keyboard.press('Control+c'); await p.mouse.click(...cellAt(12, 0)); await settle();
+  is('a click on empty space clears the selection and paints nothing', await pins(), [[4, 9, 0], [6, 10, 0], [8, 9, 0], [10, 6, 0]]);
+  await p.keyboard.press('Control+v'); await rmark();
+  is('ctrl+c, ctrl+v: a copy lands at the clicked column, wrapping', await pins(), [[0, 9, 1], [4, 9, 0], [6, 10, 0], [8, 9, 0], [10, 6, 0], [12, 9, 1], [14, 10, 1]]);
+  await p.keyboard.press('Delete'); await rmark();
+  is('Delete removes the pasted set, not the disc', [await pins(), (await probe(() => __cogs.sel)).type], [[[4, 9, 0], [6, 10, 0], [8, 9, 0], [10, 6, 0]], 'cog']);
+  await p.keyboard.press('Control+a'); is('ctrl+a selects every pin', (await pins()).map(q => q[2]), [1, 1, 1, 1]);
+  await p.keyboard.press('Control+x'); await rmark(); const cut = await pins();
+  await p.keyboard.press('Control+v'); await rmark();
+  is('ctrl+x empties the roll, ctrl+v puts the set back at column 12', [cut, await pins()], [[], [[0, 9, 1], [2, 6, 1], [12, 9, 1], [14, 10, 1]]]);
+  await p.fill('#dock [data-k="brush p"] input[type=number]', '0.5'); await rmark();
+  is('the brush p slider sets the selection', await probe(() => __cogs.W.cogs.find(o => o.track).track.dots.map(d => d.p)), [.5, .5, .5, .5]);
+  await p.focus('#dock canvas'); await p.keyboard.press('Escape');
+  is('Esc clears the selection', (await pins()).map(q => q[2]), [0, 0, 0, 0]);
+  await p.keyboard.press('d'); is('a focused roll keeps part keys too', await probe(() => __cogs.armed), null);
+  is('each roll edit is exactly one undo step', rs.slice(1).map((s, i) => s - rs[i]), rs.slice(1).map(() => 1));
+  const walk = [];
+  for (let i = rk.length - 2; i >= 0; i--) { await p.keyboard.press('Control+z'); walk.push(await key() === rk[i]); }
+  is('ctrl+z walks every roll edit back exactly', walk, walk.map(() => true));
   await click([150, -250]);
   is('deselect: the dock goes', await probe(() => __cogs.roll), null);
 
