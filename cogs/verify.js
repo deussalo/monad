@@ -269,6 +269,10 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const pad = await tp.probe(() => { const o = __cogs.W.pads[1], s = __cogs.toScreen(o); return { id: o.id, s: [s.x, s.y], n: __cogs.W.pads.length }; });
   await tp.stroke([pad.s, [pad.s[0], 700], await tp.shelf('pad')]);
   is('drag a pad onto the shelf: gone', await tp.probe(id => [__cogs.W.pads.every(p => p.id !== id), __cogs.W.pads.length], pad.id), [true, pad.n - 1]);
+  await tp.p.waitForFunction(() => !__cogs.pending); await tp.act('undo');
+  is('the panel undo button brings it back', await tp.probe(id => __cogs.W.pads.some(p => p.id === id), pad.id), true);
+  await tp.act('redo'); await tp.dev(false);
+  is('and redo scraps it again', await tp.probe(id => __cogs.W.pads.some(p => p.id === id), pad.id), false);
   check('page errors', m.errs.length === 0 && tp.errs.length === 0, [...m.errs, ...tp.errs].slice(0, 3));
 
   console.log('BELTS, TEMPO, STRINGS, COMB, PROBABILITY, EUCLID, SHARE');

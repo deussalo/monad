@@ -37,6 +37,7 @@ const VOICE_DEFS={
   hat:[['cutoff','cutoff Hz',1000,16000,10],['decay','decay s',.005,1,.005]]};
 const COMMON_DEFS=[['level','level',0,1.5,.01],['velSense','vel sense',0,1,.01]];
 const makeVoice=(kind,common={level:.7,velSense:.7})=>({...common,...VOICES[kind],kind});
+const S_DEFAULT={...S},SPACE_DEFAULT={...SPACE};
 
 /* ---------- world ---------- */
 const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],next:1};
@@ -257,8 +258,40 @@ let saveTimer=0;
 function changed(structural){
   if(structural)solve();
   clearTimeout(saveTimer);saveTimer=setTimeout(()=>storage.put(JSON.stringify(serialize())),400);
+  edits.mark();
   refreshInspector();
 }
+// Undo: one step per finished action. A step settles when the pointer lifts, or after a quiet
+// spell for wheel and keyboard edits. Camera, pause, selection and cog phase are never undone.
+const worldKey=()=>{const j=JSON.parse(JSON.stringify(serialize()));delete j.view;delete j.S.zoom;for(const c of j.cogs)delete c.th;return JSON.stringify(j)};
+const EDITS_MAX=500,EDITS_QUIET=350;
+const edits={past:[],future:[],cur:null,pending:false,timer:0,held:false,
+  snap(){return {key:worldKey(),t:simT,phase:new Map(W.cogs.map(c=>[c.id,{th:c.th,w:c.w}]))}},
+  mark(){this.pending=true;clearTimeout(this.timer);this.timer=setTimeout(()=>{if(!this.held)this.commit()},EDITS_QUIET)},
+  commit(){
+    clearTimeout(this.timer);this.pending=false;const s=this.snap();
+    if(this.cur&&s.key===this.cur.key)return;
+    if(this.cur){this.past.push(this.cur);if(this.past.length>EDITS_MAX)this.past.shift();this.future.length=0}
+    this.cur=s;
+  },
+  reset(){clearTimeout(this.timer);this.pending=false;this.past.length=0;this.future.length=0;this.cur=this.snap()},
+  step(from,to){if(this.pending)this.commit();if(!from.length)return false;to.push(this.cur);this.cur=from.pop();restore(this.cur);return true},
+  undo(){return this.step(this.past,this.future)},
+  redo(){return this.step(this.future,this.past)},
+};
+// Put the parts of a snapshot back without touching the clock: each cog takes the phase it
+// would have now had it kept the speed it had then, and keeps its revolution count.
+function restore(s){
+  const turns=new Map(W.cogs.map(c=>[c.id,c.turns])),kept=sel&&{type:sel.type,id:sel.o.id};
+  const j=JSON.parse(s.key);Object.assign(j.S,{zoom:S.zoom});j.view={...view};
+  for(const c of j.cogs){const p=s.phase.get(c.id);c.th=wrap(p.th+p.w*(simT-s.t))}
+  deserialize(j);
+  for(const c of W.cogs)c.turns=turns.get(c.id)??0;
+  const back=kept&&W[kept.type+'s']?.find(o=>o.id===kept.id);if(back)select(kept.type,back);
+  clearTimeout(edits.timer);edits.pending=false;
+}
+addEventListener('pointerdown',()=>{edits.held=true},true);
+for(const type of ['pointerup','pointercancel'])addEventListener(type,()=>{edits.held=false;if(edits.pending)edits.commit()});
 function serialize(){
   return {S,SPACE,view,
     cogs:W.cogs.map(c=>({id:c.id,x:c.x,y:c.y,n:c.n,motor:c.motor,revs:c.revs,layer:c.layer,th:wrap(c.th),

@@ -305,7 +305,6 @@ Each entry gives what it is, then why it is interesting, then cost and timing.
 - Motor "hum" and a bearing creak at very low rpm.
 - An idle "wind down" when the tab loses focus, not a cut; return with "wind up".
 - The jam shows as a shudder animation plus a grinding sound rather than a red cog.
-- Undo and redo, which is cheap because `serialize()` exists.
 
 ---
 

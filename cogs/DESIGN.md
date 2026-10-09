@@ -81,6 +81,14 @@ Watchmaking, not wireframe.
 - **Flapper arms:** this needs no control. The blued hand bends on impact, in proportion to the hit, and springs back.
 - **Share by URL:** a seal sits at the foot of the room bezel. Tap it to copy the link; the seal stamps itself.
 
+## Desktop
+
+`desk.html` drops the shelf, glyph and bezels. A toolbar sits on the right edge: an always-visible rail of labelled buttons with their keys (panel `?`, the seven parts `c d a b p t r`, select `s`, undo, redo, pause, fit, delete), and a panel that slides out of it and scrolls: transport, the inspector for the selection, world and tempo, space, stats, json. Every value is a slider with its number: wheel nudges by 1% of the range, shift-wheel by one step, shift-drag moves ten times finer, double-click resets to the default. Selecting a disc docks its roll at the bottom: time left to right, rings as rows, click or drag to paint pins. The canvas keeps the phone's mouse gestures: rim crank and resize, note painting at note zoom, wheel zoom at the cursor, ctrl-drag marquee, ctrl-click toggle, group drag, Delete. Dragging a part onto the toolbar scraps it.
+
+## Undo
+
+Both builds keep the last 500 world states. A step is one finished action: it settles when the pointer lifts, or after 350 ms without edits, so a drag, a crank, a paint stroke, a slider drag or a burst of wheel nudges is one step and a no-op is none. Camera, pause, selection and cog phase are never undone; undo puts the parts back and each cog takes the phase it would have had, so the train keeps turning in time. Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z and Ctrl+Y, or the undo and redo buttons.
+
 ## The seam
 
 `cogs.html` (phone) and `desk.html` (desktop) are build outputs: `node cogs/build.js`, which `make cogs` runs first, inlines `cogs/src` into each, because the artifact sandbox loads one self-contained file. Edit `src/`, never the outputs.

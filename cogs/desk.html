@@ -1,0 +1,1563 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>cogs desk</title>
+<style>
+:root{color-scheme:dark;--bg:var(--rig-bg,#111);--fg:var(--rig-text,#ddd);--dim:var(--rig-text-dim,#666);--faint:var(--rig-text-faint,#2a2a2a);--line:var(--rig-border,#333);--hot:var(--rig-gold,#fc4);--sel:var(--rig-blue,#4cf);--bad:var(--rig-red,#f44);--read:var(--rig-teal,#6cf);--pad:var(--rig-surface-raised,#222)}
+*{box-sizing:border-box}
+fieldset{border:1px solid var(--line);margin:0 0 6px;padding:4px 6px}
+legend{color:var(--dim);padding:0 4px}
+.row{display:grid;grid-template-columns:76px 1fr 70px;gap:4px;align-items:center;margin:2px 0}
+.ro{display:grid;grid-template-columns:76px 1fr;gap:4px;margin:1px 0}.ro b{font-weight:normal;color:var(--hot)}
+input[type=number],select,textarea{background:var(--rig-surface,#000);color:var(--fg);border:1px solid var(--line);font:inherit;width:100%}
+input[type=range]{width:100%;margin:0}
+button{background:var(--rig-surface,#000);color:var(--fg);border:1px solid var(--line);font:inherit;padding:3px 6px;margin:1px}
+textarea{height:90px}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);font:12px/1.3 var(--rig-font-mono,ui-monospace,Menlo,Consolas,monospace)}
+#c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#bar{position:fixed;top:0;right:0;bottom:0;display:flex;background:var(--bg);border-left:1px solid var(--line)}
+#bar.scrap{border-left-color:var(--bad)}
+#drawer{width:0;overflow:hidden;transition:width .16s cubic-bezier(.16,1,.3,1)}
+#bar.open #drawer{width:360px}
+#panel{width:360px;height:100%;overflow-y:auto;padding:8px;border-right:1px solid var(--line);user-select:text}
+#rail{width:72px;display:flex;flex-direction:column;overflow-y:auto;padding:4px 0}
+#rail button{display:flex;flex-direction:column;align-items:center;gap:1px;margin:1px 4px;padding:3px 0;border-color:transparent;background:none;color:var(--dim);font-size:11px}
+#rail button:hover{border-color:var(--line);color:var(--fg)}
+#rail button.on{border-color:var(--hot);color:var(--hot)}
+#rail button:disabled{opacity:.35;border-color:transparent}
+#rail button kbd{font:inherit;font-size:10px;color:var(--dim)}
+#rail button.toggle{color:var(--fg);border-color:var(--line);margin-bottom:6px}
+#rail hr{width:48px;border:0;border-top:1px solid var(--line);margin:4px auto}
+#rail canvas{width:40px;height:30px}
+#dock{position:fixed;left:0;bottom:0;max-height:44vh;display:grid;grid-template-columns:250px 1fr;background:var(--bg);border-top:1px solid var(--line)}
+#dock[hidden]{display:none}
+#dock-tools{padding:6px 8px;overflow-y:auto;border-right:1px solid var(--line)}
+#dock-tools .row{grid-template-columns:76px 1fr 56px}
+#dock-tools h3{margin:0 0 4px;font:inherit;color:var(--dim);font-weight:normal}
+#dock-strip{overflow:auto;padding:4px 8px}
+#dock-strip .roll{margin:0}
+.row{grid-template-columns:100px 1fr 72px}.ro{grid-template-columns:100px 1fr}
+input[type=range]{-webkit-appearance:none;appearance:none;height:16px;background:none;cursor:ew-resize}
+input[type=range]::-webkit-slider-runnable-track{height:1px;background:var(--line)}
+input[type=range]::-moz-range-track{height:1px;background:var(--line)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:9px;height:9px;margin-top:-4px;border:0;border-radius:50%;background:var(--fg)}
+input[type=range]::-moz-range-thumb{width:9px;height:9px;border:0;border-radius:50%;background:var(--fg)}
+input[type=range]:hover::-webkit-slider-thumb{background:var(--hot)}
+input[type=range]:hover::-moz-range-thumb{background:var(--hot)}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="dock" hidden><div id="dock-tools"></div><div id="dock-strip"></div></div>
+<aside id="bar" class="open"><div id="drawer"><div id="panel"></div></div><nav id="rail"></nav></aside>
+<script type="text/x-cogs-worklet" id="engine">
+'use strict';
+const TAU=Math.PI*2,LN1000=6.907755278982137,MAXM=6,BLOCK=128;
+const isPrime=n=>{for(let d=2;d*d<=n;d++)if(n%d===0)return false;return n>1};
+const primeAtLeast=n=>{n=Math.max(2,Math.round(n));while(!isPrime(n))n++;return n};
+const pow2AtLeast=n=>{let p=1;while(p<n)p<<=1;return p};
+const softLimit=x=>x/(1+Math.abs(x));
+// Sylvester Hadamard row r of length n, used for orthogonal tap/injection signs.
+const hadamardSign=(r,c)=>{let b=r&c,p=0;while(b){p^=b&1;b>>=1}return p?-1:1};
+const strikeSize=(d,o)=>7+3*d[o+6];
+const packStrikes=list=>{const out=[];for(const m of list){out.push(m.at||0,m.k,m.amp,m.c,m.a,m.p,m.f.length,...m.f);
+  for(let i=0;i<m.f.length;i++)out.push(m.g[i]);for(let i=0;i<m.f.length;i++)out.push(m.t[i])}return new Float64Array(out)};
+
+class Allpass{
+  constructor(len){this.buf=new Float32Array(len);this.len=len;this.i=0}
+  run(x,g){const b=this.buf,i=this.i,d=b[i],v=x-g*d;b[i]=v;this.i=i+1===this.len?0:i+1;return d+g*v}
+}
+
+class Svf{
+  constructor(){this.s1=0;this.s2=0;this.lp=0;this.hp=0}
+  // Topology-preserving SVF (Zavalishin); returns [lp,hp] via fields to avoid allocation.
+  run(x,g,k){const h=(x-(2*k+g)*this.s1-this.s2)/(1+g*(g+2*k)),b=g*h+this.s1,l=g*b+this.s2;
+    this.s1=g*h+b;this.s2=g*b+l;this.lp=l;this.hp=h;return l}
+}
+
+class PitchShifter{
+  constructor(fs){this.size=pow2AtLeast(fs*.2);this.mask=this.size-1;this.buf=new Float32Array(this.size);
+    this.w=0;this.p=0;this.win=Math.round(fs*.07)}
+  read(d){const pos=this.w-d,i=Math.floor(pos),f=pos-i,m=this.mask;return this.buf[i&m]*(1-f)+this.buf[(i+1)&m]*f}
+  run(x,ratio){
+    this.buf[this.w&this.mask]=x;
+    const W=this.win;let p=this.p+(1-ratio)/W;p-=Math.floor(p);this.p=p;
+    let q=p+.5;if(q>=1)q-=1;
+    const a=Math.sin(Math.PI*p),b=Math.sin(Math.PI*q);
+    const y=this.read(p*W+1)*a*a+this.read(q*W+1)*b*b;
+    this.w++;return y;
+  }
+}
+
+
+class Space{
+  constructor(fs,lines,space){
+    this.fs=fs;const N=this.N=lines;
+    const minMs=37,maxMs=113;
+    this.base=new Float64Array(N);this.len=new Float64Array(N);
+    for(let i=0;i<N;i++)this.base[i]=primeAtLeast(fs*(minMs*Math.pow(maxMs/minMs,i/(N-1)))/1000);
+    const maxLen=maxMs*fs/1000*3.2+fs*.004+8;
+    this.size=pow2AtLeast(maxLen);this.mask=this.size-1;
+    this.buf=new Float32Array(this.size*N);
+    this.lp1=new Float64Array(N);this.lp2=new Float64Array(N);
+    this.gl=new Float64Array(N);this.gm=new Float64Array(N);this.gh=new Float64Array(N);
+    this.y=new Float64Array(N);
+    this.inj=new Float64Array(N);this.oL=new Float64Array(N);this.oR=new Float64Array(N);
+    const sc=1/Math.sqrt(N);
+    for(let i=0;i<N;i++){this.inj[i]=hadamardSign(3,i)*sc;this.oL[i]=hadamardSign(5,i)*sc;this.oR[i]=hadamardSign(10,i)*sc}
+    this.mc=new Float64Array(N);this.ms=new Float64Array(N);this.mrc=new Float64Array(N);this.mrs=new Float64Array(N);this.mdepth=new Float64Array(N);
+    this.apLen=new Int32Array(N);this.apPos=new Int32Array(N);this.apOff=new Int32Array(N);let off=0;
+    for(let i=0;i<N;i++){const l=primeAtLeast(fs*(2.9+i*.53)/1000);this.apLen[i]=l;this.apOff[i]=off;off+=l}
+    this.apBuf=new Float32Array(off);
+    this.diffusers=[4.77,3.59,12.73,9.31].map(ms=>new Allpass(primeAtLeast(fs*ms/1000)));
+    this.preSize=pow2AtLeast(fs*.52);this.preMask=this.preSize-1;this.pre=new Float32Array(this.preSize);
+    this.shift=new PitchShifter(fs);
+    this.eqL=[new Svf(),new Svf()];this.eqR=[new Svf(),new Svf()];
+    this.keys=Object.keys(space).filter(k=>typeof space[k]==='number');
+    this.target={};this.cur={};
+    this.holdBlocks=Math.ceil((fs*.52+this.size)/BLOCK);
+    this.glide=1-Math.exp(-BLOCK/(fs*.05));this.sizeGlide=1-Math.exp(-BLOCK/(fs*.35));
+    this.clear(space);
+  }
+  clear(space){
+    const N=this.N,sh=this.shift;
+    this.buf.fill(0);this.apBuf.fill(0);this.apPos.fill(0);this.pre.fill(0);this.w=0;this.preW=0;
+    this.lp1.fill(0);this.lp2.fill(0);this.y.fill(0);
+    for(let i=0;i<N;i++){const ph=TAU*i/N*2.37;this.mc[i]=Math.cos(ph);this.ms[i]=Math.sin(ph)}
+    sh.buf.fill(0);sh.w=0;sh.p=0;
+    for(const f of [...this.eqL,...this.eqR]){f.s1=0;f.s2=0;f.lp=0;f.hp=0}
+    for(const d of this.diffusers){d.buf.fill(0);d.i=0}
+    this.hpIn=0;this.shimLp=0;this.shimOut=0;this.duckEnv=0;this.denorm=1e-18;this.energy=0;
+    this.assign(space);this.retune(true);
+  }
+  assign(space){for(const k of this.keys)this.target[k]=this.cur[k]=space[k]}
+  set(p){for(const k in p)if(k in this.target&&Number.isFinite(+p[k]))this.target[k]=+p[k]}
+  retune(snap){
+    const t=this.target,c=this.cur,fs=this.fs,N=this.N;
+    const k=snap?1:this.glide,ks=snap?1:this.sizeGlide;
+    let moved=snap;
+    for(const key of this.keys){const was=c[key];if(key==='size')c.size+=(t.size-c.size)*ks;else if(key==='freeze'||key==='shimmerPitch')c[key]=t[key];else c[key]+=(t[key]-c[key])*k;if(c[key]!==was)moved=true}
+    for(let i=0;i<N;i++){const n=Math.hypot(this.mc[i],this.ms[i]);this.mc[i]/=n;this.ms[i]/=n}
+    if(!moved)return;
+    const size=Math.max(.2,Math.min(3,c.size)),frozen=c.freeze>=.5;
+    const T=Math.max(.1,c.decay),TL=T*Math.max(.05,c.lowMult),TH=T*Math.max(.02,c.highMult);
+    const cap=frozen?.99999:.9999;
+    for(let i=0;i<N;i++){
+      const L=this.base[i]*size;this.len[i]=L;
+      const sec=(L+this.apLen[i])/fs;
+      this.gm[i]=frozen?cap:Math.min(cap,Math.exp(-LN1000*sec/T));
+      this.gl[i]=frozen?cap:Math.min(cap,Math.exp(-LN1000*sec/TL));
+      this.gh[i]=frozen?cap:Math.min(cap,Math.exp(-LN1000*sec/TH));
+      const hz=c.modRate*(.62+.76*i/(N-1)),w=TAU*hz/fs;
+      this.mrc[i]=Math.cos(w);this.mrs[i]=Math.sin(w);
+      this.mdepth[i]=c.modDepth*fs/1000*(.55+.45*((i*7)%N)/(N-1));
+    }
+    this.a1=1-Math.exp(-TAU*Math.min(c.lowCross,c.highCross*.8)/fs);
+    this.a2=1-Math.exp(-TAU*c.highCross/fs);
+    this.gDiff=Math.min(.78,c.diffusion*.78);this.gInner=Math.min(.7,c.density*.7);
+    this.eqHpG=Math.tan(Math.PI*Math.min(c.lowCut,fs*.45)/fs);this.eqLpG=Math.tan(Math.PI*Math.min(c.highCut,fs*.45)/fs);
+    this.ratio=Math.pow(2,c.shimmerPitch/12);
+  }
+  // inL/inR: dry block. Adds the wet signal into outL/outR.
+  process(inL,inR,outL,outR,n){
+    this.retune(false);
+    const c=this.cur,N=this.N,fs=this.fs,mask=this.mask,size=this.size,buf=this.buf,len=this.len,y=this.y,apBuf=this.apBuf,apLen=this.apLen,apPos=this.apPos,apOff=this.apOff;
+    const lp1=this.lp1,lp2=this.lp2,gl=this.gl,gm=this.gm,gh=this.gh,inj=this.inj,oL=this.oL,oR=this.oR;
+    const mc=this.mc,ms=this.ms,mrc=this.mrc,mrs=this.mrs,md=this.mdepth,dif=this.diffusers;
+    const a1=this.a1,a2=this.a2,gD=this.gDiff,gI=this.gInner,frozen=c.freeze>=.5;
+    const preD=Math.max(1,Math.min(this.preSize-2,c.predelay*fs)),aHp=1-Math.exp(-TAU*30/fs);
+    const shim=frozen?0:Math.min(.6,c.shimmer*.6),hiShim=1-Math.exp(-TAU*6000/fs);
+    const duckAtk=1-Math.exp(-1/(fs*.004)),duckRel=1-Math.exp(-1/(fs*.35)),duck=c.duck;
+    const width=c.width,wet=c.wet,dry=c.dry,houseK=2/N,inGain=frozen?0:1;
+    const gHp=this.eqHpG,gLp=this.eqLpG,kq=1.41421356;
+    let energy=0,w=this.w,dn=this.denorm;
+    for(let s=0;s<n;s++){
+      const x=(inL[s]+inR[s])*.5;
+      // predelay (linear interp, smoothed length)
+      this.pre[this.preW&this.preMask]=x;
+      const pp=this.preW-preD,pi=Math.floor(pp),pf=pp-pi;
+      let v=this.pre[pi&this.preMask]*(1-pf)+this.pre[(pi+1)&this.preMask]*pf;this.preW++;
+      this.hpIn+=aHp*(v-this.hpIn);v-=this.hpIn;
+      for(let d=0;d<4;d++)v=dif[d].run(v,d<2?gD:gD*.82);
+      v=v*inGain+this.shimOut*shim;
+      let sum=0;
+      for(let i=0;i<N;i++){
+        const o=i*size,cc=mc[i],ss=ms[i];
+        mc[i]=cc*mrc[i]-ss*mrs[i];ms[i]=ss*mrc[i]+cc*mrs[i];
+        const pos=w-len[i]-md[i]*(1+ss),ip=Math.floor(pos),f=pos-ip;
+        const x0=buf[o+((ip-1)&mask)],x1=buf[o+(ip&mask)],x2=buf[o+((ip+1)&mask)],x3=buf[o+((ip+2)&mask)];
+        const c1=.5*(x2-x0),c2=x0-2.5*x1+2*x2-.5*x3,c3=.5*(x3-x0)+1.5*(x1-x2);
+        const r=((c3*f+c2)*f+c1)*f+x1;
+        const l1=lp1[i]+a1*(r-lp1[i]),rest=r-l1,l2=lp2[i]+a2*(rest-lp2[i]);lp1[i]=l1;lp2[i]=l2;
+        const absorbed=gl[i]*l1+gm[i]*l2+gh[i]*(rest-l2);
+        const ap=apOff[i]+apPos[i],d=apBuf[ap],u=absorbed-gI*d;apBuf[ap]=u;
+        apPos[i]=apPos[i]+1===apLen[i]?0:apPos[i]+1;
+        const out=d+gI*u;y[i]=out;sum+=out;
+      }
+      const f=sum*houseK;let tl=0,tr=0;
+      for(let i=0;i<N;i++){const r=y[i];tl+=r*oL[i];tr+=r*oR[i];buf[i*size+(w&mask)]=r-f+v*inj[i]+dn}
+      dn=-dn;w++;
+      // shimmer: octave(ish)-shifted tank fed back into the input, low-passed and soft-limited
+      if(shim>0){this.shimLp+=hiShim*(this.shift.run((tl+tr)*.5,this.ratio)-this.shimLp);this.shimOut=softLimit(this.shimLp)}else this.shimOut=0;
+      // wet EQ: 12 dB/oct high-pass then low-pass
+      let l=tl,rr=tr;
+      this.eqL[0].run(l,gHp,kq);l=this.eqL[0].hp;l=this.eqL[1].run(l,gLp,kq);
+      this.eqR[0].run(rr,gHp,kq);rr=this.eqR[0].hp;rr=this.eqR[1].run(rr,gLp,kq);
+      const m=(l+rr)*.5,sd=(l-rr)*.5*width;l=m+sd;rr=m-sd;
+      const ax=Math.abs(x);this.duckEnv+=(ax>this.duckEnv?duckAtk:duckRel)*(ax-this.duckEnv);
+      const g=wet*(1-duck*Math.min(1,this.duckEnv*6));
+      outL[s]+=inL[s]*dry+l*g;outR[s]+=inR[s]*dry+rr*g;
+      energy+=l*l+rr*rr;
+    }
+    this.w=w;this.denorm=dn;
+    this.energy=energy/n;
+  }
+}
+
+class CogsEngine extends AudioWorkletProcessor{
+  constructor(options){
+    super();
+    const o=(options&&options.processorOptions)||{};
+    const V=this.V=o.voices||48;
+    this.space=new Space(sampleRate,o.lines||16,o.space);
+    this.on=new Uint8Array(V);this.key=new Float64Array(V);this.nm=new Uint8Array(V);
+    this.zr=new Float64Array(V*MAXM);this.zi=new Float64Array(V*MAXM);this.kr=new Float64Array(V*MAXM);this.ki=new Float64Array(V*MAXM);this.xg=new Float64Array(V*MAXM);
+    this.cN=new Int32Array(V);this.cLen=new Int32Array(V);
+    this.env=new Float64Array(V);this.envStep=new Float64Array(V);this.fade=new Float64Array(V);this.fadeStep=new Float64Array(V);this.pend=new Array(V).fill(null);this.pendAt=new Int32Array(V);this.dl=new Int32Array(V);
+    this.pl=new Float64Array(V);this.pr=new Float64Array(V);this.plT=new Float64Array(V);this.prT=new Float64Array(V);this.e=new Float64Array(V);
+    this.exc=new Float64Array(BLOCK);this.live=new Int32Array(MAXM);this.vb=new Float64Array(BLOCK);
+    this.dryL=new Float32Array(BLOCK);this.dryR=new Float32Array(BLOCK);
+    this.maxStarts=4*V;this.maxWait=8*BLOCK;
+    this.reset(o);this.warm(o);
+    this.port.onmessage=ev=>{const m=ev.data;if(m.type==='strikes')this.queue.push(m.d);else if(m.type==='space')this.space.set(m);else if(m.type==='silence')this.silence();else if(m.type==='release')this.release(m.seconds)};
+  }
+  // V8 interprets code until it has run enough; cold, the first strike's blocks
+  // took 4-8 ms against a 2.7 ms deadline and dropped out as clicks, and the first
+  // shimmer blocks took up to 7 ms. Run every path silently at construction:
+  // shimmer, full polyphony, stealing and overload. Then reset the same objects in
+  // place: a Space allocated after warm-up runs cold again.
+  warm(o){
+    const l=new Float32Array(BLOCK),r=new Float32Array(BLOCK),out=[[l,r]],V=this.V;
+    const sp=this.space;this.muted=true;this.queue=[];
+    const strike=(k,t)=>({k,f:[110,230,370,520,700],g:[1,.6,.4,.3,.2],t:[t,t*.75,t*.5,t*.4,t*.25],amp:.1,c:.0008,a:.004,p:.3});
+    for(let i=0;i<400;i++){
+      // Both sides of every branch: V8 deoptimises when a path it never saw runs.
+      if(i%50===0)sp.target.shimmer=sp.cur.shimmer=i%100?0:1;
+      if(i%100===70||i%100===90)sp.target.freeze=sp.cur.freeze=i%100===70?1:0;
+      if(i%40===0)this.queue.push(packStrikes([strike(i%3,2)]));
+      if(i===100)this.queue.push(packStrikes(Array.from({length:2*V+4},(_,k)=>strike(1000+k,.3))));
+      l.fill(0);r.fill(0);this.process([],out);
+    }
+    this.reset(o);
+  }
+  reset(o){
+    for(const a of [this.on,this.key,this.nm,this.zr,this.zi,this.kr,this.ki,this.xg,this.cN,this.cLen,this.env,this.envStep,this.fade,this.fadeStep,
+      this.pl,this.pr,this.plT,this.prT,this.e,this.exc,this.live,this.vb,this.dryL,this.dryR,this.pendAt,this.dl])a.fill(0);
+    this.pend.fill(null);this.space.clear(o.space);
+    this.queue=[packStrikes((o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0)))];this.queueAt=0;this.queueOff=0;
+    this.frame=0;this.levelBlocks=0;this.quietBlocks=0;this.steals=0;this.drops=0;this.strikes=0;this.statAt=0;this.idle=false;this.muted=false;this.ringing=false;this.idleReported=false;this.waitFrom=-1;
+  }
+  post(m,transfer){if(!this.muted)this.port.postMessage(m,transfer)}
+  silence(){this.on.fill(0);this.zr.fill(0);this.zi.fill(0);this.pend.fill(null)}
+  release(seconds){
+    this.queue=[];this.queueAt=0;this.queueOff=0;this.waitFrom=-1;this.pend.fill(null);
+    const step=1/(seconds*sampleRate);
+    for(let v=0;v<this.V;v++)if(this.on[v]&&this.fade[v]===0){this.fade[v]=1;this.fadeStep[v]=step}
+  }
+  active(){let n=0;for(let v=0;v<this.V;v++)n+=this.on[v];return n}
+  load(v,d,o,off){
+    const b=v*MAXM,fs=sampleRate,n=d[o+6],f=o+7,g=f+n,t=g+n,amp=d[o+2];let k=0;
+    for(let i=0;i<n&&k<MAXM;i++){
+      if(d[f+i]>=fs*.45||d[f+i]<=0)continue;
+      const r=Math.exp(-LN1000/(Math.max(.01,d[t+i])*fs)),w=TAU*d[f+i]/fs;
+      this.kr[b+k]=r*Math.cos(w);this.ki[b+k]=r*Math.sin(w);this.xg[b+k]=d[g+i]*amp;k++;
+    }
+    this.nm[v]=k;
+    const len=Math.max(8,Math.round((d[o+3]||.002)*fs));this.cLen[v]=len;this.cN[v]=len;
+    const p=Math.max(-1,Math.min(1,d[o+5]||0)),a=(p+1)*Math.PI/4;this.plT[v]=Math.cos(a);this.prT[v]=Math.sin(a);this.dl[v]=off||0;
+  }
+  // false: every voice is already fading out, so the strike has to wait.
+  start(d,o){
+    const V=this.V,key=d[o+1],off=Math.max(0,Math.min(BLOCK-1,Math.round(d[o]-this.frame)));
+    for(let v=0;v<V;v++)if(this.on[v]&&this.key[v]===key&&this.fade[v]===0){this.strikes++;this.load(v,d,o,off);return true}
+    let free=-1;for(let v=0;v<V;v++)if(!this.on[v]){free=v;break}
+    const n=this.active(),poly=Math.sqrt(8/Math.max(8,n+1));
+    if(free<0){
+      let best=-1,be=Infinity;
+      for(let v=0;v<V;v++)if(this.fade[v]===0&&this.e[v]<be){be=this.e[v];best=v}
+      if(best<0)return false;
+      this.strikes++;d[o+2]*=poly;this.steals++;this.fade[best]=1;this.fadeStep[best]=1/96;this.pend[best]=d;this.pendAt[best]=o;return true;
+    }
+    this.strikes++;d[o+2]*=poly;this.begin(free,d,o,off);return true;
+  }
+  begin(v,d,o,off){
+    const b=v*MAXM;for(let k=0;k<MAXM;k++){this.zr[b+k]=0;this.zi[b+k]=0}
+    this.on[v]=1;this.key[v]=d[o+1];this.fade[v]=0;this.pend[v]=null;this.load(v,d,o,off);this.pl[v]=this.plT[v];this.pr[v]=this.prT[v];
+    const a=d[o+4]||0;if(a>.002){this.env[v]=0;this.envStep[v]=1/(a*sampleRate)}else{this.env[v]=1;this.envStep[v]=0}
+  }
+  renderVoice(v,n,L,R){
+    const b=v*MAXM,nm=this.nm[v],exc=this.exc,vb=this.vb,zr=this.zr,zi=this.zi,kr=this.kr,ki=this.ki,xg=this.xg;
+    let cN=this.cN[v];const cLen=this.cLen[v],norm=2/cLen;
+    const exciting=cN>0;
+    let delay=this.dl[v];
+    if(exciting)for(let s=0;s<n;s++){if(delay>0){exc[s]=0;delay--}else if(cN>0){const ph=(cLen-cN+.5)/cLen;exc[s]=(1-Math.cos(TAU*ph))*.5*norm;cN--}else exc[s]=0}
+    vb.fill(0,0,n);this.cN[v]=cN;this.dl[v]=delay;
+    let e=0,k=0;
+    // Partials ring independently; one that has decayed below -110 dB stops costing.
+    const live=this.live;let nl=0;
+    for(let j=0;j<nm;j++)if(exciting||zr[b+j]*zr[b+j]+zi[b+j]*zi[b+j]>1e-11)live[nl++]=b+j;
+    for(;k+1<nl;k+=2){
+      const p=live[k],q=live[k+1];
+      let r1=zr[p],i1=zi[p],r2=zr[q],i2=zi[q];const a1=kr[p],c1=ki[p],g1=xg[p],a2=kr[q],c2=ki[q],g2=xg[q];
+      if(exciting)for(let s=0;s<n;s++){const x=exc[s],n1=a1*r1-c1*i1+x*g1,n2=a2*r2-c2*i2+x*g2;i1=a1*i1+c1*r1;i2=a2*i2+c2*r2;r1=n1;r2=n2;vb[s]+=r1+r2}
+      else for(let s=0;s<n;s++){const n1=a1*r1-c1*i1,n2=a2*r2-c2*i2;i1=a1*i1+c1*r1;i2=a2*i2+c2*r2;r1=n1;r2=n2;vb[s]+=r1+r2}
+      zr[p]=r1;zi[p]=i1;zr[q]=r2;zi[q]=i2;e+=r1*r1+i1*i1+r2*r2+i2*i2;
+    }
+    if(k<nl){
+      const p=live[k];let r=zr[p],i=zi[p];const a=kr[p],c=ki[p],g=xg[p];
+      if(exciting)for(let s=0;s<n;s++){const nr=a*r-c*i+exc[s]*g;i=a*i+c*r;r=nr;vb[s]+=r}
+      else for(let s=0;s<n;s++){const nr=a*r-c*i;i=a*i+c*r;r=nr;vb[s]+=r}
+      zr[p]=r;zi[p]=i;e+=r*r+i*i;
+    }
+    let env=this.env[v],es=this.envStep[v],fl=this.fade[v],pl=this.pl[v],pr=this.pr[v];const fstep=this.fadeStep[v],dl=(this.plT[v]-pl)/n,dr=(this.prT[v]-pr)/n;
+    if(env===1&&es===0&&fl===0&&pl+dl===pl&&pr+dr===pr)for(let s=0;s<n;s++){const x=vb[s];L[s]+=x*pl;R[s]+=x*pr}
+    else for(let s=0;s<n;s++){
+      if(es>0){env+=es;if(env>=1){env=1;es=0}}
+      let g=env;if(fl>0){fl=Math.max(1e-9,fl-fstep);g*=fl<=1e-9?0:fl}
+      pl+=dl;pr+=dr;const x=vb[s]*g;L[s]+=x*pl;R[s]+=x*pr;
+    }
+    this.pl[v]=pl;this.pr[v]=pr;this.env[v]=env;this.envStep[v]=es;this.e[v]=e;
+    if(fl>0){
+      this.fade[v]=fl;
+      if(fl<=1e-9){const d=this.pend[v];this.on[v]=0;this.fade[v]=0;if(d)this.begin(v,d,this.pendAt[v])}
+    }else if(!exciting&&cN===0&&e<1e-11)this.on[v]=0;
+  }
+  process(inputs,outputs){
+    const out=outputs[0],L=out[0],R=out[1]||out[0],n=L.length;
+    if(!this.muted)this.frame=currentFrame;
+    const end=this.frame+n;
+    const q=this.queue;let starts=0;
+    while(this.queueAt<q.length&&starts<this.maxStarts){
+      const d=q[this.queueAt];
+      if(this.queueOff>=d.length){this.queueAt++;this.queueOff=0;continue}
+      if(d[this.queueOff]>=end)break;
+      starts++;
+      if(!this.start(d,this.queueOff)){
+        if(this.waitFrom<0)this.waitFrom=this.frame;
+        if(this.frame-this.waitFrom<this.maxWait)break;
+        this.strikes++;this.drops++;
+      }
+      this.waitFrom=-1;this.queueOff+=strikeSize(d,this.queueOff);
+    }
+    if(this.queueAt===q.length){q.length=0;this.queueAt=0}
+    const dL=this.dryL,dR=this.dryR;dL.fill(0);dR.fill(0);
+    const inp=inputs[0];let inE=0;
+    if(inp&&inp.length){const a=inp[0],b=inp[1]||a;for(let s=0;s<n;s++){dL[s]+=a[s];dR[s]+=b[s];inE+=a[s]*a[s]}}
+    let voices=0;
+    for(let v=0;v<this.V;v++)if(this.on[v]){voices++;this.renderVoice(v,n,dL,dR)}
+    // The tail outlives its input by the predelay plus a full pass of the longest line,
+    // so idling waits for that many consecutive silent blocks.
+    const quiet=voices===0&&inE<1e-12&&this.space.energy<1e-14&&this.space.cur.freeze<.5;
+    this.quietBlocks=quiet?this.quietBlocks+1:0;
+    this.idle=this.quietBlocks>this.space.holdBlocks;
+    if(!this.idle)this.space.process(dL,dR,L,R,n);
+    this.frame=end;
+    if(++this.levelBlocks>=8&&(this.levelBlocks=0,voices||this.ringing)){
+      this.ringing=voices>0;const d=new Float64Array(voices*2);let j=0;
+      for(let v=0;v<this.V;v++)if(this.on[v]){d[j++]=this.key[v];d[j++]=Math.sqrt(this.e[v])}
+      this.post({type:'levels',d},[d.buffer]);
+    }
+    if(this.frame-this.statAt>=sampleRate*.25){this.statAt=this.frame;if(!this.idle||!this.idleReported)this.post({type:'stats',voices,steals:this.steals,drops:this.drops,strikes:this.strikes,idle:this.idle});this.idleReported=this.idle}
+    return true;
+  }
+}
+registerProcessor('cogs-engine',CogsEngine);
+</script>
+<script>
+'use strict';
+const TAU=Math.PI*2,TOOTH=12,STORE='cogs.v1';
+// A CSP-sandboxed page has an opaque origin, where touching localStorage throws.
+const storage=(()=>{try{localStorage.getItem(STORE);return {ok:true,get:()=>localStorage.getItem(STORE),put:v=>localStorage.setItem(STORE,v)}}
+  catch(e){return {ok:false,why:e.name,get:()=>null,put:()=>{}}}})();
+const $=s=>document.querySelector(s);
+const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
+const wrap=a=>((a%TAU)+TAU)%TAU;
+const hz=m=>440*Math.pow(2,(m-69)/12);
+const radius=c=>c.n*TOOTH/TAU;
+
+const S={bpm:0,beats:4,seed:1,meshTol:4,coaxTol:6,snapTol:16,vRef:500,velCurve:.72,master:.7,lookahead:.06,maxStep:.05,zoom:1,windows:0,ids:0};
+const S_DEFS=[['bpm','bpm lock',0,300,1],['beats','beats/bar',1,16,1],['seed','seed',0,9999,1],['meshTol','mesh tol',0,20,.5],['coaxTol','coax tol',0,20,.5],['snapTol','snap tol',0,60,1],
+  ['vRef','v ref px/s',20,3000,1],['velCurve','vel curve',.1,3,.01],['master','master',0,1.5,.01],
+  ['lookahead','lookahead s',.01,.3,.005],['maxStep','step rad',.005,.3,.005],['zoom','zoom',.1,8,.01],
+  ['windows','windows',0,1,1],['ids','ids',0,1,1]];
+const SPACE={dry:1,wet:.35,predelay:12,size:1,decay:2.5,lowMult:1.1,highMult:.55,lowCross:200,highCross:4500,
+  diffusion:.78,density:.55,modRate:.3,modDepth:.5,shimmer:0,shimmerPitch:12,freeze:0,width:1.1,duck:.3,lowCut:110,highCut:15000};
+const SPACE_DEFS=[['dry','dry',0,1,.001],['wet','wet',0,1.5,.001],['predelay','predelay ms',0,500,1],
+  ['size','size',.2,3,.01],['decay','T60 s',.3,60,.01],['lowMult','low decay',.25,3,.01],
+  ['highMult','high decay',.05,1.5,.01],['lowCross','low x Hz',40,1200,1],['highCross','high x Hz',800,14000,1],
+  ['diffusion','diffusion',0,1,.01],['density','density',0,1,.01],['modRate','mod Hz',.02,3,.01],
+  ['modDepth','mod ms',0,3,.01],['shimmer','shimmer',0,1,.01],['shimmerPitch','shim st',-12,24,1],
+  ['freeze','freeze',0,1,1],['width','width',0,1.5,.01],['duck','duck',0,1,.01],
+  ['lowCut','wet lo Hz',20,1000,1],['highCut','wet hi Hz',1500,20000,1]];
+
+const BODIES={harmonic:[1,2,3,4,5],bell:[1,1.183,1.506,2.0,2.514],plate:[1,1.594,2.136,2.653,3.156],
+  bar:[1,2.756,5.404,8.933,13.34],bowl:[1,2.32,4.25,6.63,9.38]};
+const SCALES={chromatic:[0,1,2,3,4,5,6,7,8,9,10,11],major:[0,2,4,5,7,9,11],minor:[0,2,3,5,7,8,10],
+  dorian:[0,2,3,5,7,9,10],pentatonic:[0,2,4,7,9],minpent:[0,3,5,7,10],whole:[0,2,4,6,8,10]};
+const VOICES={modal:{note:60,body:'bell',bend:1,bright:.6,hard:.6,decay:1.2,damp:.8},
+  kick:{tune:52,sweep:3,pdecay:.045,decay:.35},snare:{tune:190,tone:.35,cutoff:1800,decay:.16},hat:{cutoff:7500,decay:.045}};
+const VOICE_DEFS={
+  modal:[['note','note',12,108,1],['body','body',Object.keys(BODIES)],['bend','bend',0,1,.01],['bright','bright',0,1,.01],
+    ['hard','hard',0,1,.01],['decay','decay s',.02,8,.01],['damp','damp',0,2,.01]],
+  kick:[['tune','tune Hz',20,200,1],['sweep','sweep x',1,10,.1],['pdecay','p decay s',.005,.3,.001],['decay','decay s',.02,2,.01]],
+  snare:[['tune','tune Hz',60,600,1],['tone','tone',0,1,.01],['cutoff','cutoff Hz',200,12000,10],['decay','decay s',.02,1,.005]],
+  hat:[['cutoff','cutoff Hz',1000,16000,10],['decay','decay s',.005,1,.005]]};
+const COMMON_DEFS=[['level','level',0,1.5,.01],['velSense','vel sense',0,1,.01]];
+const makeVoice=(kind,common={level:.7,velSense:.7})=>({...common,...VOICES[kind],kind});
+const S_DEFAULT={...S},SPACE_DEFAULT={...SPACE};
+
+/* ---------- world ---------- */
+const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],next:1};
+let simT=0,sel=null,group=[],marquee=null;
+const view={x:0,y:0};
+const stats={events:0,late:0,steps:0,stepsTick:0,log:[]};
+const clock={off:0,shift:0,audio:false,view:0,paused:false};
+
+const stackOf=c=>W.cogs.filter(o=>Math.hypot(o.x-c.x,o.y-c.y)<=S.coaxTol);
+const renderTh=c=>c.th-c.w*(simT-clock.view);
+const ringR=(c,i)=>{const n=c.track.rings,r=radius(c);return n>1?r*(.25+.65*i/(n-1)):r*.6};
+const scaleNote=(base,scale,i)=>{const sc=SCALES[scale];return base+sc[i%sc.length]+12*Math.floor(i/sc.length)};
+const ringNote=(t,i)=>scaleNote(t.base,t.scale,i);
+const motorRpm=c=>S.bpm&&c.revs?c.revs*S.bpm/S.beats:c.motor;
+function chance(...n){let h=(S.seed|0)^0x9e3779b9;for(const x of n){h=Math.imul(h^Math.round(x*4096),0x85ebca6b);h^=h>>>13;h=Math.imul(h,0xc2b2ae35);h^=h>>>16}return (h>>>0)/4294967296}
+
+function solve(){
+  const cs=W.cogs,adj=new Map(cs.map(c=>[c,[]]));
+  for(const c of cs){c.jam=false;c.k=null;c.w=0}
+  for(let i=0;i<cs.length;i++)for(let j=i+1;j<cs.length;j++){
+    const a=cs[i],b=cs[j],d=Math.hypot(a.x-b.x,a.y-b.y);
+    if(d<=S.coaxTol){adj.get(a).push([b,1]);adj.get(b).push([a,1]);continue}
+    if(a.layer!==b.layer)continue;
+    const gap=d-radius(a)-radius(b);
+    if(Math.abs(gap)<=S.meshTol){adj.get(a).push([b,-a.n/b.n]);adj.get(b).push([a,-b.n/a.n])}
+    else if(gap<0)a.jam=b.jam=true;
+  }
+  for(const b of W.belts){const s=b.cross?-1:1;adj.get(b.a).push([b.b,s*b.a.n/b.b.n]);adj.get(b.b).push([b.a,s*b.b.n/b.a.n])}
+  for(const root of cs){
+    if(root.k!==null)continue;
+    root.k=1;const comp=[root];let jam=false;
+    for(let q=0;q<comp.length;q++){const a=comp[q];for(const[b,ratio]of adj.get(a)){const k=a.k*ratio;
+      if(b.k===null){b.k=k;comp.push(b)}else if(Math.abs(b.k-k)>1e-9*Math.abs(k))jam=true}}
+    if(comp.some(c=>c.jam))jam=true;
+    const drivers=comp.filter(c=>motorRpm(c)),driver=drivers[0]||null;
+    const wRoot=driver?motorRpm(driver)*TAU/60/driver.k:0;
+    for(const d of drivers)if(Math.abs(d.k*wRoot-motorRpm(d)*TAU/60)>1e-9*Math.abs(wRoot))jam=true;
+    for(const c of comp){c.jam=jam;c.w=jam?0:c.k*wRoot;c.driver=driver}
+  }
+}
+
+function snap(c){
+  let best=null,bestGap=Infinity;
+  for(const o of W.cogs){
+    if(o===c||o.layer!==c.layer)continue;
+    const d=Math.hypot(c.x-o.x,c.y-o.y);if(d<=S.coaxTol)continue;
+    const g=Math.abs(d-radius(o)-radius(c));if(g<bestGap){bestGap=g;best=o}
+  }
+  if(!best||bestGap>S.snapTol)return;
+  const d=Math.hypot(c.x-best.x,c.y-best.y)||1,R=radius(best)+radius(c);
+  c.x=best.x+(c.x-best.x)/d*R;c.y=best.y+(c.y-best.y)/d*R;
+  interlock(c,best);
+}
+function interlock(c,partner){
+  const phi=Math.atan2(c.y-partner.y,c.x-partner.x),toothOnPartner=(phi-partner.th)*partner.n/TAU;
+  c.th=phi+Math.PI-(.5-toothOnPartner)*TAU/c.n;
+}
+
+function hitWindow(c,arm,pad){
+  const dx=pad.x-c.x,dy=pad.y-c.y,D=Math.hypot(dx,dy),rho=pad.r;
+  if(D<=rho)return null;
+  const s=clamp(Math.sqrt(D*D-rho*rho),Math.max(arm.r0,1e-6),arm.r0+arm.len),cosd=(s*s+D*D-rho*rho)/(2*s*D);
+  if(cosd>=1||cosd<=-1)return null;
+  return {beta:Math.atan2(dy,dx),half:Math.acos(cosd),s};
+}
+
+function armHit(p,t){
+  const {c,arm,pad,edge,s}=p,px=c.x+Math.cos(edge)*s,py=c.y+Math.sin(edge)*s;
+  const nl=Math.hypot(px-pad.x,py-pad.y)||1,nx=(px-pad.x)/nl,ny=(py-pad.y)/nl;
+  const vn=Math.abs(c.w*s*(-Math.sin(edge)*nx+Math.cos(edge)*ny));
+  pad.hits++;pad.lastV=vn;pad.flash=arm.flash=t;flex(arm,t,vn);
+  const v=pad.voice,key=pad.id*128+(v.note|0);
+  fire(v,t,vn,pad.x,'arm'+arm.id+'>pad'+pad.id,1,(when,amp,pan,vx)=>v.kind==='modal'?modal(v,v.note,when,amp,pan,key,vx):drum(v,when,amp,pan));
+}
+
+function circleCross(c,R,a0,dt,seg){
+  const a1=a0+c.w*dt,x0=c.x+Math.cos(a0)*R,y0=c.y+Math.sin(a0)*R,x1=c.x+Math.cos(a1)*R,y1=c.y+Math.sin(a1)*R;
+  const ex=seg.x2-seg.x1,ey=seg.y2-seg.y1,s0=ex*(y0-seg.y1)-ey*(x0-seg.x1),s1=ex*(y1-seg.y1)-ey*(x1-seg.x1);
+  if(!(s0<0&&s1>=0||s0>0&&s1<=0))return null;
+  const f=s0/(s0-s1),qx=x0+(x1-x0)*f,qy=y0+(y1-y0)*f,L2=ex*ex+ey*ey,u=((qx-seg.x1)*ex+(qy-seg.y1)*ey)/L2;
+  if(u<0||u>1)return null;
+  const am=a0+c.w*dt*f;
+  return {f,u,x:qx,am,vn:Math.abs(c.w*R*(Math.sin(am)*ey+Math.cos(am)*ex))/Math.sqrt(L2)};
+}
+function dotCross(c,dot,rd,dt){
+  const hit=circleCross(c,ringR(c,dot.ring),c.th+dot.a,dt,rd);if(!hit)return;
+  const t=simT+dt*hit.f,turn=c.turns+Math.floor((c.th+c.w*dt*hit.f)/TAU);
+  if(dot.p<1&&chance(c.id,dot.ring,dot.a,turn)>=dot.p)return;
+  const midi=rd.tines?scaleNote(rd.combBase,rd.combScale,Math.min(rd.tines-1,Math.floor(hit.u*rd.tines))):ringNote(c.track,dot.ring);
+  rd.hits++;rd.lastV=hit.vn;rd.lastMidi=midi;dot.flash=rd.flash=t;
+  const v=rd.voice,key=rd.id*128+midi;
+  fire(v,t,hit.vn,hit.x,'cog'+c.id+'.ring'+dot.ring+'>reader'+rd.id,dot.v,
+    (when,amp,pan,vx)=>v.kind==='modal'?modal(v,midi,when,amp,pan,key,vx):drum(v,when,amp,pan));
+}
+const stringLen=s=>Math.hypot(s.x2-s.x1,s.y2-s.y1);
+function stringMidi(s){
+  const L=Math.max(1,stringLen(s)),f0=s.kind==='bar'?s.f200*(200/L)**2:s.f200*200/L,m=69+12*Math.log2(f0/440);
+  return s.quant?Math.round(m):m;
+}
+function pluck(arm,s,dt){
+  const c=arm.cog,hit=circleCross(c,arm.r0+arm.len,c.th+arm.a,dt,s);if(!hit)return;
+  const t=simT+dt*hit.f,midi=stringMidi(s);
+  s.hits++;s.lastV=hit.vn;s.lastU=hit.u;s.flash=t;flex(arm,t,hit.vn*.5);
+  fire(s,t,hit.vn,hit.x,'arm'+arm.id+'>string'+s.id,1,(when,amp,pan,vx)=>pluckSound(s,midi,hit.u,when,amp,pan,vx));
+}
+function pluckSound(s,midi,u,when,amp,pan,vx){
+  const f0=hz(midi),ratios=s.kind==='bar'?BODIES.bar:BODIES.harmonic,f=[],g=[],tt=[];
+  for(let k=0;k<ratios.length;k++){f.push(f0*ratios[k]);g.push(Math.abs(Math.sin((k+1)*Math.PI*u))/(k+1));tt.push(s.decay*Math.pow(ratios[k],-s.damp))}
+  strike(f,g,tt,when,amp,pan,s.id*128+Math.round(midi),contactTime(s.hard,vx));
+}
+function flex(arm,t,vn){arm.bendT=t;arm.bendA=Math.min(.6,vn/S.vRef*.5)*arm.flex*(arm.cog.w>0?-1:1)}
+
+function turn(c,dt){const th=c.th+c.w*dt,k=Math.floor(th/TAU);c.th=th-k*TAU;c.turns+=k}
+function advance(tEnd){
+  if(tEnd-simT>.5){const gap=tEnd-S.lookahead-simT;for(const c of W.cogs)turn(c,gap);simT+=gap}
+  const pairs=[];
+  for(const arm of W.arms){const c=arm.cog;if(!c.w)continue;
+    for(const pad of W.pads){const h=hitWindow(c,arm,pad);if(h)pairs.push({c,arm,pad,s:h.s,edge:c.w>0?h.beta-h.half:h.beta+h.half})}}
+  const plucks=[];
+  for(const arm of W.arms)if(arm.cog.w)for(const s of W.strings)plucks.push([arm,s]);
+  const tracks=W.readers.length?W.cogs.filter(c=>c.track&&c.w&&c.track.dots.length):[];
+  let maxW=0;for(const c of W.cogs)maxW=Math.max(maxW,Math.abs(c.w));
+  stats.stepsTick=0;
+  while(simT<tEnd){
+    const dt=Math.min(tEnd-simT,maxW?S.maxStep/maxW:Infinity);
+    for(const p of pairs){
+      const psi=p.c.th+p.arm.a,span=Math.abs(p.c.w)*dt,d0=p.c.w>0?wrap(p.edge-psi):wrap(psi-p.edge);
+      if(d0>0&&d0<=span)armHit(p,simT+dt*d0/span);
+    }
+    for(const c of tracks)for(const dot of c.track.dots)for(const rd of W.readers)dotCross(c,dot,rd,dt);
+    for(const[arm,s]of plucks)pluck(arm,s,dt);
+    for(const c of W.cogs)turn(c,dt);
+    simT+=dt;stats.steps++;stats.stepsTick++;
+  }
+}
+
+/* ---------- audio ---------- */
+let ac=null,engineNode=null,engineState='off',engineStats={},master=null,meter=null,drumBus=null,noise=null,peak=0;
+const strikes=[];
+function initAudio(){
+  if(ac){if(ac.state!=='running')ac.resume();return}
+  ac=new (window.AudioContext||window.webkitAudioContext)({latencyHint:'interactive'});
+  master=ac.createGain();master.gain.value=S.master;
+  const lim=ac.createDynamicsCompressor();
+  lim.threshold.value=-10;lim.knee.value=8;lim.ratio.value=3.5;lim.attack.value=.015;lim.release.value=.3;
+  meter=ac.createAnalyser();meter.fftSize=2048;
+  master.connect(lim);lim.connect(ac.destination);lim.connect(meter);
+  noise=ac.createBuffer(1,ac.sampleRate,ac.sampleRate);
+  const nd=noise.getChannelData(0);for(let i=0;i<nd.length;i++)nd[i]=Math.random()*2-1;
+  engineState='loading';
+  // Chrome refuses blob: worklet modules on file:// pages; a data: URL loads there and over https.
+  const url='data:text/javascript;charset=utf-8,'+encodeURIComponent($('#engine').textContent);
+  ac.audioWorklet.addModule(url).then(()=>{
+    engineNode=new AudioWorkletNode(ac,'cogs-engine',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[2],
+      channelCount:2,channelCountMode:'explicit',processorOptions:{voices:64,lines:16,space:{...SPACE}}});
+    engineNode.port.onmessage=e=>{if(e.data.type==='stats')engineStats=e.data};
+    engineNode.onprocessorerror=()=>{engineState='processor error'};
+    drumBus=ac.createGain();drumBus.connect(engineNode);engineNode.connect(master);
+    engineState='ready';
+  }).catch(err=>{engineState='failed: '+String(err.message).slice(0,160)});
+  ac.resume();
+}
+function flushStrikes(){const d=new Float64Array(strikes);strikes.length=0;engineNode.port.postMessage({type:'strikes',d},[d.buffer])}
+const contactTime=(hard,x)=>clamp((.0016-.0014*hard)*Math.pow(Math.max(.02,x),-.35),.00012,.004);
+function strike(f,g,t,when,amp,pan,key,contact){
+  if(!strikes.length)queueMicrotask(flushStrikes);
+  strikes.push(when*ac.sampleRate,key,amp*.3,contact,0,pan,f.length,...f,...g,...t);
+}
+function modal(v,midi,when,amp,pan,key,x){
+  const H=BODIES.harmonic,F=BODIES[v.body],f0=hz(midi),f=[],g=[],t=[];
+  for(let k=0;k<H.length;k++){const r=H[k]+(F[k]-H[k])*v.bend;f.push(f0*r);g.push(k?Math.pow(v.bright,k):1);t.push(v.decay*Math.pow(r,-v.damp))}
+  strike(f,g,t,when,amp,pan,key,contactTime(v.hard,x));
+}
+function drum(v,when,amp,pan){
+  const g=ac.createGain(),p=ac.createStereoPanner(),end=when+v.decay;
+  p.pan.value=pan;g.connect(p);p.connect(drumBus);
+  g.gain.setValueAtTime(amp,when);g.gain.exponentialRampToValueAtTime(1e-4,end);
+  const src=[];
+  if(v.kind==='kick'){
+    const o=ac.createOscillator();o.frequency.setValueAtTime(v.tune*v.sweep,when);
+    o.frequency.exponentialRampToValueAtTime(v.tune,when+v.pdecay);o.connect(g);src.push(o);
+  }else{
+    const n=ac.createBufferSource(),f=ac.createBiquadFilter(),ng=ac.createGain();
+    n.buffer=noise;n.loop=true;f.type=v.kind==='hat'?'highpass':'bandpass';f.frequency.value=v.cutoff;f.Q.value=.8;
+    ng.gain.value=v.kind==='snare'?1-v.tone:1;n.connect(f);f.connect(ng);ng.connect(g);src.push(n);
+    if(v.kind==='snare'){const o=ac.createOscillator(),tg=ac.createGain();o.type='triangle';o.frequency.value=v.tune;
+      tg.gain.value=v.tone;o.connect(tg);tg.connect(g);src.push(o)}
+  }
+  for(const s of src){s.start(when);s.stop(end+.02)}
+}
+function fire(v,t,vn,x,src,gain,play){
+  stats.events++;
+  stats.log.push({t,src,vn});if(stats.log.length>256)stats.log.shift();
+  if(!clock.audio||engineState!=='ready')return;
+  const vx=clamp(vn/S.vRef,0,1),amp=gain*v.level*(1-v.velSense+v.velSense*Math.pow(vx,S.velCurve));
+  if(amp<=0)return;
+  let when=t+clock.off-clock.shift;
+  if(when<ac.currentTime){stats.late++;when=ac.currentTime}
+  play(when,amp,clamp((x-view.x)/300,-.9,.9),vx);
+}
+
+/* ---------- clock ---------- */
+const audioLive=()=>!!(ac&&ac.state==='running'&&engineState==='ready');
+const clockBase=()=>clock.audio?ac.currentTime:performance.now()/1000;
+const nowSec=()=>clockBase()+clock.shift;
+function syncClock(){
+  const live=audioLive();if(live===clock.audio)return;
+  const before=nowSec();clock.audio=live;clock.shift=before-clockBase();
+}
+function setPaused(p){
+  if(p===clock.paused)return;
+  clock.paused=p;if(!p)clock.off=nowSec()-clock.view;
+}
+
+
+/* ---------- persistence ---------- */
+let saveTimer=0;
+function changed(structural){
+  if(structural)solve();
+  clearTimeout(saveTimer);saveTimer=setTimeout(()=>storage.put(JSON.stringify(serialize())),400);
+  edits.mark();
+  refreshInspector();
+}
+// Undo: one step per finished action. A step settles when the pointer lifts, or after a quiet
+// spell for wheel and keyboard edits. Camera, pause, selection and cog phase are never undone.
+const worldKey=()=>{const j=JSON.parse(JSON.stringify(serialize()));delete j.view;delete j.S.zoom;for(const c of j.cogs)delete c.th;return JSON.stringify(j)};
+const EDITS_MAX=500,EDITS_QUIET=350;
+const edits={past:[],future:[],cur:null,pending:false,timer:0,held:false,
+  snap(){return {key:worldKey(),t:simT,phase:new Map(W.cogs.map(c=>[c.id,{th:c.th,w:c.w}]))}},
+  mark(){this.pending=true;clearTimeout(this.timer);this.timer=setTimeout(()=>{if(!this.held)this.commit()},EDITS_QUIET)},
+  commit(){
+    clearTimeout(this.timer);this.pending=false;const s=this.snap();
+    if(this.cur&&s.key===this.cur.key)return;
+    if(this.cur){this.past.push(this.cur);if(this.past.length>EDITS_MAX)this.past.shift();this.future.length=0}
+    this.cur=s;
+  },
+  reset(){clearTimeout(this.timer);this.pending=false;this.past.length=0;this.future.length=0;this.cur=this.snap()},
+  step(from,to){if(this.pending)this.commit();if(!from.length)return false;to.push(this.cur);this.cur=from.pop();restore(this.cur);return true},
+  undo(){return this.step(this.past,this.future)},
+  redo(){return this.step(this.future,this.past)},
+};
+// Put the parts of a snapshot back without touching the clock: each cog takes the phase it
+// would have now had it kept the speed it had then, and keeps its revolution count.
+function restore(s){
+  const turns=new Map(W.cogs.map(c=>[c.id,c.turns])),kept=sel&&{type:sel.type,id:sel.o.id};
+  const j=JSON.parse(s.key);Object.assign(j.S,{zoom:S.zoom});j.view={...view};
+  for(const c of j.cogs){const p=s.phase.get(c.id);c.th=wrap(p.th+p.w*(simT-s.t))}
+  deserialize(j);
+  for(const c of W.cogs)c.turns=turns.get(c.id)??0;
+  const back=kept&&W[kept.type+'s']?.find(o=>o.id===kept.id);if(back)select(kept.type,back);
+  clearTimeout(edits.timer);edits.pending=false;
+}
+addEventListener('pointerdown',()=>{edits.held=true},true);
+for(const type of ['pointerup','pointercancel'])addEventListener(type,()=>{edits.held=false;if(edits.pending)edits.commit()});
+function serialize(){
+  return {S,SPACE,view,
+    cogs:W.cogs.map(c=>({id:c.id,x:c.x,y:c.y,n:c.n,motor:c.motor,revs:c.revs,layer:c.layer,th:wrap(c.th),
+      track:c.track&&{...c.track,dots:c.track.dots.map(d=>({ring:d.ring,a:d.a,p:d.p,v:d.v}))}})),
+    arms:W.arms.map(a=>({id:a.id,cog:a.cog.id,a:a.a,r0:a.r0,len:a.len,flex:a.flex})),
+    pads:W.pads.map(p=>({id:p.id,x:p.x,y:p.y,r:p.r,voice:p.voice})),
+    readers:W.readers.map(r=>({id:r.id,x1:r.x1,y1:r.y1,x2:r.x2,y2:r.y2,voice:r.voice,tines:r.tines,combBase:r.combBase,combScale:r.combScale})),
+    belts:W.belts.map(b=>({id:b.id,a:b.a.id,b:b.b.id,cross:b.cross})),
+    strings:W.strings.map(({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})=>({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense}))};
+}
+function deserialize(j){
+  const cogs=j.cogs.map(c=>({revs:0,...c,w:0,turns:0}));
+  const byId=new Map(cogs.map(c=>[c.id,c]));
+  const cog=(id,who)=>{const c=byId.get(id);if(!c)throw new Error(`${who}: no cog ${id}`);return c};
+  const arms=j.arms.map(a=>({flex:.5,...a,cog:cog(a.cog,'arm '+a.id)}));
+  W.belts=(j.belts||[]).map(b=>({...b,a:cog(b.a,'belt '+b.id),b:cog(b.b,'belt '+b.id)}));
+  W.strings=(j.strings||[]).map(s=>({...s,hits:0,lastV:0}));
+  for(const c of cogs)if(c.track)for(const d of c.track.dots){d.p??=1;d.v??=1}
+  for(const o of [...j.pads,...j.readers])if(!VOICES[o.voice.kind])throw new Error(`${o.id}: voice kind ${o.voice.kind}`);
+  W.cogs=cogs;W.arms=arms;
+  W.pads=j.pads.map(p=>({...p,hits:0,lastV:0}));W.readers=j.readers.map(r=>({tines:0,combBase:60,combScale:'major',...r,hits:0,lastV:0}));
+  W.next=1+Math.max(0,...[...W.cogs,...W.arms,...W.pads,...W.readers,...W.belts,...W.strings].map(o=>o.id));
+  Object.assign(S,j.S);Object.assign(SPACE,j.SPACE);Object.assign(view,j.view);
+  select(null);solve();applyAudioSettings();syncRows();changed();
+}
+// The demo groove, in 16th-note steps of a 4/4 bar: [arm id, cog id, arm length, target, steps it sounds on].
+const GROOVE=[[6,1,62,'pad10',[0,6,10]],[7,2,56,'pad11',[4,12]],[8,3,38,'pad12',[0,2,4,6]],[9,4,70,'string14',[0]]];
+const MELODY=[[0,5],[3,6],[6,8],[8,7],[10,6],[12,5],[14,4],[16,3],[19,4],[22,5],[24,6],[26,7],[28,6],[30,4]];
+function demo(){
+  const R=n=>n*TOOTH/TAU,K={x:0,y:0},N={x:2*R(24),y:0},H={x:3*R(24)+R(12),y:0},B={x:-2*R(24),y:0},D={x:0,y:R(24)+R(48)};
+  const drum=(kind,v,level)=>makeVoice(kind,{level,velSense:.35,...v});
+  deserialize({S:{...S,bpm:110,beats:4},SPACE:{...SPACE},view:{x:20,y:40},
+    cogs:[{id:1,...K,n:24,motor:27.5,revs:1,layer:0,th:0,track:null},{id:2,...N,n:24,motor:0,layer:0,th:0,track:null},
+      {id:3,...H,n:12,motor:0,layer:0,th:0,track:null},{id:4,...B,n:24,motor:0,layer:0,th:0,track:null},
+      {id:5,...D,n:48,motor:0,layer:0,th:0,track:{rings:10,base:57,scale:'minpent',div:32,dots:[]}}],
+    arms:GROOVE.map(([id,cog,len])=>({id,cog,a:0,r0:0,len})),
+    pads:[{id:10,x:0,y:-58,r:11,voice:drum('kick',{tune:48,sweep:4,pdecay:.04,decay:.45},1.1)},
+      {id:11,x:N.x+33,y:-50,r:10,voice:drum('snare',{tune:185,tone:.4,cutoff:3200,decay:.17},.9)},
+      {id:12,x:H.x+32,y:24,r:7,voice:drum('hat',{cutoff:8500,decay:.035},.4)}],
+    readers:[{id:13,x1:D.x+18,y1:D.y,x2:D.x+R(48),y2:D.y,voice:makeVoice('modal',{level:.55,velSense:.3,body:'bar',bright:.5,hard:.45,decay:1.1})}],
+    strings:[{id:14,x1:B.x-26.8,y1:-150,x2:B.x-26.8,y2:110,kind:'string',f200:143,quant:1,decay:1.6,damp:.7,hard:.35,level:.8,velSense:.4}]});
+  const [k,n,h,b,d]=W.cogs;
+  for(const[c,parent]of [[k,d],[n,k],[h,n],[b,k]])interlock(c,parent);
+  const step=S.beats*60/S.bpm/16,hit={pad:o=>(c,arm)=>{const w=hitWindow(c,arm,o);return w.beta-Math.sign(c.w)*w.half},
+    string:o=>(c,arm)=>{const L=stringLen(o),u=((c.x-o.x1)*(o.x2-o.x1)+(c.y-o.y1)*(o.y2-o.y1))/(L*L),fx=o.x1+(o.x2-o.x1)*u,fy=o.y1+(o.y2-o.y1)*u;
+      return Math.atan2(fy-c.y,fx-c.x)-Math.sign(c.w)*Math.acos(Math.hypot(fx-c.x,fy-c.y)/(arm.r0+arm.len))}};
+  const target=name=>{const[,type,id]=name.match(/^(pad|string)(\d+)$/);return hit[type](W[type+'s'].find(o=>o.id===+id))};
+  for(const[id,,,name,steps]of GROOVE){const arm=W.arms.find(a=>a.id===id),c=arm.cog,angle=target(name)(c,arm);
+    W.arms.push(...steps.slice(1).map((st,i)=>({...arm,id:W.next+i,a:wrap(angle-c.th-c.w*st*step)})));W.next+=steps.length-1;
+    arm.a=wrap(angle-c.th-c.w*steps[0]*step)}
+  d.track.dots=MELODY.map(([st,ring])=>({ring,a:wrap(-Math.sign(d.w)*st*TAU/d.track.div),p:1,v:1}));
+  changed(true);
+}
+
+const b64url={enc:u=>{let s='';for(const b of u)s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')},
+  dec:s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0))};
+const pipe=(bytes,stream)=>new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer();
+async function shareURL(){
+  const packed=new Uint8Array(await pipe(new TextEncoder().encode(JSON.stringify(serialize())),new CompressionStream('deflate-raw')));
+  return location.href.split('#')[0]+'#w='+b64url.enc(packed);
+}
+async function loadShared(code){deserialize(JSON.parse(new TextDecoder().decode(await pipe(b64url.dec(code),new DecompressionStream('deflate-raw')))))}
+/* ---------- look ---------- */
+const css=k=>getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+let BG,FG,DIM,FAINT,SEL,BAD,HOT,READ,PAD;
+function readPalette(){[BG,FG,DIM,FAINT,SEL,BAD,HOT,READ,PAD]=['bg','fg','dim','faint','sel','bad','hot','read','pad'].map(k=>css('--'+k))}
+readPalette();
+const glow=t=>t==null||clock.view<t?0:Math.exp(-(clock.view-t)/.12);
+function hot(t,base,g=cx){const e=glow(t);if(e<=.03)return base;g.globalAlpha=.35+.65*e;return HOT}
+
+/* ---------- render ---------- */
+const cv=$('#c');let cx=cv.getContext('2d');
+let dpr=1,CW=0,CH=0,PX=1;
+const ZMIN=.1,ZMAX=8,DUR=380;
+function resize(){
+  const r=cv.getBoundingClientRect();
+  dpr=devicePixelRatio||1;CW=r.width;CH=r.height;cv.width=Math.round(CW*dpr);cv.height=Math.round(CH*dpr);
+  onResize();
+}
+const toScreen=p=>({x:(p.x-view.x)*S.zoom+CW/2,y:(p.y-view.y)*S.zoom+CH/2});
+const screenToWorld=s=>({x:(s.x-CW/2)/S.zoom+view.x,y:(s.y-CH/2)/S.zoom+view.y});
+const isSel=o=>sel&&sel.o===o||group.some(g=>g.o===o);
+const ringGap=c=>c.track.rings>1?radius(c)*.65/(c.track.rings-1):radius(c)*.3;
+const noteMode=(c,z=S.zoom)=>!!c.track&&ringGap(c)*z>=12;
+const mid=o=>({x:(o.x1+o.x2)/2,y:(o.y1+o.y2)/2});
+function line(x1,y1,x2,y2){cx.beginPath();cx.moveTo(x1,y1);cx.lineTo(x2,y2);cx.stroke()}
+function circle(x,y,r,fill){cx.beginPath();cx.arc(x,y,Math.max(0,r),0,TAU);fill?cx.fill():cx.stroke()}
+function beltLines(b){
+  const A=b.a,B=b.b,ra=radius(A)+3,rb=radius(B)+3,d=Math.hypot(B.x-A.x,B.y-A.y),base=Math.atan2(B.y-A.y,B.x-A.x);
+  const cosA=(b.cross?ra+rb:ra-rb)/d;if(!(Math.abs(cosA)<1))return [];
+  const al=Math.acos(cosA);
+  return [1,-1].map(s=>{const a=base+s*al,aB=b.cross?a+Math.PI:a;return [A.x+ra*Math.cos(a),A.y+ra*Math.sin(a),B.x+rb*Math.cos(aB),B.y+rb*Math.sin(aB)]});
+}
+
+function strokes(x1,y1,x2,y2,layers){for(const[w,col]of layers){cx.lineWidth=w;cx.strokeStyle=col;line(x1,y1,x2,y2)}}
+function drawCog(c){
+  const th=renderTh(c),r=radius(c),driven=!!motorRpm(c);let x=c.x,y=c.y;
+  if(c.jam){const k=clock.view;x+=Math.sin(k*71)*1.3*PX;y+=Math.cos(k*53)*1.3*PX}
+  cx.lineWidth=PX;cx.strokeStyle=c.jam?BAD:DIM;cx.setLineDash(c.layer?[4*PX,3*PX]:[]);circle(x,y,r);cx.setLineDash([]);
+  cx.beginPath();
+  for(let k=0;k<c.n;k++){const a=th+k*TAU/c.n,ca=Math.cos(a),sa=Math.sin(a);cx.moveTo(x+ca*(r-3),y+sa*(r-3));cx.lineTo(x+ca*(r+3),y+sa*(r+3))}
+  cx.stroke();
+  if(c.track)drawDiscFace(c,th,x,y);
+  cx.strokeStyle=FG;line(x,y,x+Math.cos(th)*(r-5),y+Math.sin(th)*(r-5));
+  cx.fillStyle=cx.strokeStyle=c.jam?BAD:FG;circle(x,y,3*PX,driven);
+}
+function drawDiscFace(c,th,x,y){
+  const t=c.track,note=noteMode(c,1/PX),gap=ringGap(c),rIn=ringR(c,0),rOut=ringR(c,t.rings-1);
+  if(note)for(let i=0;i<t.rings;i++)if(ringNote(t,i)%12===t.base%12){
+    const R=ringR(c,i);cx.fillStyle=PAD;cx.beginPath();cx.arc(x,y,R+gap/2,0,TAU);cx.arc(x,y,Math.max(0,R-gap/2),0,TAU,true);cx.fill()}
+  cx.strokeStyle=FAINT;cx.lineWidth=PX;
+  for(let i=0;i<t.rings;i++)circle(x,y,ringR(c,i));
+  for(let k=0;k<t.div;k++){const a=th+k*TAU/t.div;cx.strokeStyle=note&&k%4===0?DIM:FAINT;line(x+Math.cos(a)*rIn,y+Math.sin(a)*rIn,x+Math.cos(a)*rOut,y+Math.sin(a)*rOut)}
+  const base=note?clamp(gap*.32,1.5,4.5):1.5*PX;
+  for(const d of t.dots){
+    const R=ringR(c,d.ring),a=th+d.a,px=x+Math.cos(a)*R,py=y+Math.sin(a)*R,pr=base*(note?.6+.4*d.v:1+d.v)+2*glow(d.flash)*PX;
+    cx.fillStyle=hot(d.flash,FG);cx.globalAlpha*=.3+.7*d.p;circle(px,py,pr,true);cx.globalAlpha=1;
+    if(isSel(d)){cx.strokeStyle=SEL;circle(px,py,pr+3*PX)}
+  }
+}
+const armBend=a=>{const age=clock.view-(a.bendT??-9);return age>=0&&age<2?a.bendA*Math.exp(-age/.25)*Math.cos(age*TAU*9):0};
+function drawArm(a){
+  const c=a.cog,ang=renderTh(c)+a.a,b=armBend(a),bx=c.x+Math.cos(ang)*a.r0,by=c.y+Math.sin(ang)*a.r0;
+  const mx=bx+Math.cos(ang)*a.len/2,my=by+Math.sin(ang)*a.len/2,tx=bx+Math.cos(ang+b)*a.len,ty=by+Math.sin(ang+b)*a.len;
+  cx.lineWidth=3*PX;cx.strokeStyle=hot(a.flash,FG);cx.beginPath();cx.moveTo(bx,by);cx.quadraticCurveTo(mx,my,tx,ty);cx.stroke();cx.globalAlpha=1;cx.lineWidth=PX;
+}
+const armTip=a=>{const c=a.cog,ang=renderTh(c)+a.a,L=a.r0+a.len;return {x:c.x+Math.cos(ang)*L,y:c.y+Math.sin(ang)*L}};
+function drawPad(p){
+  if(p.flash!=null&&clock.view>=p.flash){const dt=clock.view-p.flash;if(dt<.6){const k=dt/.6,amp=clamp(p.lastV/S.vRef,.25,1);
+    cx.globalAlpha=(1-k)*.6*amp;cx.strokeStyle=HOT;cx.lineWidth=PX;circle(p.x,p.y,p.r+3*PX+k*(14+26*amp)*PX);cx.globalAlpha=1}}
+  cx.fillStyle=hot(p.flash,PAD);circle(p.x,p.y,p.r,true);cx.globalAlpha=1;
+  cx.lineWidth=PX;cx.strokeStyle=FG;circle(p.x,p.y,p.r);
+  if(p.r/PX>10){cx.strokeStyle=DIM;emblem(p.voice.kind,p.x,p.y,p.r)}
+}
+function emblem(kind,x,y,r){
+  if(kind==='kick')circle(x,y,r*.45);
+  else if(kind==='snare'){line(x-r*.5,y-r*.15,x+r*.5,y-r*.15);line(x-r*.5,y+r*.15,x+r*.5,y+r*.15)}
+  else if(kind==='hat'){line(x-r*.55,y,x+r*.55,y);circle(x,y,r*.12)}
+  else{cx.beginPath();cx.moveTo(x-r*.35,y+r*.3);cx.quadraticCurveTo(x-r*.35,y-r*.5,x,y-r*.5);cx.quadraticCurveTo(x+r*.35,y-r*.5,x+r*.35,y+r*.3);cx.closePath();cx.stroke()}
+}
+function drawReader(rd){
+  const ex=rd.x2-rd.x1,ey=rd.y2-rd.y1,L=Math.hypot(ex,ey)||1;
+  cx.lineWidth=2*PX;cx.strokeStyle=hot(rd.flash,READ);line(rd.x1,rd.y1,rd.x2,rd.y2);cx.globalAlpha=1;
+  cx.lineWidth=PX;cx.strokeStyle=READ;
+  for(let i=1;i<rd.tines;i++){const u=i/rd.tines;line(rd.x1+ex*u-ey/L*4*PX,rd.y1+ey*u+ex/L*4*PX,rd.x1+ex*u+ey/L*4*PX,rd.y1+ey*u-ex/L*4*PX)}
+  cx.fillStyle=READ;circle(rd.x1,rd.y1,2.5*PX,true);circle(rd.x2,rd.y2,2.5*PX,true);
+}
+function drawString(s){
+  const ex=s.x2-s.x1,ey=s.y2-s.y1,L=Math.hypot(ex,ey)||1,age=clock.view-(s.flash??-9);
+  const amp=age>=0&&age<2?Math.min(8,(s.lastV||0)/60)*Math.exp(-age/.35)*Math.sin(age*TAU*11):0;
+  const u=s.lastU??.5,mx=s.x1+ex*u-ey/L*amp,my=s.y1+ey*u+ex/L*amp;
+  cx.strokeStyle=hot(s.flash,FG);cx.lineWidth=(s.kind==='bar'?4:1.5)*PX;
+  cx.beginPath();cx.moveTo(s.x1,s.y1);cx.lineTo(mx,my);cx.lineTo(s.x2,s.y2);cx.stroke();cx.globalAlpha=1;
+  cx.fillStyle=DIM;circle(s.x1,s.y1,2.5*PX,true);circle(s.x2,s.y2,2.5*PX,true);cx.lineWidth=PX;
+}
+function drawBelt(b){
+  cx.strokeStyle=DIM;cx.lineWidth=2*PX;cx.setLineDash([6*PX,5*PX]);cx.lineDashOffset=-renderTh(b.a)*(radius(b.a)+3);
+  for(const[x1,y1,x2,y2]of beltLines(b))line(x1,y1,x2,y2);
+  cx.setLineDash([]);cx.lineWidth=PX;
+}
+function halo(x,y,r){cx.lineWidth=1.5*PX;cx.strokeStyle=SEL;circle(x,y,r+3*PX);cx.lineWidth=PX}
+function drawWindows(){
+  const show=(arm,pad)=>S.windows||isSel(arm)||isSel(pad);
+  cx.strokeStyle=FAINT;cx.lineWidth=PX;
+  for(const arm of W.arms)for(const pad of W.pads){if(!show(arm,pad))continue;const c=arm.cog,h=hitWindow(c,arm,pad);if(!h)continue;
+    cx.beginPath();cx.arc(c.x,c.y,h.s,h.beta-h.half,h.beta+h.half);cx.stroke();
+    if(c.w){const e=c.w>0?h.beta-h.half:h.beta+h.half;line(c.x,c.y,c.x+Math.cos(e)*h.s,c.y+Math.sin(e)*h.s)}}
+}
+function drawGround(){
+  cx.setTransform(dpr,0,0,dpr,0,0);cx.fillStyle=BG;cx.fillRect(0,0,CW,CH);
+  if(!S.grid)return;
+  const step=50*S.zoom,ox=((CW/2-view.x*S.zoom)%step+step)%step,oy=((CH/2-view.y*S.zoom)%step+step)%step;
+  cx.strokeStyle=FAINT;cx.lineWidth=1;
+  for(let x=ox;x<CW;x+=step)line(x,0,x,CH);for(let y=oy;y<CH;y+=step)line(0,y,CW,y);
+}
+function draw(){
+  cx.globalAlpha=1;drawGround();
+  const z=S.zoom*dpr;PX=1/S.zoom;
+  cx.setTransform(z,0,0,z,dpr*CW/2-view.x*z,dpr*CH/2-view.y*z);
+  for(const c of [...W.cogs].sort((a,b)=>a.layer-b.layer))drawCog(c);
+  for(const b of W.belts)drawBelt(b);
+  drawWindows();
+  for(const s of W.strings)drawString(s);
+  for(const r of W.readers)drawReader(r);
+  for(const p of W.pads)drawPad(p);
+  for(const a of W.arms)drawArm(a);
+  if(ui.carry&&ui.carry.band){const{a,p}=ui.carry.band;cx.setLineDash([6*PX,5*PX]);strokes(a.x,a.y,p.x,p.y,[[2*PX,DIM]]);cx.setLineDash([])}
+  if(sel){const o=sel.o;
+    if(sel.type==='cog')halo(o.x,o.y,radius(o)+3.2);else if(sel.type==='pad')halo(o.x,o.y,o.r+2.4);
+    else if(sel.type==='arm'){const t=armTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='reader'||sel.type==='string'){halo(o.x1,o.y1,3.8);halo(o.x2,o.y2,3.8)}}
+  if(S.ids){cx.fillStyle=DIM;cx.font=`${10*PX}px monospace`;
+    for(const c of W.cogs)cx.fillText('c'+c.id,c.x+4*PX,c.y-4*PX);
+    for(const p of W.pads)cx.fillText('p'+p.id,p.x+p.r+2*PX,p.y);
+    for(const r of [...W.readers,...W.strings])cx.fillText((r.f200?'s':'r')+r.id,r.x2+2*PX,r.y2);
+    for(const a of W.arms){const t=armTip(a);cx.fillText('a'+a.id,t.x,t.y)}}
+  cx.setTransform(dpr,0,0,dpr,0,0);
+  if(ui.crank)drawCrankGauge(ui.crank);
+  drawChrome();
+}
+function drawGhost(s){
+  cx.globalAlpha=.55;cx.save();cx.setTransform(dpr*S.zoom,0,0,dpr*S.zoom,dpr*s.x,dpr*s.y);PX=1/S.zoom;
+  drawArm({cog:{x:-24,y:0,th:0,w:0},a:0,r0:0,len:24});cx.restore();cx.globalAlpha=1;
+}
+const PART_KEYS={c:'cog',d:'disc',a:'arm',b:'belt',p:'pad',t:'string',r:'reader'},KEY_OF=Object.fromEntries(Object.entries(PART_KEYS).map(([k,v])=>[v,k]));
+const PARTS=Object.values(PART_KEYS);
+const MODEL={
+  cog:{n:12,x:0,y:0,th:.13,w:0,layer:0,motor:0,track:null},
+  disc:{n:48,x:0,y:0,th:.3,w:0,layer:0,motor:0,track:{rings:5,base:57,scale:'minpent',div:8,dots:[[0,0],[2,1.57],[4,3.93],[3,5.5],[1,2.36]].map(([ring,a])=>({ring,a,p:1,v:1}))}},
+};
+// A part as its picture, about 50 px across at scale 1, centred on the origin of the current transform.
+function drawPartIcon(kind){
+  if(kind==='cog'||kind==='disc')drawCog(MODEL[kind]);
+  else if(kind==='arm')drawArm({cog:{x:-14,y:14,th:0,w:0},a:-Math.PI/4,r0:0,len:40});
+  else if(kind==='pad')drawPad({x:0,y:0,r:11,voice:{kind:'kick'}});
+  else if(kind==='belt'){cx.strokeStyle=DIM;cx.lineWidth=PX;circle(-12,0,9);circle(14,0,6);cx.setLineDash([3,3]);strokes(-12,-9,14,-6,[[1.5,DIM]]);strokes(-12,9,14,6,[[1.5,DIM]]);cx.setLineDash([])}
+  else if(kind==='string')drawString({x1:-20,y1:14,x2:20,y2:-14,kind:'string'});
+  else drawReader({x1:-17,y1:17,x2:17,y2:-17,tines:0});
+}
+const ICON_SCALE={disc:.235,cog:.82,pad:1.3};
+function bounds(){
+  const xs=[],ys=[],add=(x,y,r)=>{xs.push(x-r,x+r);ys.push(y-r,y+r)};
+  for(const c of W.cogs)add(c.x,c.y,radius(c)+4);for(const p of W.pads)add(p.x,p.y,p.r+3);
+  for(const r of [...W.readers,...W.strings]){add(r.x1,r.y1,4);add(r.x2,r.y2,4)}for(const a of W.arms){const t=armTip(a);add(t.x,t.y,4)}
+  if(!xs.length)return null;
+  const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);return {cx:(x0+x1)/2,cy:(y0+y1)/2,w:x1-x0,h:y1-y0};
+}
+// The view centre that puts world point p at the middle of the open stage.
+const centred=(p,z)=>{const s=stage();return {x:p.x-((s.l+s.r)/2-CW/2)/z,y:p.y-((s.t+s.b)/2-CH/2)/z}};
+function fitTarget(){
+  const b=bounds(),s=stage();if(!b)return {x:0,y:0,z:1,fit:1};
+  const fit=Math.min((s.r-s.l-40)/b.w,(s.b-s.t-70)/b.h),z=clamp(fit,ZMIN,2);
+  return {...centred({x:b.cx,y:b.cy},z),z,fit};
+}
+
+const RPM_DETENTS=[5,7.5,10,12,15,20,24,30,40,45,60,72,80,90,120,144,160,180,240,300];
+const BAR_DETENTS=[1/8,1/6,1/4,1/3,1/2,2/3,3/4,1,4/3,3/2,2,3,4,6,8];
+const detents=()=>S.bpm?BAR_DETENTS.map(r=>r*S.bpm/S.beats):RPM_DETENTS;
+const gaugeAngle=rpm=>Math.sign(rpm)*clamp(Math.log(Math.max(1,Math.abs(rpm))/2.5)/Math.log(120),0,1)*1.7*Math.PI;
+function drawCrankGauge(k){
+  const c=k.c,s=toScreen(c),R=radius(c)*S.zoom+22,a0=-Math.PI/2;
+  cx.lineWidth=1;cx.strokeStyle=DIM;
+  for(const d of detents())for(const sg of [-1,1]){const a=a0+gaugeAngle(sg*d);line(s.x+Math.cos(a)*(R-4),s.y+Math.sin(a)*(R-4),s.x+Math.cos(a)*(R+4),s.y+Math.sin(a)*(R+4))}
+  const a1=a0+gaugeAngle(motorRpm(c));
+  cx.strokeStyle=HOT;cx.lineWidth=2;cx.lineCap='round';cx.beginPath();cx.arc(s.x,s.y,R,Math.min(a0,a1),Math.max(a0,a1));cx.stroke();cx.lineCap='butt';
+  cx.fillStyle=HOT;circle(s.x+Math.cos(a1)*R,s.y+Math.sin(a1)*R,3.5,true);
+}
+
+/* ---------- touch ---------- */
+const ui={armed:null,carry:null,scrap:false,crank:null,cam:null,sector:null,bezelOwner:null,bezelAt:0,lastTap:null,auditionAt:0,snapped:false,t:0,dotOf:null,dotAt:null,sealAt:0,sealOk:false,shared:''};
+const wrapPi=a=>wrap(a+Math.PI)-Math.PI;
+function buzz(ms){try{const u=navigator.userActivation;if(navigator.vibrate&&(!u||u.hasBeenActive))navigator.vibrate(ms)}catch(e){}}
+// Play a part now, at a middling velocity, the way the sim would strike it.
+function sound(o,midi,key){
+  if(!ac||engineState!=='ready')return;
+  const when=ac.currentTime+.005,v=o.voice||o,amp=.85*v.level,pan=clamp(((o.x??o.x1)-view.x)/300,-.9,.9);
+  if(o.f200)pluckSound(o,midi,o.lastU??.3,when,amp,pan,.7);
+  else if(v.kind==='modal')modal(v,midi,when,amp,pan,key,.7);else drum(v,when,amp,pan);
+}
+const discReader=c=>W.readers.find(r=>segDist(c,r.x1,r.y1,r.x2,r.y2)<radius(c))||{id:0,x:c.x,voice:makeVoice('modal')};
+function audition(o,force){
+  const t=performance.now();if(!force&&t-ui.auditionAt<140)return;ui.auditionAt=t;
+  if(o.f200)sound(o,stringMidi(o));
+  else if(o.voice)sound(o,o.tines?o.combBase:o.voice.note??60,o.id*128);
+  else if(o.track)sound(discReader(o),o.track.base,o.id*128);
+  else if(sel&&sel.type==='dot')sound(discReader(ui.dotOf),ringNote(ui.dotOf.track,o.ring),ui.dotOf.id*128);
+}
+function fly(x,y,z){ui.cam={x0:view.x,y0:view.y,z0:S.zoom,x1:x,y1:y,z1:clamp(z,ZMIN,ZMAX),t0:performance.now()}}
+function stepCamera(){
+  const m=ui.cam;if(!m)return;
+  const k=clamp((performance.now()-m.t0)/DUR,0,1),e=1-Math.pow(1-k,3);
+  S.zoom=m.z0*Math.pow(m.z1/m.z0,e);view.x=m.x0+(m.x1-m.x0)*e;view.y=m.y0+(m.y1-m.y0)*e;
+  if(k>=1){ui.cam=null;changed()}
+}
+function flyFit(){const f=fitTarget();fly(f.x,f.y,f.z)}
+// Double tap: fly to the part's working zoom, or back out when already there.
+function focus(type,o,s){
+  let z,at;
+  if(type==='pad'){z=30/o.r;at=o}
+  else if(type==='reader'||type==='string'){z=170/Math.max(20,stringLen(o));at=mid(o)}
+  else if(type==='arm'){z=150/(o.r0+o.len);at=o.cog}
+  else if(o.track){z=14/ringGap(o);const w=screenToWorld(s);if(S.zoom<z*.9){fly(w.x-(s.x-CW/2)/z,w.y-(s.y-CH/2)/z,z);return}}
+  else{z=120/radius(o);at=o}
+  if(S.zoom>=z*.9){flyFit();return}
+  const c=centred(at,z);fly(c.x,c.y,z);
+}
+function choose(type,o,play){select(type,o);if(play)audition(o,true);reveal()}
+function removeObj(type,o){
+  if(type==='cog'){W.cogs=W.cogs.filter(c=>c!==o);W.arms=W.arms.filter(a=>a.cog!==o);W.belts=W.belts.filter(b=>b.a!==o&&b.b!==o)}
+  else if(type==='dot')setDot(ui.dotOf.track,o,false);
+  else W[type+'s']=W[type+'s'].filter(x=>x!==o);
+  if(sel&&sel.o===o)select(null);
+  buzz(18);changed(true);
+}
+function removeSel(){
+  const items=group.length?group:sel?[sel]:[];group=[];
+  for(const{type,o}of items)if(type!=='belt'||W.belts.includes(o))removeObj(type,o);
+}
+const PART_LISTS=['cog','arm','pad','reader','string','belt'];
+const typeOf=o=>PART_LISTS.find(t=>W[t+'s'].includes(o))||null;
+function boxSelect(a,b){
+  const x0=Math.min(a.x,b.x),x1=Math.max(a.x,b.x),y0=Math.min(a.y,b.y),y1=Math.max(a.y,b.y),inside=q=>q.x>=x0&&q.x<=x1&&q.y>=y0&&q.y<=y1,g=[];
+  for(const o of W.cogs)if(inside(o))g.push({type:'cog',o});
+  for(const o of W.pads)if(inside(o))g.push({type:'pad',o});
+  for(const type of ['reader','string'])for(const o of W[type+'s'])if(inside(mid(o)))g.push({type,o});
+  for(const o of W.arms)if(inside(armTip(o)))g.push({type:'arm',o});
+  for(const o of W.belts)if(g.some(x=>x.o===o.a)&&g.some(x=>x.o===o.b))g.push({type:'belt',o});
+  return g;
+}
+function drawGroup(){
+  if(!group.length&&!marquee)return;
+  cx.setTransform(dpr,0,0,dpr,0,0);cx.strokeStyle=SEL;cx.lineWidth=1;cx.setLineDash([5,4]);
+  if(marquee){const a=toScreen(marquee.a),b=toScreen(marquee.b);cx.strokeRect(a.x,a.y,b.x-a.x,b.y-a.y)}
+  cx.setLineDash([]);
+  for(const{type,o}of group){
+    if(type==='cog'||type==='pad'){const s=toScreen(o);circle(s.x,s.y,(type==='cog'?radius(o):o.r)*S.zoom+5)}
+    else if(type==='arm'){const s=toScreen(armTip(o));circle(s.x,s.y,7)}
+    else if(type!=='belt'){const a=toScreen({x:o.x1,y:o.y1}),b=toScreen({x:o.x2,y:o.y2});circle(a.x,a.y,6);circle(b.x,b.y,6);line(a.x,a.y,b.x,b.y)}
+  }
+}
+function pickCog(p,filter=()=>true,tol=0){
+  return W.cogs.filter(c=>filter(c)&&Math.hypot(c.x-p.x,c.y-p.y)<=radius(c)+tol).sort((a,b)=>b.layer-a.layer||a.n-b.n)[0]||null;
+}
+function segDist(p,x1,y1,x2,y2){const ex=x2-x1,ey=y2-y1,u=clamp(((p.x-x1)*ex+(p.y-y1)*ey)/(ex*ex+ey*ey||1),0,1);return Math.hypot(p.x-x1-ex*u,p.y-y1-ey*u)}
+const discAngle=(c,p)=>Math.atan2(p.y-c.y,p.x-c.x)-renderTh(c);
+function cellAt(c,p){
+  const t=c.track,d=Math.hypot(p.x-c.x,p.y-c.y),r=radius(c),ring=t.rings>1?Math.round((d/r-.25)/.65*(t.rings-1)):0;
+  if(ring<0||ring>=t.rings)return null;
+  const step=TAU/t.div;return {ring,a:wrap(Math.round(wrap(discAngle(c,p))/step)*step)};
+}
+function placeCog(c,p){
+  const axle=W.cogs.find(o=>o!==c&&Math.hypot(o.x-p.x,o.y-p.y)<=Math.max(S.coaxTol,10/S.zoom));
+  c.x=axle?axle.x:p.x;c.y=axle?axle.y:p.y;
+  c.layer=axle?Math.max(...stackOf(axle).filter(o=>o!==c).map(o=>o.layer))+1:0;
+  if(!axle)snap(c);solve();
+}
+// The cog you push becomes the train's only motor; under tempo lock it is set in revolutions per bar.
+function drive(c,rpm){
+  if(c.driver)for(const o of W.cogs)if(o.driver===c.driver){o.motor=0;o.revs=0}
+  if(S.bpm)c.revs=rpm*S.beats/S.bpm;else c.motor=rpm;solve();
+}
+function detent(rpm){
+  const a=Math.abs(rpm);if(a<3)return 0;
+  return Math.sign(rpm)*detents().reduce((b,d)=>Math.abs(Math.log(d/a))<Math.abs(Math.log(b/a))?d:b);
+}
+const trackScrap=s=>{ui.scrap=offStage(s)};
+function endScrap(type,o){const gone=ui.scrap;ui.scrap=false;if(gone)removeObj(type,o);else changed(true)}
+const TRACK_DEFAULT={rings:12,base:48,scale:'pentatonic',div:16},newTrack=()=>({...TRACK_DEFAULT,dots:[]});
+const STRING_DEFAULT={kind:'string',f200:220,quant:1,decay:2.5,damp:.5,hard:.5,level:.7,velSense:.7};
+function newPart(kind,p){
+  const id=W.next++;
+  if(kind==='cog'||kind==='disc')return {type:'cog',o:{id,x:p.x,y:p.y,n:kind==='disc'?48:12,motor:0,revs:0,turns:0,layer:0,th:0,w:0,
+    track:kind==='disc'?newTrack():null}};
+  if(kind==='pad')return {type:'pad',o:{id,x:p.x,y:p.y,r:12,voice:makeVoice('kick'),hits:0,lastV:0}};
+  if(kind==='reader')return {type:'reader',o:{id,x1:0,y1:0,x2:0,y2:0,voice:makeVoice('modal'),tines:0,combBase:60,combScale:'major',hits:0,lastV:0}};
+  if(kind==='string')return {type:'string',o:{id,x1:0,y1:0,x2:0,y2:0,...STRING_DEFAULT,hits:0,lastV:0}};
+  return {type:'arm',o:{id,cog:null,a:0,r0:0,len:4,flex:.5}};
+}
+function placePart(type,o,p){
+  if(type==='cog')placeCog(o,p);
+  else if(type==='pad'){o.x=p.x;o.y=p.y}
+  else if(type==='string')Object.assign(o,{x1:p.x-60,y1:p.y,x2:p.x+60,y2:p.y});
+  else if(type==='reader'){const d=pickCog(p,c=>c.track);
+    if(d){const a=Math.atan2(p.y-d.y,p.x-d.x),r0=ringR(d,0)-6,r1=ringR(d,d.track.rings-1)+6;
+      Object.assign(o,{x1:d.x+Math.cos(a)*r0,y1:d.y+Math.sin(a)*r0,x2:d.x+Math.cos(a)*r1,y2:d.y+Math.sin(a)*r1})}
+    else Object.assign(o,{x1:p.x-30,y1:p.y,x2:p.x+30,y2:p.y})}
+  else{const c=pickCog(p);o.cog=c;if(c){o.a=wrap(Math.atan2(p.y-c.y,p.x-c.x)-renderTh(c));o.len=Math.max(4,Math.hypot(p.x-c.x,p.y-c.y))}}
+}
+
+const G={
+  marquee(s0){
+    const a=screenToWorld(s0);marquee={a,b:a};
+    return {move(s){marquee.b=screenToWorld(s)},cancel(){marquee=null},
+      up(s){const b=screenToWorld(s);marquee=null;sel=null;group=boxSelect(a,b)},
+      tap(s){marquee=null;if(chromeHit(s))return;
+        const g=begin(s),o=g.o,type=o&&typeOf(o);g.cancel?.();if(!type)return;
+        const current=group.length?group:sel?[sel]:[],rest=current.filter(x=>x.o!==o);
+        sel=null;group=rest.length<current.length?rest:[...current,{type,o}]}};
+  },
+  group(s0){
+    const p0=screenToWorld(s0),start=group.map(({o})=>({o,s:{x:o.x,y:o.y,x1:o.x1,y1:o.y1,x2:o.x2,y2:o.y2}}));
+    return {o:null,move(s){trackScrap(s);const q=screenToWorld(s),dx=q.x-p0.x,dy=q.y-p0.y;
+        for(const{o,s:k}of start){if('x'in o){o.x=k.x+dx;o.y=k.y+dy}if('x1'in o){o.x1=k.x1+dx;o.y1=k.y1+dy;o.x2=k.x2+dx;o.y2=k.y2+dy}}solve()},
+      up(){if(ui.scrap){ui.scrap=false;removeSel()}else changed(true)}};
+  },
+  // An armed part: press or drag on the canvas to place it, as if carried in.
+  armed(kind,s){const g=G.carry(kind);g.move(s);return {...g,tap(t){g.up(t)}}},
+  // Carry a new part in: it lives in the machine while the pointer is on the stage.
+  carry(kind){
+    let made=null;const carry=ui.carry={ghost:null,band:null};
+    const list=()=>W[made.type+'s'],present=()=>made&&list().includes(made.o);
+    const out=()=>{if(present()){list().splice(list().indexOf(made.o),1);if(made.type==='cog')solve()}};
+    const done=()=>{ui.carry=null};
+    if(kind==='belt'){let a=null;
+      return {move(s){const p=screenToWorld(s),c=!offStage(s)&&pickCog(p);if(!a&&c){a=c;buzz(6)}carry.band=a?{a,p}:null},
+        up(s){done();const b=a&&!offStage(s)&&pickCog(screenToWorld(s));
+          if(b&&b!==a&&!stackOf(a).includes(b)){W.belts.push({id:W.next++,a,b,cross:0});buzz(10);changed(true)}},
+        cancel:done,tap:done};
+    }
+    return {
+      move(s){
+        const p=screenToWorld(s);
+        if(offStage(s)){out();carry.ghost=null;return}
+        made=made||newPart(kind,p);placePart(made.type,made.o,p);
+        const live=made.type!=='arm'||made.o.cog;
+        if(live&&!present()){list().push(made.o);if(made.type==='cog')solve();buzz(6)}else if(!live)out();
+        carry.ghost=live?null:s;
+      },
+      up(s){done();if(!present())return;if(offStage(s)){out();return}select(made.type,made.o);changed(true);buzz(10);reveal()},
+      cancel(){done();out()},tap:done,
+    };
+  },
+  arm(a){
+    return {o:a,move(s){trackScrap(s);const q=screenToWorld(s),c=a.cog;a.a=wrap(Math.atan2(q.y-c.y,q.x-c.x)-renderTh(c));a.len=Math.max(4,Math.hypot(q.x-c.x,q.y-c.y)-a.r0)},
+      up(){endScrap('arm',a)},tap(){choose('arm',a)},dbl(s){focus('arm',a,s)}};
+  },
+  pad(o,s0,rim){
+    const p0=screenToWorld(s0),dx=o.x-p0.x,dy=o.y-p0.y;
+    return {o,move(s){const q=screenToWorld(s);if(rim)o.r=clamp(Math.hypot(q.x-o.x,q.y-o.y),3,200);else{trackScrap(s);o.x=q.x+dx;o.y=q.y+dy}},
+      up(){if(rim)changed();else endScrap('pad',o)},tap(){choose('pad',o,true)},dbl(s){focus('pad',o,s)}};
+  },
+  // Readers and strings: an end stretches, the body moves. A string sings its new pitch as it stretches.
+  span(type,o,s0,end){
+    const p0=screenToWorld(s0),k={...o};let note=o.f200?Math.round(stringMidi(o)):0;
+    return {o,move(s){const q=screenToWorld(s),dx=q.x-p0.x,dy=q.y-p0.y;if(!end)trackScrap(s);
+        if(end!==2){o.x1=k.x1+dx;o.y1=k.y1+dy}if(end!==1){o.x2=k.x2+dx;o.y2=k.y2+dy}
+        if(o.f200&&end){const m=Math.round(stringMidi(o));if(m!==note){note=m;buzz(3);audition(o,true)}}},
+      up(){if(end)changed();else endScrap(type,o)},tap(){choose(type,o,true)},dbl(s){focus(type,o,s)}};
+  },
+  belt(b){return {o:b,move:trackScrap,up(){endScrap('belt',b)},tap(){b.cross=b.cross?0:1;buzz(8);changed(true)}}},
+  cog(c,s0){
+    const p0=screenToWorld(s0),stack=stackOf(c),start=stack.map(o=>[o,o.x,o.y]);
+    return {o:c,
+      move(s){trackScrap(s);const q=screenToWorld(s);for(const[o,x,y]of start){o.x=x+q.x-p0.x;o.y=y+q.y-p0.y}
+        const bx=c.x,by=c.y;snap(c);const snapped=c.x!==bx||c.y!==by;if(snapped&&!ui.snapped)buzz(8);ui.snapped=snapped;
+        for(const o of stack)if(o!==c){o.x+=c.x-bx;o.y+=c.y-by}solve()},
+      up(){ui.snapped=false;if(ui.scrap){ui.scrap=false;for(const o of stack)removeObj('cog',o)}else changed(true)},
+      tap(){choose('cog',c)},dbl(s){focus('cog',c,s)}};
+  },
+  // On the rim: push the teeth along to crank, pull outward or inward to change the tooth count.
+  rim(c,s0){
+    let mode=null,samples=[];const min=c.track?12:6,ang=s=>{const q=screenToWorld(s);return Math.atan2(q.y-c.y,q.x-c.x)};
+    return {o:c,
+      move(s){
+        if(!mode){const sc=toScreen(c),rx=s0.x-sc.x,ry=s0.y-sc.y,mx=s.x-s0.x,my=s.y-s0.y;
+          mode=Math.abs(mx*rx+my*ry)>Math.abs(mx*ry-my*rx)?'teeth':'crank';
+          if(mode==='crank'){ui.crank={c};samples=[{t:ui.t,a:ang(s0)}]}}
+        if(mode==='teeth'){const q=screenToWorld(s),n=clamp(Math.round(Math.hypot(q.x-c.x,q.y-c.y)*TAU/TOOTH),min,240);if(n!==c.n){c.n=n;buzz(3);solve()}return}
+        const t=ui.t,last=samples[samples.length-1],a=last.a+wrapPi(ang(s)-last.a);samples.push({t,a});
+        while(samples.length>2&&t-samples[1].t>90)samples.shift();
+        const f=samples[0],dt=(t-f.t)/1000;if(dt>.01)drive(c,clamp((a-f.a)/dt*60/TAU,-600,600));
+      },
+      up(){
+        if(mode==='teeth'){if(stackOf(c).length===1)snap(c);changed(true);return}
+        if(mode==='crank'){const still=ui.t-samples[samples.length-1].t>110;drive(c,still?0:detent(motorRpm(c)));ui.crank=null;buzz(12);changed(true)}
+      },
+      cancel(){ui.crank=null},
+      tap(){choose('cog',c)},dbl(s){focus('cog',c,s)}};
+  },
+  // The disc face at note zoom. Tap or drag to set pins. Hold a pin to tune its odds and accent.
+  // Hold an empty socket, then sweep around the ring to spread k pins evenly (Euclid).
+  notes(c,s0){
+    const t=c.track,at=s=>cellAt(c,screenToWorld(s)),cell0=at(s0);let paint=null,mode='paint',sweep=null;
+    const put=cell=>{if(!cell)return;const on=dotAt(t,cell.ring,cell.a)>=0;if(paint===null)paint=!on;
+      if(on!==paint){setDot(t,{...cell,...brush},paint);if(paint){buzz(3);sound(discReader(c),ringNote(t,cell.ring),c.id*128+cell.ring)}}};
+    const hold=setTimeout(()=>{
+      if(!cell0||paint!==null)return;const i=dotAt(t,cell0.ring,cell0.a);
+      if(i>=0){mode='odds';ui.dotOf=c;ui.dotAt=screenToWorld(s0);select('dot',t.dots[i]);buzz(12)}
+      else{mode='euclid';sweep={a:discAngle(c,screenToWorld(s0)),acc:0,k:-1};buzz(12)}
+    },450);
+    const euclid=s=>{const a=discAngle(c,screenToWorld(s));sweep.acc+=wrapPi(a-sweep.a);sweep.a=a;
+      const n=t.div,k=clamp(Math.round(Math.abs(sweep.acc)/(TAU/n)),0,n),dir=sweep.acc<0?-1:1;if(k===sweep.k)return;sweep.k=k;
+      t.dots=t.dots.filter(d=>d.ring!==cell0.ring);
+      for(let j=0;j<n;j++)if(k&&(j*k)%n<k)t.dots.push({ring:cell0.ring,a:wrap(cell0.a+dir*j*TAU/n),...brush});buzz(3)};
+    return {o:c,
+      move(s){if(mode==='euclid')return euclid(s);if(mode!=='paint')return;clearTimeout(hold);if(paint===null)put(cell0);put(at(s))},
+      up(){clearTimeout(hold);changed()},cancel(){clearTimeout(hold)},
+      tap(){clearTimeout(hold);put(cell0);if(!isSel(c))select('cog',c);changed()},
+      dbl(s){if(cell0)setDot(t,{...cell0,...brush},dotAt(t,cell0.ring,cell0.a)<0);focus('cog',c,s)}};
+  },
+  pan(s0){
+    const vx=view.x,vy=view.y;
+    return {o:null,move(s){view.x=vx-(s.x-s0.x)/S.zoom;view.y=vy-(s.y-s0.y)/S.zoom},up(){changed()},tap(){select(null)},dbl(){flyFit()}};
+  },
+};
+function begin(s){
+  const ch=chromeHit(s);if(ch)return ch();
+  const p=screenToWorld(s),Z=S.zoom,dist=q=>Math.hypot(q.x-p.x,q.y-p.y)*Z;
+  // The nearest small part under the finger wins: a hammer sweeping past a pad must not steal the tap.
+  let best=null;const near=(d,reach,make)=>{if(d<=reach&&(!best||d<best.d))best={d,make}};
+  for(const a of W.arms)near(dist(armTip(a))-3.3*Z,20,()=>G.arm(a));
+  for(const o of W.pads){const d=dist(o),r=o.r*Z;near(d-r,Math.max(8,22-r),()=>G.pad(o,s,r>=18&&d>=r-8))}
+  for(const[type,list]of [['reader',W.readers],['string',W.strings]])for(const o of list){
+    near(dist({x:o.x1,y:o.y1}),22,()=>G.span(type,o,s,1));near(dist({x:o.x2,y:o.y2}),22,()=>G.span(type,o,s,2));
+    near(segDist(p,o.x1,o.y1,o.x2,o.y2)*Z+8,22,()=>G.span(type,o,s,0))}
+  for(const o of W.belts)for(const l of beltLines(o))near(segDist(p,...l)*Z+10,22,()=>G.belt(o));
+  if(best)return best.make();
+  const c=pickCog(p,()=>true,14/Z);
+  if(c){const d=dist(c),Rs=radius(c)*Z;
+    if(Rs>=30&&Math.abs(d-Rs)<=14)return G.rim(c,s);
+    if(noteMode(c)&&d>Math.max(22,Rs*.2)&&cellAt(c,p))return G.notes(c,s);
+    return G.cog(c,s)}
+  return G.pan(s);
+}
+
+function pointerGesture(e,s){
+  if(e.ctrlKey||e.metaKey)return G.marquee(s);
+  if(ui.armed&&!offStage(s))return G.armed(ui.armed,s);
+  const g=begin(s);
+  if(group.length>1&&g.o&&group.some(x=>x.o===g.o)){g.cancel?.();return G.group(s)}
+  if(group.length&&!g.o?.track)group=[];
+  return g;
+}
+cv.addEventListener('contextmenu',e=>e.preventDefault());
+const local=e=>{const r=cv.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top}};
+function zoomAt(s,zoom,anchor){S.zoom=clamp(zoom,ZMIN,ZMAX);view.x=anchor.x-(s.x-CW/2)/S.zoom;view.y=anchor.y-(s.y-CH/2)/S.zoom}
+const fingers=new Map();let pinch=null,gesture=null;
+function pinchNow(){const[a,b]=[...fingers.values()];return {mid:{x:(a.x+b.x)/2,y:(a.y+b.y)/2},d:Math.hypot(a.x-b.x,a.y-b.y)||1}}
+function dropGesture(){
+  if(gesture){const g=gesture.g;if(g.cancel)g.cancel();else if(gesture.moved)g.up?.(gesture.last);gesture=null}
+  ui.scrap=false;ui.crank=null;ui.carry=null;
+}
+cv.addEventListener('pointerdown',e=>{
+  cv.setPointerCapture(e.pointerId);const s=local(e);fingers.set(e.pointerId,s);ui.cam=null;
+  if(fingers.size===2){dropGesture();const p=pinchNow();pinch={...p,zoom:S.zoom,anchor:screenToWorld(p.mid)};return}
+  if(fingers.size===1&&!pinch)gesture={id:e.pointerId,g:pointerGesture(e,s),s0:s,last:s,t0:e.timeStamp,moved:false};
+});
+cv.addEventListener('pointermove',e=>{
+  if(!fingers.has(e.pointerId))return;const s=local(e);fingers.set(e.pointerId,s);
+  if(pinch){if(fingers.size>=2){const p=pinchNow();zoomAt(p.mid,pinch.zoom*p.d/pinch.d,pinch.anchor)}return}
+  if(!gesture||gesture.id!==e.pointerId)return;
+  gesture.last=s;ui.t=e.timeStamp;
+  if(!gesture.moved&&Math.hypot(s.x-gesture.s0.x,s.y-gesture.s0.y)<8)return;
+  gesture.moved=true;gesture.g.move?.(s);
+});
+const endPointer=e=>{
+  if(!fingers.delete(e.pointerId))return;
+  if(pinch){if(!fingers.size){pinch=null;changed()}return}
+  if(!gesture||gesture.id!==e.pointerId)return;
+  const g=gesture;gesture=null;const s=local(e);
+  ui.t=e.timeStamp;if(g.moved||e.timeStamp-g.t0>450){g.g.up?.(s);return}
+  const t=e.timeStamp,l=ui.lastTap;
+  if(l&&t-l.t<400&&Math.hypot(s.x-l.s.x,s.y-l.s.y)<30&&l.o===g.g.o&&g.g.dbl){ui.lastTap=null;g.g.dbl(s)}
+  else{ui.lastTap={t,s,o:g.g.o};g.g.tap?.(s)}
+};
+cv.addEventListener('pointerup',endPointer);cv.addEventListener('pointercancel',endPointer);
+// Trackpad pinch arrives as wheel with ctrlKey and small deltas; a mouse notch is ~100 px, or 3 lines.
+cv.addEventListener('wheel',e=>{
+  e.preventDefault();ui.cam=null;const s=local(e),dy=e.deltaY*(e.deltaMode===1?33:e.deltaMode===2?CH:1);
+  zoomAt(s,S.zoom*Math.exp(-dy*(e.ctrlKey?.01:.002)),screenToWorld(s));
+},{passive:false});
+document.addEventListener('pointerup',initAudio);
+document.addEventListener('keydown',e=>{
+  initAudio();
+  if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;
+  const k=e.key.toLowerCase();
+  if((e.ctrlKey||e.metaKey)&&!e.altKey&&(k==='z'||k==='y')){e.preventDefault();if(k==='z'&&!e.shiftKey)edits.undo();else edits.redo();return}
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
+  if(PART_KEYS[k])armPart(PART_KEYS[k]);else if(k==='s'||k==='escape')armPart(null);
+  else if(e.key==='?')togglePanel();else if(e.key==='0')flyFit();
+  else if(e.key==='Delete'||e.key==='Backspace')removeSel();else if(e.key===' '){e.preventDefault();setPaused(!clock.paused)}
+});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&ac&&ac.state!=='running')ac.resume()});
+addEventListener('resize',resize);
+function armPart(kind){ui.armed=kind;cv.style.cursor=kind?'crosshair':''}
+const BRUSH_DEFAULT={p:1,v:1},EU_DEFAULT={ring:0,k:3,rot:0},brush={...BRUSH_DEFAULT},eu={...EU_DEFAULT};
+
+const dotAt=(t,ring,a)=>t.dots.findIndex(o=>o.ring===ring&&Math.abs(wrap(o.a-a+Math.PI)-Math.PI)<1e-6);
+function setDot(t,cell,on){const i=dotAt(t,cell.ring,cell.a);if(on&&i<0)t.dots.push(cell);else if(!on&&i>=0)t.dots.splice(i,1)}
+
+/* ---------- roll: the disc unwrapped into a strip, time left to right ---------- */
+const NOTE_NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const noteName=m=>NOTE_NAMES[m%12]+(Math.floor(m/12)-1);
+let roll=null;
+const rollDir=c=>c.w<0?-1:1;
+const rollU=(c,a)=>wrap(-rollDir(c)*a)/TAU;
+function readerPlayheads(c){
+  const R=ringR(c,Math.floor((c.track.rings-1)/2)),th=renderTh(c),out=[];
+  for(const rd of W.readers){
+    const dx=rd.x2-rd.x1,dy=rd.y2-rd.y1,fx=rd.x1-c.x,fy=rd.y1-c.y,A=dx*dx+dy*dy,B=2*(fx*dx+fy*dy),disc=B*B-4*A*(fx*fx+fy*fy-R*R);
+    if(!A||disc<0)continue;
+    for(const s of [(-B-Math.sqrt(disc))/(2*A),(-B+Math.sqrt(disc))/(2*A)])
+      if(s>=0&&s<=1)out.push({rd,u:rollU(c,Math.atan2(fy+dy*s,fx+dx*s)-th)});
+  }
+  return out;
+}
+function rollGeom(){const t=roll.c.track,L=roll.label,cw=Math.max(6,Math.floor((roll.box.clientWidth-L)/t.div));return {cw,W:L+cw*t.div,H:roll.row*t.rings}}
+function rollCell(e){
+  const t=roll.c.track,g=rollGeom(),r=roll.cv.getBoundingClientRect();
+  const col=Math.floor((e.clientX-r.left-roll.label)/g.cw),row=Math.floor((e.clientY-r.top)/roll.row);
+  if(col<0||col>=t.div||row<0||row>=t.rings)return null;
+  return {ring:t.rings-1-row,a:wrap(-rollDir(roll.c)*col*TAU/t.div)};
+}
+function drawRoll(){
+  const c=roll.c,t=c.track,g=rollGeom(),cv2=roll.cv,x=cv2.getContext('2d'),gw=g.cw*t.div,L=roll.label,RH=roll.row;
+  if(cv2.width!==g.W*dpr||cv2.height!==g.H*dpr){cv2.width=g.W*dpr;cv2.height=g.H*dpr;cv2.style.width=g.W+'px';cv2.style.height=g.H+'px'}
+  x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle=BG;x.fillRect(0,0,g.W,g.H);
+  x.font=`${clamp(Math.round(RH*.7),9,12)}px monospace`;x.textBaseline='middle';
+  for(let row=0;row<t.rings;row++){
+    const note=ringNote(t,t.rings-1-row),y=row*RH;
+    x.fillStyle=DIM;x.fillText(noteName(note),2,y+RH/2);
+    if(note%12===t.base%12){x.fillStyle=PAD;x.fillRect(L,y,gw,RH)}
+  }
+  x.lineWidth=1;
+  for(let k=0;k<=t.div;k++){x.strokeStyle=k%4?FAINT:DIM;x.beginPath();x.moveTo(L+k*g.cw+.5,0);x.lineTo(L+k*g.cw+.5,g.H);x.stroke()}
+  x.strokeStyle=FAINT;
+  for(let r=0;r<=t.rings;r++){x.beginPath();x.moveTo(L,r*RH+.5);x.lineTo(L+gw,r*RH+.5);x.stroke()}
+  for(const d of t.dots){
+    if(d.ring>=t.rings)continue;
+    const hgt=(RH-1)*(.35+.65*d.v);
+    x.fillStyle=hot(d.flash,FG,x);x.globalAlpha*=.3+.7*d.p;x.fillRect(L+rollU(c,d.a)*gw+1,(t.rings-d.ring)*RH-hgt,g.cw-1,hgt);x.globalAlpha=1;
+  }
+  x.lineWidth=2;
+  for(const p of readerPlayheads(c)){x.strokeStyle=hot(p.rd.flash,READ,x);x.beginPath();x.moveTo(L+p.u*gw,0);x.lineTo(L+p.u*gw,g.H);x.stroke();x.globalAlpha=1}
+}
+// The strip goes into `strip`, its controls into `tools`; row and label are in CSS px.
+function rollSection(c,{strip,tools,row,label}){
+  const t=c.track,cv2=el('canvas'),box=el('div',{className:'roll'},cv2);
+  box.style.cssText='overflow-x:auto;margin:4px 0';cv2.style.cssText='display:block;touch-action:none;cursor:crosshair';
+  roll={cv:cv2,box,c,row,label};let paint=null;
+  cv2.onpointerdown=e=>{const cell=rollCell(e);if(!cell)return;cv2.setPointerCapture(e.pointerId);paint=dotAt(t,cell.ring,cell.a)<0;setDot(t,{...cell,...brush},paint)};
+  cv2.onpointermove=e=>{if(paint===null)return;const cell=rollCell(e);if(cell)setDot(t,{...cell,...brush},paint)};
+  cv2.onpointerup=cv2.onpointercancel=()=>{if(paint!==null){paint=null;changed()}};
+  const shift=k=>()=>{const s=rollDir(c)*TAU/t.div;for(const d of t.dots)d.a=wrap(d.a-k*s);changed()};
+  strip.append(box);
+  tools.append(el('button',{textContent:'shift <',onclick:shift(-1)}),el('button',{textContent:'shift >',onclick:shift(1)}));
+  numRow(tools,'brush p',0,1,.01,...bind(brush,'p'),BRUSH_DEFAULT.p);
+  numRow(tools,'brush vel',0,1,.01,...bind(brush,'v'),BRUSH_DEFAULT.v);
+  for(const[k,max]of [['ring',35],['k',96],['rot',95]])numRow(tools,'euclid '+k,0,max,1,...bind(eu,k),EU_DEFAULT[k]);
+  tools.append(el('button',{textContent:'euclid fill',onclick:()=>{
+    const n=t.div,ring=Math.min(eu.ring,t.rings-1);t.dots=t.dots.filter(d=>d.ring!==ring);
+    for(let j=0;j<n;j++)if(((j+eu.rot)*eu.k)%n<eu.k)t.dots.push({ring,a:wrap(-rollDir(c)*j*TAU/n),...brush});
+    changed()}}));
+  for(const rd of new Set(readerPlayheads(c).map(p=>p.rd)))tools.append(el('button',{textContent:'reader '+rd.id+' patch',onclick:()=>select('reader',rd)}));
+}
+
+/* ---------- panel ---------- */
+const panel=$('#panel'),rows=[],readouts=[];
+function el(tag,props={},...kids){const e=Object.assign(document.createElement(tag),props);e.append(...kids);return e}
+function section(title,parent=panel){const f=el('fieldset',{},el('legend',{textContent:title}));parent.append(f);return f}
+// A slider and its number. Wheel over either nudges by 1% of the range, shift by one step;
+// shift-drag on the slider moves ten times finer; double-click resets to `def` when there is one.
+function numRow(parent,label,min,max,step,get,set,def){
+  const range=el('input',{type:'range',min,max,step}),num=el('input',{type:'number',min,max,step});
+  const sync=()=>{const v=get();range.value=v;num.value=+(+v).toFixed(4)};
+  const put=v=>{if(!Number.isFinite(v))return;set(clamp(+(Math.round(v/step)*step).toFixed(6),min,max));sync()};
+  range.oninput=()=>put(+range.value);num.oninput=()=>{const v=+num.value;if(Number.isFinite(v)){set(clamp(v,min,max));sync()}};num.onchange=sync;
+  const coarse=Math.max(1,Math.round((max-min)/100/step))*step;
+  const nudge=e=>{e.preventDefault();put(+get()-Math.sign(e.deltaY||e.deltaX)*(e.shiftKey?step:coarse))};
+  range.onwheel=num.onwheel=nudge;
+  range.onmousedown=e=>{
+    if(!e.shiftKey)return;e.preventDefault();
+    const x0=e.clientX,v0=+get(),per=(max-min)/range.clientWidth/10;
+    const move=m=>put(v0+(m.clientX-x0)*per),up=()=>{removeEventListener('mousemove',move);removeEventListener('mouseup',up)};
+    addEventListener('mousemove',move);addEventListener('mouseup',up);
+  };
+  const row=el('div',{className:'row'},el('span',{textContent:label}),range,num);row.dataset.k=label;
+  if(def!==undefined){row.ondblclick=()=>put(def);row.title='double-click: '+def}
+  parent.append(row);rows.push(sync);sync();return row;
+}
+function selRow(parent,label,options,get,set){
+  const s=el('select',{},...options.map(o=>el('option',{value:o,textContent:o})));
+  const sync=()=>{s.value=get()};s.onchange=()=>set(s.value);
+  const row=el('div',{className:'row'},el('span',{textContent:label}),s,el('span'));row.dataset.k=label;
+  parent.append(row);rows.push(sync);sync();return row;
+}
+function roRow(parent,label,fn){const b=el('b');const row=el('div',{className:'ro'},el('span',{textContent:label}),b);row.dataset.k=label;parent.append(row);readouts.push([b,fn])}
+const bind=(o,k,after)=>[()=>o[k],v=>{o[k]=v;after&&after()}];
+const syncRows=()=>{for(const s of rows)s()};
+
+// Every build shows the same sections; `lead` adds its own transport buttons first.
+function buildPanel(lead){
+  const tr=section('transport');
+  const btn=(label,fn)=>{const b=el('button',{textContent:label,onclick:fn});b.dataset.act=label;tr.append(b);return b};
+  lead?.(btn);
+  btn('undo',()=>edits.undo());btn('redo',()=>edits.redo());
+  btn('audio',initAudio);btn('pause',()=>setPaused(!clock.paused));btn('del',removeSel);
+  btn('demo',demo);btn('clear',()=>deserialize({S:{...S},SPACE:{...SPACE},view:{x:0,y:0},cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[]}));
+  btn('reset hits',()=>{for(const o of [...W.pads,...W.readers,...W.strings])o.hits=0;stats.events=stats.late=0;stats.log.length=0});
+  const st=section('stats');
+  roRow(st,'audio',()=>`${ac?ac.state:'off'} ${engineState}${ac?' '+ac.sampleRate+'Hz '+(1000*(ac.baseLatency||0)).toFixed(1)+'ms':''}`);
+  roRow(st,'clock',()=>`${clock.audio?'audio':'perf'} ${clock.paused?'paused':'run'} t=${clock.view.toFixed(2)}`);
+  roRow(st,'ahead ms',()=>(1000*(simT-clock.view)).toFixed(1));
+  roRow(st,'steps/tick',()=>stats.stepsTick);
+  roRow(st,'events',()=>`${stats.events} late ${stats.late}`);
+  roRow(st,'engine',()=>`v${engineStats.voices??'-'} s${engineStats.strikes??'-'} st${engineStats.steals??'-'} dr${engineStats.drops??'-'}`);
+  roRow(st,'peak dB',()=>peak>0?(20*Math.log10(peak)).toFixed(1):'-inf');
+  roRow(st,'storage',()=>storage.ok?'local':'off: '+storage.why+', use json export');
+  roRow(st,'world',()=>`c${W.cogs.length} a${W.arms.length} p${W.pads.length} r${W.readers.length} b${W.belts.length} s${W.strings.length}`);
+  inspector=section('selection');inspector.id='inspector';
+  const wf=section('world');
+  for(const[k,l,mn,mx,st2]of S_DEFS)numRow(wf,l,mn,mx,st2,...bind(S,k,()=>{applyAudioSettings();if(/Tol|bpm|beats/.test(k))solve()}),S_DEFAULT[k]);
+  const sp=section('space');
+  for(const[k,l,mn,mx,st2]of SPACE_DEFS)numRow(sp,l,mn,mx,st2,...bind(SPACE,k,applyAudioSettings),SPACE_DEFAULT[k]);
+  const js=section('json'),ta=el('textarea'),msg=el('b');
+  js.append(ta,el('button',{textContent:'export',onclick:()=>{ta.value=JSON.stringify(serialize());msg.textContent='ok'}}),
+    el('button',{textContent:'import',onclick:()=>{try{deserialize(JSON.parse(ta.value));msg.textContent='ok'}catch(e){msg.textContent=e.message}}}),
+    el('button',{textContent:'share',onclick:async()=>{ta.value=await shareURL();
+      try{await navigator.clipboard.writeText(ta.value);msg.textContent='url copied'}catch(e){msg.textContent='url in box; clipboard: '+e.name}}}),msg);
+  panelRows=rows.length;panelReadouts=readouts.length;
+}
+function applyAudioSettings(){
+  if(master)master.gain.value=S.master;
+  if(engineNode)engineNode.port.postMessage({type:'space',...SPACE});
+}
+let inspector=null,panelRows=0,panelReadouts=0;
+const REVS=['-2','-1','-1/2','-1/3','-1/4','0','1/8','1/6','1/4','1/3','1/2','2/3','3/4','1','4/3','3/2','2','3','4','6','8'];
+const frac=s=>{const[a,b=1]=s.split('/').map(Number);return a/b};
+function select(type,o){sel=type?{type,o}:null;group=[];if(panelOpen())buildInspector()}
+function voiceRows(f,owner,withNote){
+  const v=owner.voice;
+  selRow(f,'kind',Object.keys(VOICES),()=>v.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense});buildInspector();changed()});
+  for(const[k,l,a,b,s]of [...VOICE_DEFS[v.kind],...COMMON_DEFS]){
+    if(k==='note'&&!withNote)continue;
+    if(Array.isArray(a))selRow(f,l,a,()=>v[k],x=>{v[k]=x;changed()});else numRow(f,l,a,b,s,...bind(v,k,changed),makeVoice(v.kind)[k]);
+  }
+}
+function buildInspector(){
+  if(!inspector)return;
+  rows.length=panelRows;readouts.length=panelReadouts;
+  roll=null;
+  inspector.replaceChildren(el('legend',{textContent:sel?`${sel.type} ${sel.o.id}`:'selection'}));
+  const o=sel&&sel.o,f=inspector;
+  if(sel&&sel.type==='cog'){
+    numRow(f,'teeth',6,240,1,...bind(o,'n',()=>changed(true)));
+    numRow(f,'motor rpm',-600,600,.1,...bind(o,'motor',()=>changed(true)));
+    selRow(f,'revs/bar',REVS,()=>REVS.reduce((a,b)=>Math.abs(frac(b)-o.revs)<Math.abs(frac(a)-o.revs)?b:a),v=>{o.revs=frac(v);changed(true)});
+    numRow(f,'layer',0,7,1,...bind(o,'layer',()=>changed(true)));
+    numRow(f,'x',-3000,3000,.5,...bind(o,'x',()=>changed(true)));
+    numRow(f,'y',-3000,3000,.5,...bind(o,'y',()=>changed(true)));
+    numRow(f,'phase deg',0,360,.1,()=>wrap(o.th)*180/Math.PI,v=>{o.th=v*Math.PI/180;changed()});
+    roRow(f,'radius',()=>radius(o).toFixed(2));
+    roRow(f,'rpm',()=>(o.w*60/TAU).toFixed(3));
+    roRow(f,'period ms',()=>o.w?(1000*TAU/Math.abs(o.w)).toFixed(2):'-');
+    roRow(f,'ratio',()=>o.driver?`${(o.w/o.driver.w||0).toFixed(4)} of c${o.driver.id}`:'-');
+    roRow(f,'state',()=>o.jam?'JAM':o.w?'turning':'idle');
+    if(o.track){
+      const t=o.track;
+      numRow(f,'rings',1,36,1,...bind(t,'rings',()=>{t.dots=t.dots.filter(d=>d.ring<t.rings);changed()}),TRACK_DEFAULT.rings);
+      numRow(f,'base midi',12,108,1,...bind(t,'base',changed),TRACK_DEFAULT.base);
+      selRow(f,'scale',Object.keys(SCALES),()=>t.scale,v=>{t.scale=v;changed()});
+      numRow(f,'div',1,96,1,...bind(t,'div',changed),TRACK_DEFAULT.div);
+      roRow(f,'dots',()=>t.dots.length);
+      placeRoll(o,f);
+      f.append(el('button',{textContent:'clear dots',onclick:()=>{t.dots=[];changed()}}),
+        el('button',{textContent:'drop track',onclick:()=>{o.track=null;buildInspector();changed()}}));
+    }else f.append(el('button',{textContent:'add track',onclick:()=>{o.track=newTrack();buildInspector();changed()}}));
+  }else if(sel&&sel.type==='arm'){
+    numRow(f,'angle deg',0,360,.1,()=>o.a*180/Math.PI,v=>{o.a=v*Math.PI/180;changed()});
+    numRow(f,'r0',0,500,.5,...bind(o,'r0',changed));
+    numRow(f,'len',1,800,.5,...bind(o,'len',changed));
+    numRow(f,'flex',0,1,.01,...bind(o,'flex',changed),.5);
+    roRow(f,'cog',()=>'c'+o.cog.id);
+    roRow(f,'tip px/s',()=>(Math.abs(o.cog.w)*(o.r0+o.len)).toFixed(1));
+  }else if(sel&&sel.type==='pad'){
+    numRow(f,'x',-3000,3000,.5,...bind(o,'x',changed));
+    numRow(f,'y',-3000,3000,.5,...bind(o,'y',changed));
+    numRow(f,'radius',2,200,.5,...bind(o,'r',changed));
+    voiceRows(f,o,true);
+    roRow(f,'hits',()=>o.hits);
+    roRow(f,'last vn',()=>o.lastV.toFixed(1));
+  }else if(sel&&sel.type==='reader'){
+    for(const k of ['x1','y1','x2','y2'])numRow(f,k,-3000,3000,.5,...bind(o,k,changed));
+    voiceRows(f,o,false);
+    numRow(f,'comb tines',0,36,1,...bind(o,'tines',changed),0);
+    numRow(f,'comb base',12,108,1,...bind(o,'combBase',changed),60);
+    roRow(f,'last note',()=>o.lastMidi==null?'-':noteName(o.lastMidi));
+    selRow(f,'comb scale',Object.keys(SCALES),()=>o.combScale,v=>{o.combScale=v;changed()});
+    roRow(f,'hits',()=>o.hits);
+    roRow(f,'last vn',()=>o.lastV.toFixed(1));
+  }else if(sel&&sel.type==='belt'){
+    numRow(f,'crossed',0,1,1,...bind(o,'cross',()=>changed(true)));
+    roRow(f,'ratio',()=>`c${o.b.id}/c${o.a.id} = ${(o.a.w?o.b.w/o.a.w:(o.cross?-1:1)*o.a.n/o.b.n).toFixed(4)}`);
+  }else if(sel&&sel.type==='string'){
+    selRow(f,'kind',['string','bar'],()=>o.kind,v=>{o.kind=v;changed()});
+    numRow(f,'f @200px',20,2000,1,...bind(o,'f200',changed),STRING_DEFAULT.f200);
+    numRow(f,'quantize',0,1,1,...bind(o,'quant',changed));
+    for(const k of ['decay','damp','hard','level','velSense'])numRow(f,k,0,k==='decay'?8:k==='damp'?2:k==='level'?1.5:1,.01,...bind(o,k,changed),STRING_DEFAULT[k]);
+    for(const k of ['x1','y1','x2','y2'])numRow(f,k,-3000,3000,.5,...bind(o,k,changed));
+    roRow(f,'length',()=>stringLen(o).toFixed(1));
+    roRow(f,'note',()=>{const m=stringMidi(o);return noteName(Math.round(m))+' '+m.toFixed(2)});
+    roRow(f,'hits',()=>o.hits);
+    roRow(f,'last u',()=>(o.lastU??0).toFixed(3));
+  }
+}
+function refreshInspector(){if(panelOpen())syncRows()}
+
+/* ---------- loop ---------- */
+let roAt=0;const meterBuf=new Float32Array(2048);
+function tick(){
+  syncClock();
+  if(!clock.paused)advance(nowSec()-clock.off+S.lookahead);
+}
+// currentTime advances in whole audio callbacks (10-40 ms on phones) and holds the start of the
+// current one, so drawing from it stutters; the largest recent (currentTime - performance.now)
+// is the true offset. getOutputTimestamp is not used: headless Chrome reports stale pairs.
+const audioOffsets=[];let heardOffset=null,lastFrameSec=0;
+function heardAt(frameSec){
+  if(!clock.audio)return nowSec()-clock.off;
+  audioOffsets.push(ac.currentTime-performance.now()/1000);if(audioOffsets.length>90)audioOffsets.shift();
+  const target=Math.max(...audioOffsets)-(ac.outputLatency||ac.baseLatency||0)+clock.shift-clock.off;
+  const dt=clamp(frameSec-lastFrameSec,0,.1),err=target-heardOffset;lastFrameSec=frameSec;
+  if(heardOffset===null||Math.abs(err)>.25)heardOffset=target;else heardOffset+=clamp(err,-.02*dt,.02*dt);
+  return frameSec+heardOffset;
+}
+function frame(ts){
+  syncClock();
+  if(!clock.paused)clock.view=Math.max(clock.view,heardAt(ts/1000));
+  if(meter){meter.getFloatTimeDomainData(meterBuf);let m=0;for(const x of meterBuf)m=Math.max(m,Math.abs(x));peak=Math.max(m,peak*.95)}
+  stepCamera();draw();drawGroup();
+  const now=performance.now();
+  if(roll&&roll.cv.offsetParent)drawRoll();
+  if(panelOpen()&&now-roAt>250){roAt=now;readPalette();for(const[b,fn]of readouts)b.textContent=fn()}
+  requestAnimationFrame(frame);
+}
+/* ---------- desk: the right toolbar and the roll dock ---------- */
+const bar=$('#bar'),rail=$('#rail'),dock=$('#dock'),dockTools=$('#dock-tools'),dockStrip=$('#dock-strip');
+function onResize(){}
+const barLeft=()=>bar.getBoundingClientRect().left;
+const stage=()=>({l:0,r:barLeft(),t:0,b:dock.hidden?CH:dock.getBoundingClientRect().top});
+const offStage=s=>s.x>=barLeft();
+const chromeHit=()=>null;
+function reveal(){}
+const panelOpen=()=>true;
+function togglePanel(open=!bar.classList.contains('open')){bar.classList.toggle('open',open)}
+function placeRoll(c){
+  const t=c.track;
+  dockTools.replaceChildren(el('h3',{textContent:`disc ${c.id} · ${t.rings} rings · ${t.div} steps`}));dockStrip.replaceChildren();
+  rollSection(c,{strip:dockStrip,tools:dockTools,row:clamp(Math.floor((innerHeight*.44-16)/t.rings),14,26),label:44});
+}
+function drawChrome(){if(ui.carry&&ui.carry.ghost)drawGhost(ui.carry.ghost);syncChrome()}
+const railButtons={};
+function railButton(id,label,key,title,act,icon){
+  const b=el('button',{title:`${title} (${key})`,onclick:act,onmousedown:e=>e.preventDefault()});
+  if(icon)b.append(icon);b.append(el('span',{textContent:label}),el('kbd',{textContent:key}));
+  b.dataset.rail=id;rail.append(b);railButtons[id]=b;return b;
+}
+function partIcon(kind){
+  const c=el('canvas'),r=devicePixelRatio||1,s=(ICON_SCALE[kind]||.8)*.6,main=cx,px=PX;
+  c.width=40*r;c.height=30*r;cx=c.getContext('2d');cx.setTransform(r*s,0,0,r*s,20*r,15*r);PX=1/s;drawPartIcon(kind);cx=main;PX=px;
+  return c;
+}
+let chromeState='';
+function syncChrome(){
+  const open=bar.classList.contains('open'),right=bar.offsetWidth+'px';
+  if(dock.style.right!==right)dock.style.right=right;
+  if(dock.hidden===!!roll)dock.hidden=!roll;
+  const state=[ui.armed,clock.paused,edits.past.length,edits.future.length,open,ui.scrap].join();
+  if(state===chromeState)return;chromeState=state;
+  bar.classList.toggle('scrap',ui.scrap);
+  for(const kind of PARTS)railButtons[kind].classList.toggle('on',ui.armed===kind);
+  railButtons.select.classList.toggle('on',!ui.armed);
+  railButtons.panel.firstChild.textContent=open?'panel ›':'‹ panel';
+  railButtons.pause.firstChild.textContent=clock.paused?'play':'pause';railButtons.pause.classList.toggle('on',clock.paused);
+  railButtons.undo.disabled=!edits.past.length;railButtons.redo.disabled=!edits.future.length;
+}
+function mount(){
+  buildPanel();
+  const legend=t=>[...panel.children].find(f=>f.firstChild.textContent===t);
+  panel.insertBefore(legend('stats'),legend('json'));
+  railButton('panel','panel','?','show or hide the panel',()=>togglePanel()).classList.add('toggle');
+  for(const kind of PARTS)railButton(kind,kind,KEY_OF[kind],'place a '+kind,()=>armPart(ui.armed===kind?null:kind),partIcon(kind));
+  rail.append(el('hr'));
+  railButton('select','select','s','select and move: disarm the part',()=>armPart(null));
+  railButton('undo','undo','ctrl z','undo',()=>edits.undo());
+  railButton('redo','redo','ctrl ⇧z','redo',()=>edits.redo());
+  railButton('pause','pause','space','pause or play',()=>setPaused(!clock.paused));
+  railButton('fit','fit','0','fit the machine in view',flyFit);
+  railButton('delete','delete','del','delete the selection',removeSel);
+}
+const PROBE={stage,
+  get open(){return bar.classList.contains('open')},
+  get roll(){if(!roll||dock.hidden)return null;const g=rollGeom(),r=roll.cv.getBoundingClientRect();
+    return {x:r.left,y:r.top,label:roll.label,row:roll.row,cw:g.cw,rings:roll.c.track.rings,div:roll.c.track.div,id:roll.c.id}}};
+/* ---------- boot ---------- */
+mount();resize();
+const saved=storage.get(),shared=location.hash.match(/^#w=([\w-]+)/);
+if(saved)try{deserialize(JSON.parse(saved))}catch(e){console.error('cogs: saved world rejected:',e.message);demo()}
+else{demo();const f=fitTarget();Object.assign(view,{x:f.x,y:f.y});S.zoom=f.z}
+edits.reset();
+if(shared)loadShared(shared[1]).then(()=>edits.reset()).catch(e=>console.error('cogs: shared world rejected:',e.message));
+clock.off=nowSec()-simT;
+window.__cogs=Object.defineProperties({W,S,SPACE,stats,clock,get simT(){return simT},serialize,deserialize,solve,toScreen,radius,ringR,armTip,beltLines,stringLen,
+  get sel(){return sel&&{type:sel.type,id:sel.o.id}},get group(){return group.map(g=>g.type).sort()},get armed(){return ui.armed},get flying(){return !!ui.cam},
+  engine:()=>({state:engineState,ac:ac&&ac.state,...engineStats}),
+  worldKey,undo:()=>edits.undo(),redo:()=>edits.redo(),get undos(){return edits.past.length},get redos(){return edits.future.length},get pending(){return edits.pending},commit:()=>edits.commit()},Object.getOwnPropertyDescriptors(PROBE));
+setInterval(tick,15);requestAnimationFrame(frame);
+</script>
+</body>
+</html>
