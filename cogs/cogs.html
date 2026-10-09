@@ -687,7 +687,8 @@ function changed(structural){
 }
 // Undo: one step per finished action. A step settles when the pointer lifts, or after a quiet
 // spell for wheel and keyboard edits. Camera, pause, selection and cog phase are never undone.
-const worldKey=()=>{const j=JSON.parse(JSON.stringify(serialize()));delete j.view;delete j.S.zoom;for(const c of j.cogs)delete c.th;return JSON.stringify(j)};
+const UNDONE_ELSEWHERE=new Set(['view','zoom','th']);
+const worldKey=()=>JSON.stringify(serialize(),(k,v)=>UNDONE_ELSEWHERE.has(k)?undefined:v);
 const EDITS_MAX=500,EDITS_QUIET=350;
 const edits={past:[],future:[],cur:null,pending:false,timer:0,held:false,
   snap(){return {key:worldKey(),t:simT,phase:new Map(W.cogs.map(c=>[c.id,{th:c.th,w:c.w}]))}},
