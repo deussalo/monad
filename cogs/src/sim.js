@@ -49,7 +49,7 @@ const S_DEFAULT={...S},SPACE_DEFAULT={...SPACE};
 const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],next:1};
 let simT=0,sel=null,group=[],marquee=null;
 const view={x:0,y:0};
-const stats={events:0,late:0,steps:0,stepsTick:0,log:[]};
+const stats={events:0,late:0,skipped:0,steps:0,stepsTick:0,log:[]};
 const clock={off:0,shift:0,audio:false,view:0,paused:false};
 
 const stackOf=c=>W.cogs.filter(o=>Math.hypot(o.x-c.x,o.y-c.y)<=S.coaxTol);
@@ -203,14 +203,17 @@ function pluckSound(s,midi,u,when,amp,pan,vx){
 function flex(arm,t,vn){arm.bendT=t;arm.bendA=Math.min(.6,vn/S.vRef*.5)*arm.flex*(arm.cog.w>0?-1:1)}
 
 function turn(c,dt){const th=c.th+c.w*dt,k=Math.floor(th/TAU);c.th=th-k*TAU;c.turns+=k}
+function segDist(p,x1,y1,x2,y2){const ex=x2-x1,ey=y2-y1,u=clamp(((p.x-x1)*ex+(p.y-y1)*ey)/(ex*ex+ey*ey||1),0,1);return Math.hypot(p.x-x1-ex*u,p.y-y1-ey*u)}
+// A circle of radius R about c can only cross a segment that comes within R of c.
+const within=(c,R,seg)=>segDist(c,seg.x1,seg.y1,seg.x2,seg.y2)<=R+1e-9;
 function advance(tEnd){
-  if(tEnd-simT>.5){const gap=tEnd-S.lookahead-simT;for(const c of W.cogs)turn(c,gap);simT+=gap}
+  if(tEnd-simT>.5){const gap=tEnd-S.lookahead-simT;for(const c of W.cogs)turn(c,gap);simT+=gap;stats.skipped+=gap}
   const pairs=[];
   for(const arm of W.arms){const c=arm.cog;if(!c.w)continue;
     for(const pad of W.pads){const h=hitWindow(c,arm,pad);if(h)pairs.push({c,arm,pad,s:h.s,edge:c.w>0?h.beta-h.half:h.beta+h.half})}}
-  const plucks=[];
-  for(const arm of W.arms)if(arm.cog.w)for(const s of W.strings)plucks.push([arm,s]);
-  const tracks=W.readers.length?W.cogs.filter(c=>c.track&&c.w&&c.track.dots.length):[];
+  const plucks=[],reads=[];
+  for(const arm of W.arms)if(arm.cog.w)for(const s of W.strings)if(within(arm.cog,arm.r0+arm.len,s))plucks.push([arm,s]);
+  for(const c of W.cogs)if(c.track&&c.w)for(const dot of c.track.dots)for(const rd of W.readers)if(within(c,ringR(c,dot.ring),rd))reads.push([c,dot,rd]);
   let maxW=0;for(const c of W.cogs)maxW=Math.max(maxW,Math.abs(c.w));
   stats.stepsTick=0;
   while(simT<tEnd){
@@ -219,7 +222,7 @@ function advance(tEnd){
       const psi=p.c.th+p.arm.a,span=Math.abs(p.c.w)*dt,d0=p.c.w>0?wrap(p.edge-psi):wrap(psi-p.edge);
       if(d0>0&&d0<=span)armHit(p,simT+dt*d0/span);
     }
-    for(const c of tracks)for(const dot of c.track.dots)for(const rd of W.readers)dotCross(c,dot,rd,dt);
+    for(const[c,dot,rd]of reads)dotCross(c,dot,rd,dt);
     for(const[arm,s]of plucks)pluck(arm,s,dt);
     for(const c of W.cogs)turn(c,dt);
     simT+=dt;stats.steps++;stats.stepsTick++;

@@ -258,7 +258,6 @@ function drawGroup(){
 function pickCog(p,filter=()=>true,tol=0){
   return W.cogs.filter(c=>filter(c)&&Math.hypot(c.x-p.x,c.y-p.y)<=radius(c)+tol).sort((a,b)=>b.layer-a.layer||a.n-b.n)[0]||null;
 }
-function segDist(p,x1,y1,x2,y2){const ex=x2-x1,ey=y2-y1,u=clamp(((p.x-x1)*ex+(p.y-y1)*ey)/(ex*ex+ey*ey||1),0,1);return Math.hypot(p.x-x1-ex*u,p.y-y1-ey*u)}
 const discAngle=(c,p)=>Math.atan2(p.y-c.y,p.x-c.x)-renderTh(c);
 function cellAt(c,p){
   const t=c.track,d=Math.hypot(p.x-c.x,p.y-c.y),r=radius(c),ring=t.rings>1?Math.round((d/r-.25)/.65*(t.rings-1)):0;
@@ -699,13 +698,13 @@ function buildPanel(lead){
   btn('undo',()=>edits.undo());btn('redo',()=>edits.redo());
   btn('audio',initAudio);btn('pause',()=>setPaused(!clock.paused));btn('del',removeSel);
   btn('demo',demo);btn('clear',()=>deserialize({S:{...S},SPACE:{...SPACE},view:{x:0,y:0},cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[]}));
-  btn('reset hits',()=>{for(const o of [...W.pads,...W.readers,...W.strings])o.hits=0;stats.events=stats.late=0;stats.log.length=0});
+  btn('reset hits',()=>{for(const o of [...W.pads,...W.readers,...W.strings])o.hits=0;stats.events=stats.late=stats.skipped=0;stats.log.length=0});
   const st=section('stats');
   roRow(st,'audio',()=>`${ac?ac.state:'off'} ${engineState}${ac?' '+ac.sampleRate+'Hz '+(1000*(ac.baseLatency||0)).toFixed(1)+'ms':''}`);
   roRow(st,'clock',()=>`${clock.audio?'audio':'perf'} ${clock.paused?'paused':'run'} t=${clock.view.toFixed(2)}`);
   roRow(st,'ahead ms',()=>(1000*(simT-clock.view)).toFixed(1));
   roRow(st,'steps/tick',()=>stats.stepsTick);
-  roRow(st,'events',()=>`${stats.events} late ${stats.late}`);
+  roRow(st,'events',()=>`${stats.events} late ${stats.late}`+(stats.skipped?` skipped ${stats.skipped.toFixed(1)}s`:''));
   roRow(st,'engine',()=>`v${engineStats.voices??'-'} s${engineStats.strikes??'-'} st${engineStats.steals??'-'} dr${engineStats.drops??'-'}`);
   roRow(st,'peak dB',()=>peak>0?(20*Math.log10(peak)).toFixed(1):'-inf');
   roRow(st,'storage',()=>storage.ok?'local':'off: '+storage.why+', use json export');
