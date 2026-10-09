@@ -220,7 +220,7 @@ class CogsEngine extends AudioWorkletProcessor{
     this.dryL=new Float32Array(BLOCK);this.dryR=new Float32Array(BLOCK);
     this.maxStarts=4*V;this.maxWait=8*BLOCK;
     this.reset(o);this.warm(o);
-    this.port.onmessage=ev=>{const m=ev.data;if(m.type==='strikes')this.queue.push(m.d);else if(m.type==='space')this.space.set(m);else if(m.type==='silence')this.silence();else if(m.type==='release')this.release(m.seconds)};
+    this.port.onmessage=ev=>{const m=ev.data;if(m.type==='strikes')this.queue.push(m.d);else if(m.type==='space')this.space.set(m)};
   }
   // V8 interprets code until it has run enough; cold, the first strike's blocks
   // took 4-8 ms against a 2.7 ms deadline and dropped out as clicks, and the first
@@ -246,15 +246,9 @@ class CogsEngine extends AudioWorkletProcessor{
       this.pl,this.pr,this.plT,this.prT,this.e,this.exc,this.live,this.vb,this.dryL,this.dryR,this.pendAt,this.dl])a.fill(0);
     this.pend.fill(null);this.space.clear(o.space);
     this.queue=[packStrikes((o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0)))];this.queueAt=0;this.queueOff=0;
-    this.frame=0;this.levelBlocks=0;this.quietBlocks=0;this.steals=0;this.drops=0;this.strikes=0;this.statAt=0;this.idle=false;this.muted=false;this.ringing=false;this.idleReported=false;this.waitFrom=-1;
+    this.frame=0;this.quietBlocks=0;this.steals=0;this.drops=0;this.strikes=0;this.statAt=0;this.idle=false;this.muted=false;this.idleReported=false;this.waitFrom=-1;
   }
   post(m,transfer){if(!this.muted)this.port.postMessage(m,transfer)}
-  silence(){this.on.fill(0);this.zr.fill(0);this.zi.fill(0);this.pend.fill(null)}
-  release(seconds){
-    this.queue=[];this.queueAt=0;this.queueOff=0;this.waitFrom=-1;this.pend.fill(null);
-    const step=1/(seconds*sampleRate);
-    for(let v=0;v<this.V;v++)if(this.on[v]&&this.fade[v]===0){this.fade[v]=1;this.fadeStep[v]=step}
-  }
   active(){let n=0;for(let v=0;v<this.V;v++)n+=this.on[v];return n}
   load(v,d,o,off){
     const b=v*MAXM,fs=sampleRate,n=d[o+6],f=o+7,g=f+n,t=g+n,amp=d[o+2];let k=0;
@@ -353,11 +347,6 @@ class CogsEngine extends AudioWorkletProcessor{
     this.idle=this.quietBlocks>this.space.holdBlocks;
     if(!this.idle)this.space.process(dL,dR,L,R,n);
     this.frame=end;
-    if(++this.levelBlocks>=8&&(this.levelBlocks=0,voices||this.ringing)){
-      this.ringing=voices>0;const d=new Float64Array(voices*2);let j=0;
-      for(let v=0;v<this.V;v++)if(this.on[v]){d[j++]=this.key[v];d[j++]=Math.sqrt(this.e[v])}
-      this.post({type:'levels',d},[d.buffer]);
-    }
     if(this.frame-this.statAt>=sampleRate*.25){this.statAt=this.frame;if(!this.idle||!this.idleReported)this.post({type:'stats',voices,steals:this.steals,drops:this.drops,strikes:this.strikes,idle:this.idle});this.idleReported=this.idle}
     return true;
   }
@@ -899,10 +888,6 @@ function drawWindows(){
 }
 function drawGround(){
   cx.setTransform(dpr,0,0,dpr,0,0);cx.fillStyle=BG;cx.fillRect(0,0,CW,CH);
-  if(!S.grid)return;
-  const step=50*S.zoom,ox=((CW/2-view.x*S.zoom)%step+step)%step,oy=((CH/2-view.y*S.zoom)%step+step)%step;
-  cx.strokeStyle=FAINT;cx.lineWidth=1;
-  for(let x=ox;x<CW;x+=step)line(x,0,x,CH);for(let y=oy;y<CH;y+=step)line(0,y,CW,y);
 }
 function draw(){
   cx.globalAlpha=1;drawGround();

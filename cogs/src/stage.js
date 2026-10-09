@@ -106,10 +106,6 @@ function drawWindows(){
 }
 function drawGround(){
   cx.setTransform(dpr,0,0,dpr,0,0);cx.fillStyle=BG;cx.fillRect(0,0,CW,CH);
-  if(!S.grid)return;
-  const step=50*S.zoom,ox=((CW/2-view.x*S.zoom)%step+step)%step,oy=((CH/2-view.y*S.zoom)%step+step)%step;
-  cx.strokeStyle=FAINT;cx.lineWidth=1;
-  for(let x=ox;x<CW;x+=step)line(x,0,x,CH);for(let y=oy;y<CH;y+=step)line(0,y,CW,y);
 }
 function draw(){
   cx.globalAlpha=1;drawGround();

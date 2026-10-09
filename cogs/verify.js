@@ -49,7 +49,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
       async glyph() { await t.tap(await probe(() => { const g = __cogs.glyphAt(); return [g.x, g.y]; })); },
       async dev(open) {
         if (open === await probe(() => !document.querySelector('#dev').hidden)) return;
-        if (open) { const g = await probe(() => { const g = __cogs.glyphAt(); return [g.x, g.y]; }); await T('touchStart', [g]); await wait(750); await T('touchEnd', []); await wait(100); }
+        if (open) { const g = await probe(() => { const g = __cogs.glyphAt(); return [g.x, g.y]; }); await T('touchStart', [g]); await p.waitForFunction(() => !document.querySelector('#dev').hidden); await T('touchEnd', []); await wait(150); }
         else await p.tap('button[data-act=close]');
       },
       async act(label) { await t.dev(true); await p.tap(`button[data-act="${label}"]`); },
