@@ -13,6 +13,7 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #safe{position:fixed;left:0;top:0;width:0;height:0;padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px);pointer-events:none}
 #dev{position:fixed;left:0;right:0;bottom:0;top:max(28vh,calc(env(safe-area-inset-top,0px) + 120px));z-index:10;overflow-y:auto;background:var(--bg);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px);touch-action:pan-y;-webkit-user-select:text;user-select:text}
 #scrim{position:fixed;inset:0;z-index:9;background:rgba(0,0,0,.35)}
+#dev input[type=range]{touch-action:none}
 #dev[hidden],#scrim[hidden]{display:none}
 #panel{max-width:440px;margin:0 auto;padding:6px}
 </style>

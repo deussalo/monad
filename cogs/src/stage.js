@@ -180,7 +180,7 @@ function drawCrankGauge(k){
 }
 
 /* ---------- touch ---------- */
-const ui={armed:null,carry:null,scrap:false,crank:null,cam:null,sector:null,bezelOwner:null,bezelAt:0,lastTap:null,auditionAt:0,snapped:false,t:0,dotOf:null,dotAt:null,sealAt:0,sealOk:false,shared:''};
+const ui={armed:null,room:false,carry:null,scrap:false,crank:null,cam:null,sector:null,bezelOwner:null,bezelAt:0,lastTap:null,auditionAt:0,snapped:false,t:0,dotOf:null,dotAt:null,sealAt:0,sealOk:false,shared:''};
 const wrapPi=a=>wrap(a+Math.PI)-Math.PI;
 function buzz(ms){try{const u=navigator.userActivation;if(navigator.vibrate&&(!u||u.hasBeenActive))navigator.vibrate(ms)}catch(e){}}
 // Play a part now, at a middling velocity, the way the sim would strike it.
@@ -418,7 +418,7 @@ const G={
   },
   pan(s0){
     const vx=view.x,vy=view.y;
-    return {o:null,move(s){view.x=vx-(s.x-s0.x)/S.zoom;view.y=vy-(s.y-s0.y)/S.zoom},up(){changed()},tap(){select(null)},dbl(){flyFit()}};
+    return {o:null,move(s){view.x=vx-(s.x-s0.x)/S.zoom;view.y=vy-(s.y-s0.y)/S.zoom},up(){changed()},tap(){ui.room=!sel&&!ui.room;select(null)},dbl(){flyFit()}};
   },
 };
 function begin(s){

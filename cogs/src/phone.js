@@ -64,16 +64,16 @@ Object.assign(G,{
     return {tap(){clearTimeout(timer);setPaused(!clock.paused)},up(){clearTimeout(timer)},cancel(){clearTimeout(timer)}};
   },
   bezel(b,i,s0){
-    const p=b.sectors[i],steps=stepsOf(p),per=steps?clamp(300/steps,8,40)*Math.PI/180:0;
-    let prev=Math.atan2(s0.y-b.cy,s0.x-b.cx),acc=0;ui.sector=i;
+    const p=b.sectors[i],v0=p.action?0:p.get(),n0=p.options||p.action?0:norm(p),steps=stepsOf(p),per=Math.max(6,DRAG_PX/steps);ui.sector=i;
     const done=()=>{ui.sector=null;changed(true)};
     return {o:b.owner,
       move(s){
         if(p.action)return;
-        const a=Math.atan2(s.y-b.cy,s.x-b.cx),d=wrapPi(a-prev);prev=a;
-        if(p.options||steps){acc+=d/(p.options?.5:per);while(Math.abs(acc)>=1){const sg=Math.sign(acc);acc-=sg;
-          if(p.options)stepChoice(p,sg);else p.set(clamp(p.get()+sg*p.step,p.min,p.max));buzz(3);audition(b.owner,true)}}
-        else{setNorm(p,norm(p)+d/(300*Math.PI/180));audition(b.owner)}
+        const dy=s0.y-s.y,was=p.get();
+        if(p.options)stepChoice(p,Math.round(dy/OPTION_PX),v0);
+        else if(steps)p.set(clamp(v0+Math.round(dy/per)*p.step,p.min,p.max));
+        else setNorm(p,n0+dy/DRAG_PX);
+        if(p.get()!==was){if(p.options||steps)buzz(3);audition(b.owner,!!(p.options||steps))}
       },
       tap(){if(p.action)p.action();else{if(p.options){stepChoice(p,1);buzz(4)}audition(b.owner,true)}done()},
       up:done,cancel:done,
@@ -81,7 +81,7 @@ Object.assign(G,{
   },
 });
 
-// A bezel is a ring of sectors around its owner. Each sector is one parameter: drag around it to turn it.
+// A bezel is a ring of sectors around its owner. Each sector is one parameter: drag up or down from it to turn it.
 const ICON={
   fork:'M9 3v8a3 3 0 0 0 6 0V3M12 14v7M9.5 21h5',bell:'M6 17c0-7 2.5-11 6-11s6 4 6 11zM4 17h16M11 20h2',bend:'M3 18C10 18 12 6 21 6',
   bright:'M12 8a4 4 0 1 1-.01 0M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2',hard:'M12 3l7 9-7 9-7-9z',
@@ -136,12 +136,11 @@ async function share(){
 const norm=p=>p.log?Math.log(p.get()/p.min)/Math.log(p.max/p.min):(p.get()-p.min)/(p.max-p.min);
 const stepsOf=p=>!p.options&&!p.action&&p.step>=1&&(p.max-p.min)/p.step<=120?(p.max-p.min)/p.step:0;
 function setNorm(p,n){n=clamp(n,0,1);const x=p.log?p.min*Math.pow(p.max/p.min,n):p.min+(p.max-p.min)*n;p.set(clamp(+(Math.round(x/p.step)*p.step).toFixed(6),p.min,p.max))}
-function stepChoice(p,d){const i=p.options.indexOf(p.get());p.set(p.options[(i+d+p.options.length)%p.options.length])}
-const roomMode=()=>S.zoom<fitTarget().fit*.55;
+function stepChoice(p,d,from=p.get()){const i=p.options.indexOf(from);p.set(p.options[(i+d+p.options.length)%p.options.length])}
 function activeBezel(){
   if(ui.carry)return null;
   let b=null;const o=sel&&sel.o,ring=(at,size,sectors)=>{const c=toScreen(at);return {cx:c.x,cy:c.y,R:clamp(size+46,92,132),sectors,owner:o}};
-  if(!sel){if(roomMode())b={cx:CW/2,cy:(safeTop+shelfTop())/2,R:Math.min(CW,shelfTop()-safeTop)/2-44,sectors:roomSectors(),owner:SPACE}}
+  if(!sel){if(ui.room)b={cx:CW/2,cy:(safeTop+shelfTop())/2,R:Math.min(CW,shelfTop()-safeTop)/2-44,sectors:roomSectors(),owner:SPACE}}
   else if(sel.type==='pad')b=ring(o,o.r*S.zoom,voiceSectors(o,true));
   else if(sel.type==='reader')b=ring(mid(o),stringLen(o)*S.zoom/2,readerSectors(o));
   else if(sel.type==='string')b=ring(mid(o),stringLen(o)*S.zoom/2,stringSectors(o));
@@ -151,7 +150,7 @@ function activeBezel(){
   if(ui.bezelOwner!==b.owner){ui.bezelOwner=b.owner;ui.bezelAt=performance.now()}
   return b;
 }
-const BEZEL_W=19;
+const BEZEL_W=19,DRAG_PX=240,OPTION_PX=32;
 function drawBezel(b){
   const n=b.sectors.length,span=TAU/n,k=clamp((performance.now()-ui.bezelAt)/160,0,1),e=1-Math.pow(1-k,4),R=b.R*(.7+.3*e);
   cx.save();cx.globalAlpha=e;

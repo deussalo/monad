@@ -46,6 +46,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
       shelf: kind => probe(k => [innerWidth / __cogs.SHELF.length * (__cogs.SHELF.indexOf(k) + .5), __cogs.shelfTop() + 38], kind),
       async fromShelf(kind, ...worldPath) { const pts = [await t.shelf(kind)]; for (const w of worldPath) pts.push(await scr(w)); await t.stroke(pts); await wait(100); },
       async drag(a, z) { await t.stroke([await scr(a), await scr(z)]); await wait(100); },
+      async room() { if (await probe(() => !!__cogs.sel)) await t.tap(await t.empty()); if (!(await probe(() => !!__cogs.activeBezel()))) await t.tap(await t.empty()); },
       async glyph() { await t.tap(await probe(() => { const g = __cogs.glyphAt(); return [g.x, g.y]; })); },
       async dev(open) {
         if (open === await probe(() => !document.querySelector('#dev').hidden)) return;
@@ -192,9 +193,10 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await m.shot('06-pad-bezel');
   const sector = (b, i, f) => { const a = -Math.PI / 2 + (i + f) * 2 * Math.PI / b.n; return [b.cx + Math.cos(a) * b.R, b.cy + Math.sin(a) * b.R]; };
   const tune0 = await probe(() => __cogs.W.pads[0].voice.tune);
-  await m.stroke([sector(bz, 1, .2), sector(bz, 1, .5), sector(bz, 1, .8), sector(bz, 1, 1.2)]);
+  const up = (at, px) => m.stroke([at, [at[0], at[1] - px]]);
+  await up(sector(bz, 1, .5), 60);
   const tune1 = await probe(() => __cogs.W.pads[0].voice.tune);
-  check('drag clockwise round the tune sector raises the tune', tune1 > tune0, [tune0, tune1]);
+  check('drag up from the tune sector raises the tune', tune1 > tune0, [tune0, tune1]);
   await m.tap(sector(bz, 0, .5));
   is('tap the kind sector: kick becomes snare', await probe(() => __cogs.W.pads[0].voice.kind), 'snare');
   await m.tap(await m.empty());
@@ -247,14 +249,14 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   check('painted ring 5: 4 dots in one 2 s revolution', r5 === 4, r5);
 
   console.log('ROOM');
-  await m.dev(false); await m.tap(await m.empty()); await m.world('zoom', .2); await m.dev(false); await wait(250);
+  await m.dev(false); await m.room();
   const room = await probe(() => { const b = __cogs.activeBezel(); return b && { cx: b.cx, cy: b.cy, R: b.R, n: b.sectors.length }; });
-  check('zoom out past the machine: the room bezel', room && room.n === 10, room);
+  check('tap empty ground with nothing selected: the room bezel, at any zoom', room && room.n === 10, room);
   await m.shot('09-room');
   const wet0 = await probe(() => __cogs.SPACE.wet);
-  await m.stroke([sector(room, 0, .8), sector(room, 0, .5), sector(room, 0, .2)]);
+  await up(sector(room, 0, .5), -60);
   const wet1 = await probe(() => __cogs.SPACE.wet);
-  check('drag the wet sector anticlockwise: drier room', wet1 < wet0, [wet0, wet1]);
+  check('drag down from the wet sector: drier room', wet1 < wet0, [wet0, wet1]);
   await m.tap(sector(room, 9, .5)); await wait(400);
   const clip = await probe(() => navigator.clipboard.readText().catch(e => 'clipboard: ' + e.name));
   check('tap the seal: a #w= link reaches the clipboard', /#w=[\w-]+$/.test(clip), clip.slice(0, 40) + '…');
@@ -360,9 +362,9 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const ob = await probe(() => { const b = __cogs.activeBezel(); return b && { cx: b.cx, cy: b.cy, R: b.R, n: b.sectors.length, sel: __cogs.sel && __cogs.sel.type }; });
   check('hold a pin: its odds bezel', ob && ob.n === 2 && ob.sel === 'dot', ob);
   await m.shot('12-pin-odds');
-  await m.stroke([sector(ob, 0, .7), sector(ob, 0, .45), sector(ob, 0, .2)]);
+  await up(sector(ob, 0, .5), -60);
   const odds = await probe(() => __cogs.W.cogs[2].track.dots.map(d => +d.p.toFixed(2)));
-  check('drag the odds sector back: that pin plays less often', odds.filter(x => x < 1).length === 1, odds);
+  check('drag down from the odds sector: that pin plays less often', odds.filter(x => x < 1).length === 1, odds);
   await m.pinch([195, 420], 200, 80);
   await m.glyph();
   await m.fromShelf('reader', [0, 105]);
@@ -385,7 +387,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const q0 = await m.reset(); await wait(4300);
   const half = await m.count('>reader', q0, 4);
   check('probability 0.5: some of 12 play', half > 0 && half < 12, half);
-  await m.dev(false); await m.tap(await m.empty()); await m.world('zoom', .12); await m.dev(false); await wait(250);
+  await m.dev(false); await m.room();
   const room2 = await probe(() => { const b = __cogs.activeBezel(); return b && { cx: b.cx, cy: b.cy, R: b.R, n: b.sectors.length }; });
   await m.tap(sector(room2, 9, .5)); await wait(400);
   const url = await probe(() => navigator.clipboard.readText());
