@@ -1568,7 +1568,7 @@ else{demo();const f=fitTarget();Object.assign(view,{x:f.x,y:f.y});S.zoom=f.z}
 if(shared)loadShared(shared[1]).catch(e=>console.error('cogs: shared world rejected:',e.message));
 clock.off=nowSec()-simT;
 window.__cogs={W,S,SPACE,stats,clock,get simT(){return simT},serialize,deserialize,solve,toScreen,shelfTop,SHELF,glyphAt,activeBezel,radius,ringR,armTip,beltLines,stringLen,
-  get sel(){return sel&&{type:sel.type,id:sel.o.id}},get flying(){return !!ui.cam},
+  get sel(){return sel&&{type:sel.type,id:sel.o.id}},get group(){return group.map(g=>g.type).sort()},get armed(){return ui.armed},get flying(){return !!ui.cam},
   engine:()=>({state:engineState,ac:ac&&ac.state,...engineStats})};
 setInterval(tick,15);requestAnimationFrame(frame);
 </script>

@@ -340,6 +340,45 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const here = counts(await probe(() => __cogs.serialize())), there = counts(await sp.evaluate(() => __cogs.serialize()));
   check('shared url rebuilds the same world', JSON.stringify(here) === JSON.stringify(there), [here, there]);
 
+  console.log('DESKTOP: KEYS, MARQUEE, GROUP, WHEEL');
+  const dk = await b.newContext({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: SHOTS ? 2 : 1 });
+  const d = await dk.newPage(), derrs = [];
+  d.on('pageerror', e => derrs.push(e.message));
+  await d.goto(FILE); await wait(500);
+  const dscr = ([x, y]) => d.evaluate(([x, y]) => { const s = __cogs.toScreen({ x, y }); return [s.x, s.y]; }, [x, y]);
+  const click = async (w, mods = []) => { for (const k of mods) await d.keyboard.down(k); await d.mouse.click(...await dscr(w)); for (const k of mods) await d.keyboard.up(k); await wait(450); };
+  const ddrag = async (a, z, mods = []) => {
+    for (const k of mods) await d.keyboard.down(k);
+    await d.mouse.move(...await dscr(a)); await d.mouse.down(); await d.mouse.move(...await dscr(z), { steps: 10 }); await d.mouse.up();
+    for (const k of mods) await d.keyboard.up(k); await wait(150);
+  };
+  if (SHOTS) await d.screenshot({ path: path.join(SHOTS, '15-desktop-demo.png') });
+  await d.keyboard.press('?'); await d.click('button[data-act=clear]');
+  await d.fill('#panel [data-k="zoom"] input[type=number]', '1'); await d.click('button[data-act=close]'); await wait(200);
+  const keyed = [];
+  for (const k of ['c', 'd', 'a', 'b', 'p', 't', 'r', 's', 'c', 'Escape']) { await d.keyboard.press(k); keyed.push(await d.evaluate(() => __cogs.armed)); }
+  is('one key per part; s and Esc disarm', keyed, ['cog', 'disc', 'arm', 'belt', 'pad', 'string', 'reader', null, 'cog', null]);
+  await d.keyboard.press('c'); await click([-100, 0]); await click([100, 0]);
+  await d.keyboard.press('p'); await click([0, -100]); await d.keyboard.press('s');
+  const built2 = await d.evaluate(() => [__cogs.W.cogs.map(c => [c.x, c.y]), __cogs.W.pads.map(o => [o.x, o.y])]);
+  check('armed key + click places a part where clicked', JSON.stringify(built2) === '[[[-100,0],[100,0]],[[0,-100]]]', built2);
+  await ddrag([-160, -40], [160, 40], ['Control']);
+  is('ctrl-drag box takes the two cogs, not the pad', await d.evaluate(() => __cogs.group), ['cog', 'cog']);
+  await ddrag([-100, 0], [-100, 40]);
+  const moved = await d.evaluate(() => [__cogs.W.cogs.map(c => c.y), __cogs.W.pads[0].y]);
+  is('dragging a member moves the whole group', moved, [[40, 40], -100]);
+  await click([100, 40], ['Control']);
+  is('ctrl-click toggles a cog out', await d.evaluate(() => __cogs.group), ['cog']);
+  await d.keyboard.press('Delete');
+  is('Delete removes the group', await d.evaluate(() => [__cogs.W.cogs.map(c => c.x), __cogs.W.pads.length]), [[100], 1]);
+  const under = at => d.evaluate(([x, y]) => { const r = document.querySelector('#c').getBoundingClientRect(), v = __cogs.serialize().view; return [(x - r.left - r.width / 2) / __cogs.S.zoom + v.x, (y - r.top - r.height / 2) / __cogs.S.zoom + v.y]; }, at);
+  const wAt = [840, 260], z0w = await d.evaluate(() => __cogs.S.zoom), u0 = await under(wAt);
+  await d.mouse.move(...wAt); await d.mouse.wheel(0, -100); await wait(200);
+  const z1w = await d.evaluate(() => __cogs.S.zoom), u1 = await under(wAt);
+  check('wheel up zooms in', z1w > z0w * 1.1, [z0w, z1w]);
+  check('point under the cursor stays put', near(u0[0], u1[0], .5) && near(u0[1], u1[1], .5), [u0, u1]);
+  check('desktop page errors', derrs.length === 0, derrs.slice(0, 3));
+
   if (SHOTS) { await m.world('zoom', 1); await m.dev(false); await m.dbl(await m.empty()); await m.shot('13-alpha-machine'); await tp.shot('14-pinched'); }
   check('page errors', m.errs.length === 0 && tp.errs.length === 0, [...m.errs, ...tp.errs].slice(0, 3));
   console.log(pass ? '\nCOGS: PASS' : '\nCOGS: FAIL');
