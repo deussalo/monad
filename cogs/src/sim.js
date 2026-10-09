@@ -1,8 +1,14 @@
 const TAU=Math.PI*2,TOOTH=12,STORE='cogs.v1';
 // A CSP-sandboxed page has an opaque origin, where touching localStorage throws.
-const storage=(()=>{try{localStorage.getItem(STORE);return {ok:true,get:()=>localStorage.getItem(STORE),put:v=>localStorage.setItem(STORE,v)}}
-  catch(e){return {ok:false,why:e.name,get:()=>null,put:()=>{}}}})();
 const $=s=>document.querySelector(s);
+function notice(text){const n=$('#notice');n.textContent=text;n.hidden=false}
+const storage=(()=>{
+  try{localStorage.getItem(STORE)}catch(e){return {ok:false,why:e.name,get:()=>null,put:()=>{},keep:()=>{}}}
+  const st={ok:true,why:'',get:()=>localStorage.getItem(STORE),
+    put(v){try{localStorage.setItem(STORE,v);st.ok=true}catch(e){if(st.ok)notice(`not saved: ${e.name}. Use json export to keep this machine.`);st.ok=false;st.why=e.name}},
+    keep(key,v){localStorage.setItem(key,v)}};
+  return st;
+})();
 const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
 const wrap=a=>((a%TAU)+TAU)%TAU;
 const hz=m=>440*Math.pow(2,(m-69)/12);
@@ -349,18 +355,21 @@ function serialize(){
     belts:W.belts.map(b=>({id:b.id,a:b.a.id,b:b.b.id,cross:b.cross})),
     strings:W.strings.map(({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})=>({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense}))};
 }
+// Every part is built and checked before any of the live world is replaced.
 function deserialize(j){
   const cogs=j.cogs.map(c=>({revs:0,...c,w:0,turns:0}));
   const byId=new Map(cogs.map(c=>[c.id,c]));
   const cog=(id,who)=>{const c=byId.get(id);if(!c)throw new Error(`${who}: no cog ${id}`);return c};
-  const arms=j.arms.map(a=>({flex:.5,...a,cog:cog(a.cog,'arm '+a.id)}));
-  W.belts=(j.belts||[]).map(b=>({...b,a:cog(b.a,'belt '+b.id),b:cog(b.b,'belt '+b.id)}));
-  W.strings=(j.strings||[]).map(s=>({...s,hits:0,lastV:0}));
-  for(const c of cogs)if(c.track)for(const d of c.track.dots){d.p??=1;d.v??=1}
   for(const o of [...j.pads,...j.readers])if(!VOICES[o.voice.kind])throw new Error(`${o.id}: voice kind ${o.voice.kind}`);
-  W.cogs=cogs;W.arms=arms;
-  W.pads=j.pads.map(p=>({...p,hits:0,lastV:0}));W.readers=j.readers.map(r=>({tines:0,combBase:60,combScale:'major',...r,hits:0,lastV:0}));
-  W.next=1+Math.max(0,...[...W.cogs,...W.arms,...W.pads,...W.readers,...W.belts,...W.strings].map(o=>o.id));
+  for(const c of cogs)if(c.track)c.track={...c.track,dots:c.track.dots.map(d=>({p:1,v:1,...d}))};
+  const next={cogs,
+    arms:j.arms.map(a=>({flex:.5,...a,cog:cog(a.cog,'arm '+a.id)})),
+    belts:j.belts.map(b=>({...b,a:cog(b.a,'belt '+b.id),b:cog(b.b,'belt '+b.id)})),
+    strings:j.strings.map(s=>({...s,hits:0,lastV:0})),
+    pads:j.pads.map(p=>({...p,hits:0,lastV:0})),
+    readers:j.readers.map(r=>({tines:0,combBase:60,combScale:'major',...r,hits:0,lastV:0}))};
+  Object.assign(W,next);
+  W.next=1+Math.max(0,...Object.values(next).flat().map(o=>o.id));
   Object.assign(S,j.S);Object.assign(SPACE,j.SPACE);Object.assign(view,j.view);
   select(null);solve();applyAudioSettings();syncRows();changed();
 }

@@ -205,6 +205,24 @@ const SHOTS = process.env.COGS_SHOTS || '';
   await p.reload(); await wait(600);
   is('they survive a reload', await probe(() => [__cogs.SPACE.wet, __cogs.S.meshTol]), [0.9, 9]);
 
+  console.log('LOADING AND SAVING HONESTLY');
+  if (!(await probe(() => __cogs.open))) await rail('panel');
+  const before = await key();
+  const bad = await probe(() => { const j = JSON.parse(JSON.stringify(__cogs.serialize())); j.strings = []; j.pads[0].voice.kind = 'bogus'; return JSON.stringify(j); });
+  await p.fill('#panel textarea', bad); await p.click('#panel button:text-is("import")'); await settle();
+  is('an import with a bad voice is refused whole: the world is untouched', [await key() === before, await probe(() => __cogs.W.strings.length > 0 || __cogs.W.pads.length > 0)], [true, true]);
+  await probe(() => localStorage.setItem('cogs.v1', '{not json'));
+  await p.reload(); await wait(600);
+  is('a corrupt save is kept aside and announced', await probe(() => [localStorage.getItem('cogs.v1.rejected'), !document.querySelector('#notice').hidden && /could not be loaded/.test(document.querySelector('#notice').textContent)]), ['{not json', true]);
+  await p.click('#notice');
+  const filled = await probe(() => { let n = 0; for (let size = 1 << 16; size >= 1; size >>= 1) for (;;) { try { localStorage.setItem('fill' + n, 'x'.repeat(size)); n++; } catch (e) { break; } } return [n]; });
+  if (!(await probe(() => __cogs.open))) await rail('panel');
+  const big = await probe(() => { const j = JSON.parse(JSON.stringify(__cogs.serialize())); for (let i = 0; i < 300; i++) j.cogs.push({ id: 5000 + i, x: 3000 + i * 60, y: 3000, n: 12, motor: 0, revs: 0, layer: 0, th: 0, track: null }); return JSON.stringify(j); });
+  await p.fill('#panel textarea', big); await p.click('#panel button:text-is("import")'); await settle();
+  await p.waitForFunction(() => /not saved/.test(document.querySelector('#notice').textContent) && /off/.test(document.querySelector('#panel [data-k="storage"]').textContent), null, { timeout: 5000 }).catch(() => {});
+  is('a save that does not fit is announced, and the panel says storage is off', await probe(() => [!document.querySelector('#notice').hidden && /not saved/.test(document.querySelector('#notice').textContent), [...document.querySelectorAll('#panel .ro')].find(r => r.textContent.startsWith('storage'))?.textContent.includes('off')]), [true, true]);
+  await probe(n => { for (let i = 0; i < n; i++) localStorage.removeItem('fill' + i); }, filled[0]);
+
   console.log('BOUND');
   const bound = await probe(() => { for (let i = 0; i < 520; i++) { __cogs.W.pads[0].x += 1; __cogs.commit(); } return __cogs.undos; });
   is('520 more steps: history holds the last 500', bound, 500);

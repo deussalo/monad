@@ -23,6 +23,8 @@ input[type=range]:hover::-moz-range-thumb{background:var(--hot)}
 @media (pointer:coarse){input[type=range]{height:28px}input[type=range]::-webkit-slider-thumb{width:15px;height:15px;margin-top:-7px}input[type=range]::-moz-range-thumb{width:15px;height:15px}}
 button{background:var(--rig-surface,#000);color:var(--fg);border:0;font:inherit;padding:3px 6px;margin:1px}
 textarea{height:90px}
+#notice{position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 8px);transform:translateX(-50%);z-index:20;max-width:min(92vw,560px);padding:6px 10px;background:var(--pad);color:var(--bad);cursor:pointer}
+#notice[hidden]{display:none}
 html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);font:12px/1.3 var(--rig-font-mono,ui-monospace,Menlo,Consolas,monospace)}
 #c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
 #bar{position:fixed;top:0;right:0;bottom:0;display:flex;background:var(--bg);border-left:1px solid var(--line)}
@@ -51,6 +53,7 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 </head>
 <body>
 <canvas id="c"></canvas>
+<div id="notice" hidden onclick="this.hidden=true"></div>
 <div id="dock" hidden><div id="dock-tools"></div><div id="dock-strip"></div></div>
 <aside id="bar" class="open"><div id="drawer"><div id="panel"></div></div><nav id="rail"></nav></aside>
 <script type="text/x-cogs-worklet" id="engine">
@@ -380,9 +383,15 @@ registerProcessor('cogs-engine',CogsEngine);
 'use strict';
 const TAU=Math.PI*2,TOOTH=12,STORE='cogs.v1';
 // A CSP-sandboxed page has an opaque origin, where touching localStorage throws.
-const storage=(()=>{try{localStorage.getItem(STORE);return {ok:true,get:()=>localStorage.getItem(STORE),put:v=>localStorage.setItem(STORE,v)}}
-  catch(e){return {ok:false,why:e.name,get:()=>null,put:()=>{}}}})();
 const $=s=>document.querySelector(s);
+function notice(text){const n=$('#notice');n.textContent=text;n.hidden=false}
+const storage=(()=>{
+  try{localStorage.getItem(STORE)}catch(e){return {ok:false,why:e.name,get:()=>null,put:()=>{},keep:()=>{}}}
+  const st={ok:true,why:'',get:()=>localStorage.getItem(STORE),
+    put(v){try{localStorage.setItem(STORE,v);st.ok=true}catch(e){if(st.ok)notice(`not saved: ${e.name}. Use json export to keep this machine.`);st.ok=false;st.why=e.name}},
+    keep(key,v){localStorage.setItem(key,v)}};
+  return st;
+})();
 const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
 const wrap=a=>((a%TAU)+TAU)%TAU;
 const hz=m=>440*Math.pow(2,(m-69)/12);
@@ -729,18 +738,21 @@ function serialize(){
     belts:W.belts.map(b=>({id:b.id,a:b.a.id,b:b.b.id,cross:b.cross})),
     strings:W.strings.map(({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})=>({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense}))};
 }
+// Every part is built and checked before any of the live world is replaced.
 function deserialize(j){
   const cogs=j.cogs.map(c=>({revs:0,...c,w:0,turns:0}));
   const byId=new Map(cogs.map(c=>[c.id,c]));
   const cog=(id,who)=>{const c=byId.get(id);if(!c)throw new Error(`${who}: no cog ${id}`);return c};
-  const arms=j.arms.map(a=>({flex:.5,...a,cog:cog(a.cog,'arm '+a.id)}));
-  W.belts=(j.belts||[]).map(b=>({...b,a:cog(b.a,'belt '+b.id),b:cog(b.b,'belt '+b.id)}));
-  W.strings=(j.strings||[]).map(s=>({...s,hits:0,lastV:0}));
-  for(const c of cogs)if(c.track)for(const d of c.track.dots){d.p??=1;d.v??=1}
   for(const o of [...j.pads,...j.readers])if(!VOICES[o.voice.kind])throw new Error(`${o.id}: voice kind ${o.voice.kind}`);
-  W.cogs=cogs;W.arms=arms;
-  W.pads=j.pads.map(p=>({...p,hits:0,lastV:0}));W.readers=j.readers.map(r=>({tines:0,combBase:60,combScale:'major',...r,hits:0,lastV:0}));
-  W.next=1+Math.max(0,...[...W.cogs,...W.arms,...W.pads,...W.readers,...W.belts,...W.strings].map(o=>o.id));
+  for(const c of cogs)if(c.track)c.track={...c.track,dots:c.track.dots.map(d=>({p:1,v:1,...d}))};
+  const next={cogs,
+    arms:j.arms.map(a=>({flex:.5,...a,cog:cog(a.cog,'arm '+a.id)})),
+    belts:j.belts.map(b=>({...b,a:cog(b.a,'belt '+b.id),b:cog(b.b,'belt '+b.id)})),
+    strings:j.strings.map(s=>({...s,hits:0,lastV:0})),
+    pads:j.pads.map(p=>({...p,hits:0,lastV:0})),
+    readers:j.readers.map(r=>({tines:0,combBase:60,combScale:'major',...r,hits:0,lastV:0}))};
+  Object.assign(W,next);
+  W.next=1+Math.max(0,...Object.values(next).flat().map(o=>o.id));
   Object.assign(S,j.S);Object.assign(SPACE,j.SPACE);Object.assign(view,j.view);
   select(null);solve();applyAudioSettings();syncRows();changed();
 }
@@ -1684,10 +1696,10 @@ const PROBE={stage,
 /* ---------- boot ---------- */
 mount();resize();
 const saved=storage.get(),shared=location.hash.match(/^#w=([\w-]+)/);
-if(saved)try{deserialize(JSON.parse(saved))}catch(e){console.error('cogs: saved world rejected:',e.message);demo()}
+if(saved)try{deserialize(JSON.parse(saved))}catch(e){storage.keep(STORE+'.rejected',saved);notice(`Your saved machine could not be loaded (${e.message}); it is kept as ${STORE}.rejected. Showing the demo.`);demo()}
 else demo();
 edits.reset();
-if(shared)loadShared(shared[1]).then(()=>edits.reset()).catch(e=>console.error('cogs: shared world rejected:',e.message));
+if(shared)loadShared(shared[1]).then(()=>edits.reset()).catch(e=>notice(`This share link could not be loaded: ${e.message}`));
 clock.off=nowSec()-simT;
 window.__cogs=Object.defineProperties({W,S,SPACE,stats,clock,get simT(){return simT},serialize,deserialize,solve,toScreen,radius,ringR,armTip,beltLines,stringLen,
   get sel(){return sel&&{type:sel.type,id:sel.o.id}},get group(){return group.map(g=>g.type).sort()},get armed(){return ui.armed},get flying(){return !!ui.cam},
