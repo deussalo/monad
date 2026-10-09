@@ -95,6 +95,16 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   check('default world: no event scheduled late', (await probe(() => __cogs.stats.late)) === 0, await probe(() => __cogs.stats.late));
   await m.act('clear'); await m.world('bpm lock', 0); await m.world('zoom', 1.6); await m.dev(false);
 
+  console.log('PANEL SHEET');
+  await m.dev(true);
+  const sheet = await probe(() => { const r = document.querySelector('#dev').getBoundingClientRect(); return { top: r.top, h: innerHeight, open: !document.querySelector('#dev').hidden }; });
+  check('hold the glyph: the panel opens as a sheet, the machine visible above it', sheet.open && sheet.top >= .28 * sheet.h - 1, sheet);
+  const world0 = await probe(() => JSON.stringify(__cogs.W.cogs.map(c => [c.x, c.y])));
+  await m.tap([195, 60]);
+  is('tap above the sheet: the panel closes and nothing else happens', await probe(w0 => [document.querySelector('#dev').hidden, JSON.stringify(__cogs.W.cogs.map(c => [c.x, c.y])) === w0, __cogs.sel], world0), [true, true, null]);
+  await m.dev(true); await p.tap('button[data-act=close]');
+  is('close in the sheet closes it', await probe(() => document.querySelector('#dev').hidden), true);
+
   console.log('GEARS');
   await m.stroke([await m.shelf('cog'), await m.scr([30, 60]), await m.scr([0, 0])]);
   await m.drag([22.92, 0], [46, 0]);

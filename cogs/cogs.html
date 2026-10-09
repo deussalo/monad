@@ -13,21 +13,30 @@ legend{color:var(--dim);padding:0 4px}
 .row{display:grid;grid-template-columns:76px 1fr 70px;gap:4px;align-items:center;margin:2px 0}
 .ro{display:grid;grid-template-columns:76px 1fr;gap:4px;margin:1px 0}.ro b{font-weight:normal;color:var(--hot)}
 input[type=number],select,textarea{background:var(--rig-surface,#000);color:var(--fg);border:0;font:inherit;width:100%}
-input[type=range]{width:100%;margin:0}
+input[type=range]{width:100%;margin:0;-webkit-appearance:none;appearance:none;height:16px;background:none;cursor:ew-resize}
+input[type=range]::-webkit-slider-runnable-track{height:1px;background:var(--line)}
+input[type=range]::-moz-range-track{height:1px;background:var(--line)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:9px;height:9px;margin-top:-4px;border:0;border-radius:50%;background:var(--fg)}
+input[type=range]::-moz-range-thumb{width:9px;height:9px;border:0;border-radius:50%;background:var(--fg)}
+input[type=range]:hover::-webkit-slider-thumb{background:var(--hot)}
+input[type=range]:hover::-moz-range-thumb{background:var(--hot)}
+@media (pointer:coarse){input[type=range]{height:28px}input[type=range]::-webkit-slider-thumb{width:15px;height:15px;margin-top:-7px}input[type=range]::-moz-range-thumb{width:15px;height:15px}}
 button{background:var(--rig-surface,#000);color:var(--fg);border:0;font:inherit;padding:3px 6px;margin:1px}
 textarea{height:90px}
 html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);font:12px/1.3 var(--rig-font-mono,ui-monospace,Menlo,Consolas,monospace);
   overscroll-behavior:none;touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 #c{position:fixed;inset:0;width:100%;height:100%;touch-action:none;display:block}
 #safe{position:fixed;left:0;top:0;width:0;height:0;padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px);pointer-events:none}
-#dev{position:fixed;inset:0;z-index:10;overflow-y:auto;background:rgba(10,12,13,.95);touch-action:pan-y;-webkit-user-select:text;user-select:text}
-#dev[hidden]{display:none}
+#dev{position:fixed;left:0;right:0;bottom:0;top:max(28vh,calc(env(safe-area-inset-top,0px) + 120px));z-index:10;overflow-y:auto;background:var(--bg);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px);touch-action:pan-y;-webkit-user-select:text;user-select:text}
+#scrim{position:fixed;inset:0;z-index:9;background:rgba(0,0,0,.35)}
+#dev[hidden],#scrim[hidden]{display:none}
 #panel{max-width:440px;margin:0 auto;padding:6px}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="safe"></div>
+<div id="scrim" hidden></div>
 <div id="dev" hidden><div id="panel"></div></div>
 <script type="text/x-cogs-worklet" id="engine">
 'use strict';
@@ -1605,9 +1614,9 @@ const stage=()=>({l:0,r:CW,t:safeTop,b:shelfTop()});
 const offStage=s=>s.y>=shelfTop();
 function drawChrome(){const b=activeBezel();if(b)drawBezel(b);if(ui.carry&&ui.carry.ghost)drawGhost(ui.carry.ghost);drawShelf();drawGlyph()}
 const panelOpen=()=>!$('#dev').hidden;
-function togglePanel(open=$('#dev').hidden){$('#dev').hidden=!open;if(open){syncRows();buildInspector()}}
+function togglePanel(open=$('#dev').hidden){$('#dev').hidden=$('#scrim').hidden=!open;if(open){syncRows();buildInspector()}}
 const placeRoll=(c,f)=>rollSection(c,{strip:f,tools:f,row:11,label:30});
-const mount=()=>buildPanel(btn=>btn('close',()=>togglePanel(false)));
+const mount=()=>{buildPanel(btn=>btn('close',()=>togglePanel(false)));$('#scrim').onclick=()=>togglePanel(false)};
 // The shelf never changes, so it is painted once per size and blitted.
 let shelfArt=null;
 function drawShelf(){
@@ -1653,11 +1662,13 @@ function reveal(){
 }
 Object.assign(G,{
   // The press that opens the panel lifts over it, and the browser turns that lift into a click on whatever
-  // control now lies under the finger; the panel ignores input until that click has passed.
+  // now lies under the finger; panel and scrim ignore input until the lift has passed, whichever event reports it.
   glyph(){
-    const dev=$('#dev'),timer=setTimeout(()=>{togglePanel(true);dev.style.pointerEvents='none';buzz(15)},600);
-    const end=()=>{clearTimeout(timer);setTimeout(()=>{dev.style.pointerEvents=''},350)};
-    return {tap(){clearTimeout(timer);setPaused(!clock.paused)},up:end,cancel:end};
+    const covers=[$('#dev'),$('#scrim')],listen=on=>{for(const t of ['pointerup','pointercancel','touchend','touchcancel'])(on?addEventListener:removeEventListener)(t,lift,true)};
+    const thaw=()=>{listen(false);clearTimeout(ui.thaw);for(const e of covers)e.style.pointerEvents=''};
+    const lift=()=>{listen(false);clearTimeout(ui.thaw);ui.thaw=setTimeout(thaw,120)};
+    const timer=setTimeout(()=>{togglePanel(true);for(const e of covers)e.style.pointerEvents='none';listen(true);clearTimeout(ui.thaw);ui.thaw=setTimeout(thaw,1500);buzz(15)},600);
+    return {tap(){clearTimeout(timer);setPaused(!clock.paused)},up(){clearTimeout(timer)},cancel(){clearTimeout(timer)}};
   },
   bezel(b,i,s0){
     const p=b.sectors[i],steps=stepsOf(p),per=steps?clamp(300/steps,8,40)*Math.PI/180:0;

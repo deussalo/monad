@@ -7,9 +7,9 @@ const stage=()=>({l:0,r:CW,t:safeTop,b:shelfTop()});
 const offStage=s=>s.y>=shelfTop();
 function drawChrome(){const b=activeBezel();if(b)drawBezel(b);if(ui.carry&&ui.carry.ghost)drawGhost(ui.carry.ghost);drawShelf();drawGlyph()}
 const panelOpen=()=>!$('#dev').hidden;
-function togglePanel(open=$('#dev').hidden){$('#dev').hidden=!open;if(open){syncRows();buildInspector()}}
+function togglePanel(open=$('#dev').hidden){$('#dev').hidden=$('#scrim').hidden=!open;if(open){syncRows();buildInspector()}}
 const placeRoll=(c,f)=>rollSection(c,{strip:f,tools:f,row:11,label:30});
-const mount=()=>buildPanel(btn=>btn('close',()=>togglePanel(false)));
+const mount=()=>{buildPanel(btn=>btn('close',()=>togglePanel(false)));$('#scrim').onclick=()=>togglePanel(false)};
 // The shelf never changes, so it is painted once per size and blitted.
 let shelfArt=null;
 function drawShelf(){
@@ -55,11 +55,13 @@ function reveal(){
 }
 Object.assign(G,{
   // The press that opens the panel lifts over it, and the browser turns that lift into a click on whatever
-  // control now lies under the finger; the panel ignores input until that click has passed.
+  // now lies under the finger; panel and scrim ignore input until the lift has passed, whichever event reports it.
   glyph(){
-    const dev=$('#dev'),timer=setTimeout(()=>{togglePanel(true);dev.style.pointerEvents='none';buzz(15)},600);
-    const end=()=>{clearTimeout(timer);setTimeout(()=>{dev.style.pointerEvents=''},350)};
-    return {tap(){clearTimeout(timer);setPaused(!clock.paused)},up:end,cancel:end};
+    const covers=[$('#dev'),$('#scrim')],listen=on=>{for(const t of ['pointerup','pointercancel','touchend','touchcancel'])(on?addEventListener:removeEventListener)(t,lift,true)};
+    const thaw=()=>{listen(false);clearTimeout(ui.thaw);for(const e of covers)e.style.pointerEvents=''};
+    const lift=()=>{listen(false);clearTimeout(ui.thaw);ui.thaw=setTimeout(thaw,120)};
+    const timer=setTimeout(()=>{togglePanel(true);for(const e of covers)e.style.pointerEvents='none';listen(true);clearTimeout(ui.thaw);ui.thaw=setTimeout(thaw,1500);buzz(15)},600);
+    return {tap(){clearTimeout(timer);setPaused(!clock.paused)},up(){clearTimeout(timer)},cancel(){clearTimeout(timer)}};
   },
   bezel(b,i,s0){
     const p=b.sectors[i],steps=stepsOf(p),per=steps?clamp(300/steps,8,40)*Math.PI/180:0;
