@@ -178,6 +178,16 @@ const SHOT = process.env.COGS_SHOT || '';
   const here = counts(await probe(() => __cogs.serialize())), there = counts(await sp.evaluate(() => __cogs.serialize()));
   check('shared url rebuilds the same world', JSON.stringify(here) === JSON.stringify(there), [here, there]);
 
+  console.log('WHEEL');
+  const w0 = await probe(() => ({ zoom: __cogs.S.zoom, view: { ...__cogs.serialize().view } }));
+  const wAt = at(120, 80); await p.mouse.move(...wAt);
+  const under0 = await p.evaluate(([x, y]) => { const r = document.querySelector('#c').getBoundingClientRect(), S = __cogs.S, v = __cogs.serialize().view; return [(x - r.left - r.width / 2) / S.zoom + v.x, (y - r.top - r.height / 2) / S.zoom + v.y]; }, wAt);
+  await p.mouse.wheel(0, -100); await p.waitForTimeout(200);
+  const w1 = await probe(() => __cogs.S.zoom);
+  const under1 = await p.evaluate(([x, y]) => { const r = document.querySelector('#c').getBoundingClientRect(), S = __cogs.S, v = __cogs.serialize().view; return [(x - r.left - r.width / 2) / S.zoom + v.x, (y - r.top - r.height / 2) / S.zoom + v.y]; }, wAt);
+  check('wheel up zooms in', w1 > w0.zoom * 1.1, [w0.zoom, w1]);
+  check('point under the cursor stays put', near(under0[0], under1[0], .5) && near(under0[1], under1[1], .5), [under0, under1]);
+
   if (SHOT) await p.screenshot({ path: SHOT });
   check('page errors', errs.length === 0, errs.slice(0, 3));
   console.log(pass ? '\nCOGS: PASS' : '\nCOGS: FAIL');
