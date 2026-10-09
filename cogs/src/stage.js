@@ -705,9 +705,9 @@ function buildPanel(lead){
   roRow(st,'world',()=>`c${W.cogs.length} a${W.arms.length} p${W.pads.length} r${W.readers.length} b${W.belts.length} s${W.strings.length}`);
   inspector=section('selection');inspector.id='inspector';
   const wf=section('world');
-  for(const[k,l,mn,mx,st2]of S_DEFS)numRow(wf,l,mn,mx,st2,...bind(S,k,()=>{applyAudioSettings();if(/Tol|bpm|beats/.test(k))solve()}),S_DEFAULT[k]);
+  for(const[k,l,mn,mx,st2]of S_DEFS)numRow(wf,l,mn,mx,st2,...bind(S,k,()=>{applyAudioSettings();changed(/Tol|bpm|beats/.test(k))}),S_DEFAULT[k]);
   const sp=section('space');
-  for(const[k,l,mn,mx,st2]of SPACE_DEFS)numRow(sp,l,mn,mx,st2,...bind(SPACE,k,applyAudioSettings),SPACE_DEFAULT[k]);
+  for(const[k,l,mn,mx,st2]of SPACE_DEFS)numRow(sp,l,mn,mx,st2,...bind(SPACE,k,roomEdited),SPACE_DEFAULT[k]);
   const js=section('json'),ta=el('textarea'),msg=el('b');
   js.append(ta,el('button',{textContent:'export',onclick:()=>{ta.value=JSON.stringify(serialize());msg.textContent='ok'}}),
     el('button',{textContent:'import',onclick:()=>{try{deserialize(JSON.parse(ta.value));msg.textContent='ok'}catch(e){msg.textContent=e.message}}}),

@@ -121,10 +121,10 @@ function trackSectors(c){
 const dotSectors=d=>[numSector('odds',d,'p',0,1,.01),numSector('level',d,'v',0,1,.01)];
 const ROOM=[['wet','wet'],['size','size'],['tail','decay'],['air','highMult'],['shimmer','shimmer']];
 function roomSectors(){
-  const out=ROOM.map(([icon,k])=>defSector(icon,SPACE,SPACE_DEFS.find(d=>d[0]===k),applyAudioSettings));
-  out.push(choiceSector('freeze',[0,1],()=>SPACE.freeze,x=>{SPACE.freeze=x;applyAudioSettings()}));
-  out.push(defSector('level',S,S_DEFS.find(d=>d[0]==='master'),applyAudioSettings));
-  out.push(numSector('tempo',S,'bpm',0,300,1,solve),numSector('beats',S,'beats',1,16,1,solve));
+  const out=ROOM.map(([icon,k])=>defSector(icon,SPACE,SPACE_DEFS.find(d=>d[0]===k),roomEdited));
+  out.push(choiceSector('freeze',[0,1],()=>SPACE.freeze,x=>{SPACE.freeze=x;roomEdited()}));
+  out.push(defSector('level',S,S_DEFS.find(d=>d[0]==='master'),roomEdited));
+  out.push(numSector('tempo',S,'bpm',0,300,1,()=>changed(true)),numSector('beats',S,'beats',1,16,1,()=>changed(true)));
   out.push({icon:'seal',action:share});
   return out;
 }

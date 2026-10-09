@@ -301,6 +301,7 @@ function setPaused(p){
 
 /* ---------- persistence ---------- */
 let saveTimer=0;
+function roomEdited(){applyAudioSettings();changed()}
 function changed(structural){
   if(structural)solve();
   clearTimeout(saveTimer);saveTimer=setTimeout(()=>storage.put(JSON.stringify(serialize())),400);

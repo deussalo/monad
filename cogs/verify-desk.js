@@ -194,6 +194,17 @@ const SHOTS = process.env.COGS_SHOTS || '';
   check('the point under the cursor stays put', near(u0[0], u1[0], .5) && near(u0[1], u1[1], .5), [u0, u1]);
   is('zoom is not an undo step', await probe(() => __cogs.pending), false);
 
+  console.log('ROOM AND TEMPO EDITS');
+  const roomU0 = await undos();
+  await p.fill('#panel [data-k="wet"] input[type=number]', '0.9'); await settle();
+  await p.fill('#panel [data-k="mesh tol"] input[type=number]', '9'); await settle();
+  is('panel room and tempo edits are undo steps', (await undos()) - roomU0, 2);
+  await p.keyboard.press('Control+z'); await settle();
+  is('undo reverts the last of them only', await probe(() => [__cogs.SPACE.wet, __cogs.S.meshTol]), [0.9, 4]);
+  await p.keyboard.press('Control+Shift+z'); await settle(); await wait(600);
+  await p.reload(); await wait(600);
+  is('they survive a reload', await probe(() => [__cogs.SPACE.wet, __cogs.S.meshTol]), [0.9, 9]);
+
   console.log('BOUND');
   const bound = await probe(() => { for (let i = 0; i < 520; i++) { __cogs.W.pads[0].x += 1; __cogs.commit(); } return __cogs.undos; });
   is('520 more steps: history holds the last 500', bound, 500);

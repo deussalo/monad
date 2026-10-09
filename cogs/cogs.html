@@ -666,6 +666,7 @@ function setPaused(p){
 
 /* ---------- persistence ---------- */
 let saveTimer=0;
+function roomEdited(){applyAudioSettings();changed()}
 function changed(structural){
   if(structural)solve();
   clearTimeout(saveTimer);saveTimer=setTimeout(()=>storage.put(JSON.stringify(serialize())),400);
@@ -1481,9 +1482,9 @@ function buildPanel(lead){
   roRow(st,'world',()=>`c${W.cogs.length} a${W.arms.length} p${W.pads.length} r${W.readers.length} b${W.belts.length} s${W.strings.length}`);
   inspector=section('selection');inspector.id='inspector';
   const wf=section('world');
-  for(const[k,l,mn,mx,st2]of S_DEFS)numRow(wf,l,mn,mx,st2,...bind(S,k,()=>{applyAudioSettings();if(/Tol|bpm|beats/.test(k))solve()}),S_DEFAULT[k]);
+  for(const[k,l,mn,mx,st2]of S_DEFS)numRow(wf,l,mn,mx,st2,...bind(S,k,()=>{applyAudioSettings();changed(/Tol|bpm|beats/.test(k))}),S_DEFAULT[k]);
   const sp=section('space');
-  for(const[k,l,mn,mx,st2]of SPACE_DEFS)numRow(sp,l,mn,mx,st2,...bind(SPACE,k,applyAudioSettings),SPACE_DEFAULT[k]);
+  for(const[k,l,mn,mx,st2]of SPACE_DEFS)numRow(sp,l,mn,mx,st2,...bind(SPACE,k,roomEdited),SPACE_DEFAULT[k]);
   const js=section('json'),ta=el('textarea'),msg=el('b');
   js.append(ta,el('button',{textContent:'export',onclick:()=>{ta.value=JSON.stringify(serialize());msg.textContent='ok'}}),
     el('button',{textContent:'import',onclick:()=>{try{deserialize(JSON.parse(ta.value));msg.textContent='ok'}catch(e){msg.textContent=e.message}}}),
@@ -1728,10 +1729,10 @@ function trackSectors(c){
 const dotSectors=d=>[numSector('odds',d,'p',0,1,.01),numSector('level',d,'v',0,1,.01)];
 const ROOM=[['wet','wet'],['size','size'],['tail','decay'],['air','highMult'],['shimmer','shimmer']];
 function roomSectors(){
-  const out=ROOM.map(([icon,k])=>defSector(icon,SPACE,SPACE_DEFS.find(d=>d[0]===k),applyAudioSettings));
-  out.push(choiceSector('freeze',[0,1],()=>SPACE.freeze,x=>{SPACE.freeze=x;applyAudioSettings()}));
-  out.push(defSector('level',S,S_DEFS.find(d=>d[0]==='master'),applyAudioSettings));
-  out.push(numSector('tempo',S,'bpm',0,300,1,solve),numSector('beats',S,'beats',1,16,1,solve));
+  const out=ROOM.map(([icon,k])=>defSector(icon,SPACE,SPACE_DEFS.find(d=>d[0]===k),roomEdited));
+  out.push(choiceSector('freeze',[0,1],()=>SPACE.freeze,x=>{SPACE.freeze=x;roomEdited()}));
+  out.push(defSector('level',S,S_DEFS.find(d=>d[0]==='master'),roomEdited));
+  out.push(numSector('tempo',S,'bpm',0,300,1,()=>changed(true)),numSector('beats',S,'beats',1,16,1,()=>changed(true)));
   out.push({icon:'seal',action:share});
   return out;
 }
