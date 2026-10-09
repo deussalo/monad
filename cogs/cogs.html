@@ -1634,7 +1634,7 @@ function paintShelf(h){
 }
 const glyphAt=()=>({x:CW-32,y:safeTop+32});
 function drawGlyph(){
-  const {x,y}=glyphAt(),a=.9*Math.sin(clock.view*TAU*1.25);
+  const {x,y}=glyphAt(),bpm=S.bpm||Math.abs(W.cogs.map(motorRpm).find(Boolean)||0),a=clock.view*Math.PI*bpm/60;
   cx.save();cx.translate(x,y);cx.globalAlpha=clock.paused?.45:1;
   cx.strokeStyle=DIM;cx.lineWidth=1;circle(0,0,13);
   cx.rotate(a);cx.strokeStyle=FG;line(-13,0,13,0);cx.fillStyle=FG;circle(-13,0,2,true);circle(13,0,2,true);
