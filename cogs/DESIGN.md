@@ -83,8 +83,7 @@ Watchmaking, not wireframe.
 
 ## The seam
 
-`cogs.html` is edited in place. A second copy of a verified sim would drift.
-- **Sim and engine** (the lead's): the worklet, then everything from `/* ---------- world` to `/* ---------- clock`, plus the roll, persistence and demo.
-- **UI** (mine): `/* ---------- look`, `/* ---------- render`, `/* ---------- touch`, `/* ---------- dev layer` and `/* ---------- loop`.
-
-The UI touches the sim only through `W`, `S`, `SPACE`, `solve`, `snap`, `stackOf`, `radius`, `ringR`, `renderTh`, `hitWindow`, `changed`, `strike`, plus the `flash` and `hits` fields that the sim already writes. The one change on the sim side splits `fire()` into `fire()` (sim event) and `strike()` (sound), so the bezel can audition a pad without logging a sim event.
+`cogs.html` (phone) and `desk.html` (desktop) are build outputs: `node cogs/build.js`, which `make cogs` runs first, inlines `cogs/src` into each, because the artifact sandbox loads one self-contained file. Edit `src/`, never the outputs.
+- `engine.worklet.js` and `sim.js`: the audio worklet, the world, solver, audio, clock, persistence, demo and share.
+- `stage.js`: what both builds draw and do on the canvas: look, render, gestures, keys, the roll, the panel widgets and inspector, the frame loop.
+- `phone.js` / `desk.js`: each build's chrome. Each defines the hooks the stage calls: `onResize`, `stage`, `offStage`, `chromeHit`, `drawChrome`, `reveal`, `panelOpen`, `togglePanel`, `placeRoll`, `mount`, `PROBE`.

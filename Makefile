@@ -9,4 +9,5 @@ ci:
 
 .PHONY: cogs
 cogs:
+	@node cogs/build.js
 	@LD_LIBRARY_PATH="$(PLAYWRIGHT_LIBS):$$LD_LIBRARY_PATH" node cogs/verify.js
