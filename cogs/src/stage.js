@@ -376,19 +376,19 @@ const G={
   },
   // On the rim: push the teeth along to crank, pull outward or inward to change the tooth count.
   rim(c,s0){
-    let mode=null,samples=[];const min=c.track?12:6,ang=s=>{const q=screenToWorld(s);return Math.atan2(q.y-c.y,q.x-c.x)};
+    let mode=null,samples=[],grow=null;const min=c.track?12:6,ang=s=>{const q=screenToWorld(s);return Math.atan2(q.y-c.y,q.x-c.x)};
     return {o:c,
       move(s){
         if(!mode){const sc=toScreen(c),rx=s0.x-sc.x,ry=s0.y-sc.y,mx=s.x-s0.x,my=s.y-s0.y;
           mode=Math.abs(mx*rx+my*ry)>Math.abs(mx*ry-my*rx)?'teeth':'crank';
           if(mode==='crank'){ui.crank={c};samples=[{t:ui.t,a:ang(s0)}]}}
-        if(mode==='teeth'){const q=screenToWorld(s),n=clamp(Math.round(Math.hypot(q.x-c.x,q.y-c.y)*TAU/TOOTH),min,240);if(n!==c.n){c.n=n;buzz(3);solve()}return}
+        if(mode==='teeth'){grow??=resizer(c);const n=clamp(Math.round(grow.radiusThrough(screenToWorld(s))*TAU/TOOTH),min,240);if(n!==c.n){grow.set(n);buzz(3)}return}
         const t=ui.t,last=samples[samples.length-1],a=last.a+wrapPi(ang(s)-last.a);samples.push({t,a});
         while(samples.length>2&&t-samples[1].t>90)samples.shift();
         const f=samples[0],dt=(t-f.t)/1000;if(dt>.01)drive(c,clamp((a-f.a)/dt*60/TAU,-600,600));
       },
       up(){
-        if(mode==='teeth'){if(stackOf(c).length===1)snap(c);changed(true);return}
+        if(mode==='teeth'){if(!grow?.anchor&&stackOf(c).length===1)snap(c);changed(true);return}
         if(mode==='crank'){const still=ui.t-samples[samples.length-1].t>110;drive(c,still?0:detent(motorRpm(c)));ui.crank=null;buzz(12);changed(true)}
       },
       cancel(){ui.crank=null},
@@ -738,7 +738,7 @@ function buildInspector(){
   inspector.replaceChildren(el('legend',{textContent:sel?`${sel.type} ${sel.o.id}`:'selection'}));
   const o=sel&&sel.o,f=inspector;
   if(sel&&sel.type==='cog'){
-    numRow(f,'teeth',6,240,1,...bind(o,'n',()=>changed(true)));
+    numRow(f,'teeth',6,240,1,()=>o.n,v=>{resizer(o).set(v);changed(true)});
     numRow(f,'motor rpm',-600,600,.1,...bind(o,'motor',()=>changed(true)));
     selRow(f,'revs/bar',REVS,()=>REVS.reduce((a,b)=>Math.abs(frac(b)-o.revs)<Math.abs(frac(a)-o.revs)?b:a),v=>{o.revs=frac(v);changed(true)});
     numRow(f,'layer',0,7,1,...bind(o,'layer',()=>changed(true)));

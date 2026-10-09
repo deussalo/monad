@@ -54,16 +54,22 @@ const ringNote=(t,i)=>scaleNote(t.base,t.scale,i);
 const motorRpm=c=>S.bpm&&c.revs?c.revs*S.bpm/S.beats:c.motor;
 function chance(...n){let h=(S.seed|0)^0x9e3779b9;for(const x of n){h=Math.imul(h^Math.round(x*4096),0x85ebca6b);h^=h>>>13;h=Math.imul(h,0xc2b2ae35);h^=h>>>16}return (h>>>0)/4294967296}
 
+// How two cogs touch: on one axle, teeth in mesh, overlapping (a jam), or apart.
+function contact(a,b){
+  const d=Math.hypot(a.x-b.x,a.y-b.y);
+  if(d<=S.coaxTol)return 'axle';
+  if(a.layer!==b.layer)return null;
+  const gap=d-radius(a)-radius(b);
+  return Math.abs(gap)<=S.meshTol?'mesh':gap<0?'jam':null;
+}
 function solve(){
   const cs=W.cogs,adj=new Map(cs.map(c=>[c,[]]));
   for(const c of cs){c.jam=false;c.k=null;c.w=0}
   for(let i=0;i<cs.length;i++)for(let j=i+1;j<cs.length;j++){
-    const a=cs[i],b=cs[j],d=Math.hypot(a.x-b.x,a.y-b.y);
-    if(d<=S.coaxTol){adj.get(a).push([b,1]);adj.get(b).push([a,1]);continue}
-    if(a.layer!==b.layer)continue;
-    const gap=d-radius(a)-radius(b);
-    if(Math.abs(gap)<=S.meshTol){adj.get(a).push([b,-a.n/b.n]);adj.get(b).push([a,-b.n/a.n])}
-    else if(gap<0)a.jam=b.jam=true;
+    const a=cs[i],b=cs[j],how=contact(a,b);
+    if(how==='axle'){adj.get(a).push([b,1]);adj.get(b).push([a,1])}
+    else if(how==='mesh'){adj.get(a).push([b,-a.n/b.n]);adj.get(b).push([a,-b.n/a.n])}
+    else if(how==='jam')a.jam=b.jam=true;
   }
   for(const b of W.belts){const s=b.cross?-1:1;adj.get(b.a).push([b.b,s*b.a.n/b.b.n]);adj.get(b.b).push([b.a,s*b.b.n/b.a.n])}
   for(const root of cs){
@@ -90,6 +96,46 @@ function snap(c){
   const d=Math.hypot(c.x-best.x,c.y-best.y)||1,R=radius(best)+radius(c);
   c.x=best.x+(c.x-best.x)/d*R;c.y=best.y+(c.y-best.y)/d*R;
   interlock(c,best);
+}
+// Change a cog's tooth count keeping every mesh: it grows away from the neighbour toward its driver,
+// and whatever it drives slides along its line of centres, carrying its axle-mates and the readers on it.
+function resizer(c){
+  const cs=W.cogs,links=new Map(cs.map(o=>[o,[]]));
+  for(let i=0;i<cs.length;i++)for(let j=i+1;j<cs.length;j++){const how=contact(cs[i],cs[j]);
+    if(how==='axle'||how==='mesh'){links.get(cs[i]).push([cs[j],how]);links.get(cs[j]).push([cs[i],how])}}
+  const stack=new Set(stackOf(c)),meshed=[...stack].flatMap(o=>links.get(o).filter(([,how])=>how==='mesh').map(([m])=>m)).filter(m=>!stack.has(m));
+  let anchor=meshed[0]||null;
+  if(c.driver&&!stack.has(c.driver)){
+    const seen=new Set([c.driver]),q=[c.driver];
+    for(let i=0;i<q.length&&!q.some(o=>meshed.includes(o));i++)for(const[o]of links.get(q[i]))if(!seen.has(o)&&!stack.has(o)){seen.add(o);q.push(o)}
+    anchor=q.find(o=>meshed.includes(o))||anchor;
+  }
+  const at=new Map([...cs,...W.readers].map(o=>[o,{x:o.x,y:o.y,x1:o.x1,y1:o.y1,x2:o.x2,y2:o.y2}])),n0=c.n;
+  const carried=o=>W.readers.filter(r=>Math.hypot(at.get(r).x1-at.get(o).x,at.get(r).y1-at.get(o).y)<radius({n:o===c?n0:o.n}));
+  const shift=(o,dx,dy)=>{const p=at.get(o);o.x=p.x+dx;o.y=p.y+dy;
+    for(const r of carried(o)){const q=at.get(r);Object.assign(r,{x1:q.x1+dx,y1:q.y1+dy,x2:q.x2+dx,y2:q.y2+dy})}};
+  return {anchor,
+    // The radius whose rim passes through world point q while the contact with the anchor stays put.
+    radiusThrough(q){
+      if(!anchor)return Math.hypot(q.x-c.x,q.y-c.y);
+      const a=at.get(anchor),p=at.get(c),d=Math.hypot(p.x-a.x,p.y-a.y),ux=(p.x-a.x)/d,uy=(p.y-a.y)/d,ra=radius(anchor);
+      const tx=a.x+ux*ra,ty=a.y+uy*ra,qx=q.x-tx,qy=q.y-ty,along=qx*ux+qy*uy;
+      return along>8?(qx*qx+qy*qy)/(2*along):Math.hypot(q.x-p.x,q.y-p.y);
+    },
+    set(n){
+      c.n=n;
+      for(const[o,p]of at)Object.assign(o,o.x1===undefined?{x:p.x,y:p.y}:{x1:p.x1,y1:p.y1,x2:p.x2,y2:p.y2});
+      if(anchor){
+        const done=new Set([anchor]),q=[],move=(o,dx,dy)=>{for(const m of stackOf({x:at.get(o).x,y:at.get(o).y}).filter(m=>at.has(m)&&!done.has(m))){done.add(m);shift(m,dx,dy);q.push(m)}};
+        const a=at.get(anchor),p=at.get(c),d=Math.hypot(p.x-a.x,p.y-a.y),R=radius(anchor)+radius(c);
+        move(c,a.x+(p.x-a.x)/d*R-p.x,a.y+(p.y-a.y)/d*R-p.y);interlock(c,anchor);
+        for(let i=0;i<q.length;i++){const m=q[i],pm=at.get(m);
+          for(const[o,how]of links.get(m)){if(how!=='mesh'||done.has(o))continue;
+            const po=at.get(o),e=Math.hypot(po.x-pm.x,po.y-pm.y),Rm=radius(m)+radius(o);
+            move(o,m.x+(po.x-pm.x)/e*Rm-po.x,m.y+(po.y-pm.y)/e*Rm-po.y);interlock(o,m)}}
+      }
+      solve();
+    }};
 }
 function interlock(c,partner){
   const phi=Math.atan2(c.y-partner.y,c.x-partner.x),toothOnPartner=(phi-partner.th)*partner.n/TAU;
