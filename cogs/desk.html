@@ -1257,13 +1257,15 @@ const local=e=>{const r=cv.getBoundingClientRect();return {x:e.clientX-r.left,y:
 function zoomAt(s,zoom,anchor){S.zoom=clamp(zoom,ZMIN,ZMAX);view.x=anchor.x-(s.x-CW/2)/S.zoom;view.y=anchor.y-(s.y-CH/2)/S.zoom}
 const fingers=new Map();let pinch=null,gesture=null;
 function pinchNow(){const[a,b]=[...fingers.values()];return {mid:{x:(a.x+b.x)/2,y:(a.y+b.y)/2},d:Math.hypot(a.x-b.x,a.y-b.y)||1}}
+// The pinch measures from the fingers down now; whenever one lands or lifts it starts over from here.
+function repinch(){const p=pinchNow();pinch={...p,zoom:S.zoom,anchor:screenToWorld(p.mid)}}
 function dropGesture(){
   if(gesture){const g=gesture.g;if(g.cancel)g.cancel();else if(gesture.moved)g.up?.(gesture.last);gesture=null}
   ui.scrap=false;ui.crank=null;ui.carry=null;
 }
 cv.addEventListener('pointerdown',e=>{
   cv.setPointerCapture(e.pointerId);const s=local(e);fingers.set(e.pointerId,s);ui.cam=null;
-  if(fingers.size===2){dropGesture();const p=pinchNow();pinch={...p,zoom:S.zoom,anchor:screenToWorld(p.mid)};return}
+  if(fingers.size>=2){dropGesture();repinch();return}
   if(fingers.size===1&&!pinch)gesture={id:e.pointerId,g:pointerGesture(e,s),s0:s,last:s,t0:e.timeStamp,moved:false};
 });
 cv.addEventListener('pointermove',e=>{
@@ -1276,7 +1278,12 @@ cv.addEventListener('pointermove',e=>{
 });
 const endPointer=e=>{
   if(!fingers.delete(e.pointerId))return;
-  if(pinch){if(!fingers.size){pinch=null;changed()}return}
+  if(pinch){
+    if(fingers.size>=2){repinch();return}
+    pinch=null;changed();
+    if(fingers.size===1){const[[id,s]]=fingers;gesture={id,g:G.pan(s),s0:s,last:s,t0:e.timeStamp,moved:true}}
+    return;
+  }
   if(!gesture||gesture.id!==e.pointerId)return;
   const g=gesture;gesture=null;const s=local(e);
   ui.t=e.timeStamp;if(g.moved||e.timeStamp-g.t0>450){g.g.up?.(s);return}

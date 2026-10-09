@@ -25,6 +25,8 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
     const lerp = (a, z, k) => [a[0] + (z[0] - a[0]) * k, a[1] + (z[1] - a[1]) * k];
     const t = {
       p, errs, probe, scr,
+      // Touch points with explicit ids, for checks that add and lift particular fingers.
+      touch: (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map(([id, x, y]) => ({ id, x, y })) }),
       // A path of screen points, with a frame between moves so velocities read like a finger.
       async stroke(pts, { steps = 8, frame = 16, hold = 0, mid = null } = {}) {
         await T('touchStart', [pts[0]]);
@@ -269,6 +271,22 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const pad = await tp.probe(() => { const o = __cogs.W.pads[1], s = __cogs.toScreen(o); return { id: o.id, s: [s.x, s.y], n: __cogs.W.pads.length }; });
   await tp.stroke([pad.s, [pad.s[0], 700], await tp.shelf('pad')]);
   is('drag a pad onto the shelf: gone', await tp.probe(id => [__cogs.W.pads.every(p => p.id !== id), __cogs.W.pads.length], pad.id), [true, pad.n - 1]);
+  const zoomNow = () => tp.probe(() => __cogs.S.zoom);
+  // CDP touchEnd lifts the points it lists; a finger that does not move sends no pointermove.
+  await tp.touch('touchStart', [[1, 120, 400]]); await tp.touch('touchStart', [[1, 120, 400], [2, 270, 400]]);
+  for (let k = 1; k <= 6; k++) await tp.touch('touchMove', [[1, 120 - 8 * k, 400], [2, 270 + 8 * k, 400]]);
+  await wait(100); const z1 = await zoomNow();
+  await tp.touch('touchStart', [[1, 72, 400], [2, 318, 400], [3, 195, 600]]); await wait(50);
+  await tp.touch('touchEnd', [[1, 72, 400]]); await wait(50);
+  await tp.touch('touchMove', [[2, 318, 400], [3, 196, 600]]); await wait(50);
+  const z2 = await zoomNow();
+  check('a palm lands mid-pinch, a pinch finger lifts, the palm moves 1 px: zoom moves under 1%', Math.abs(z2 / z1 - 1) < .01, [z1, z2]);
+  await tp.touch('touchEnd', [[2, 318, 400]]); await wait(50);
+  const v0 = await tp.probe(() => __cogs.serialize().view.x);
+  for (let k = 1; k <= 3; k++) await tp.touch('touchMove', [[3, 196 + 10 * k, 600]]);
+  await wait(50);
+  check('the finger left after a pinch pans', !near(await tp.probe(() => __cogs.serialize().view.x), v0, 1e-6), v0);
+  await tp.touch('touchEnd', [[3, 226, 600]]); await wait(100);
   await tp.p.waitForFunction(() => !__cogs.pending); await tp.act('undo');
   is('the panel undo button brings it back', await tp.probe(id => __cogs.W.pads.some(p => p.id === id), pad.id), true);
   await tp.act('redo'); await tp.dev(false);
