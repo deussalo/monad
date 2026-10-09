@@ -16,6 +16,9 @@ const SHOT = process.env.COGS_SHOT || '';
   await p.goto(FILE); await p.waitForTimeout(400);
   await p.click('button[data-act=audio]');
   await p.waitForFunction(() => __cogs.engine().state === 'ready' && __cogs.engine().ac === 'running', null, { timeout: 5000 });
+  const smooth = await probe(() => new Promise(r => { const s = []; const f = ts => { s.push([ts, __cogs.clock.view * 1000]); if (s.length < 40) requestAnimationFrame(f); else {
+    const k = s.slice(1).map(([t, v], i) => (v - s[i][1]) / (t - s[i][0])).filter(Number.isFinite); r(Math.max(...k.map(x => Math.abs(x - 1)))); } }; requestAnimationFrame(f); }));
+  check('drawn motion advances with the frame clock (worst frame within 5%)', smooth < .05, +smooth.toFixed(4));
   await p.click('button[data-act=clear]');
   const rect = await probe(() => { const r = document.querySelector('#c').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
   const at = (x, y) => [rect.x + x, rect.y + y];
