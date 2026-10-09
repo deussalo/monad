@@ -95,6 +95,20 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const heard = await probe(([t0, span]) => [...new Set(__cogs.stats.log.filter(l => l.t >= t0 && l.t < t0 + span).map(l => l.src.split('>')[1]))].sort(), [g0, 4 * 60 / 110 * 2]);
   is('over two bars every driven pad and reader sounds', heard, ['pad10', 'pad11', 'pad12', 'pad31', 'reader13', 'reader26']);
   check('default world: no event scheduled late', (await probe(() => __cogs.stats.late)) === 0, await probe(() => __cogs.stats.late));
+  console.log('CRANK ON A BUSY RIM');
+  await m.glyph();
+  const armsNow = () => probe(() => JSON.stringify(__cogs.W.arms.map(a => [a.id, a.a, a.len])));
+  const arms0 = await armsNow(), rpm0 = await probe(() => __cogs.W.cogs[0].w * 60 / (2 * Math.PI));
+  const rim = await probe(() => { const c = __cogs.W.cogs[0], a = __cogs.W.arms.find(a => a.cog === c), ang = __cogs.renderTh(c) + a.a, s = __cogs.toScreen(c), R = __cogs.radius(c) * __cogs.S.zoom, tip = __cogs.toScreen(__cogs.armTip(a));
+    return { cx: s.x, cy: s.y, R, ang, tipGap: Math.hypot(tip.x - s.x - Math.cos(ang) * R, tip.y - s.y - Math.sin(ang) * R) }; });
+  const onRim = a => [rim.cx + Math.cos(a) * rim.R, rim.cy + Math.sin(a) * rim.R];
+  await m.stroke([0, 1, 2, 3, 4, 5, 6].map(k => onRim(rim.ang + k * .25)), { steps: 3, frame: 16, mid: async () => { rim.during = await probe(() => __cogs.W.cogs[0].w * 60 / (2 * Math.PI)); } });
+  const rpm1 = await probe(() => __cogs.W.cogs[0].w * 60 / (2 * Math.PI));
+  check(`grab the rim where an arm tip passes ${rim.tipGap.toFixed(0)} px away: the rim cranks, the arm is untouched`, (await armsNow()) === arms0 && !near(rim.during, rpm0, 1e-6), [rpm0, rim.during]);
+  const DETS = [1/8, 1/6, 1/4, 1/3, 1/2, 2/3, 3/4, 1, 4/3, 3/2, 2, 3, 4, 6, 8].map(r => r * 110 / 4), nearest = Math.min(...DETS.map(d => Math.abs(Math.log(Math.abs(rim.during) / d))));
+  check('let go mid-crank: the speed stays where it was left, unless within 6% of a step', nearest < Math.log(1.06) ? DETS.some(d => near(Math.abs(rpm1), d, 1e-6)) : near(rpm1 / rim.during, 1, .15) && !near(rpm1, rpm0, 1e-6), [rim.during, rpm1]);
+  await m.glyph();
+
   await m.act('clear'); await m.world('bpm lock', 0); await m.world('zoom', 1.6); await m.dev(false);
 
   console.log('PANEL SHEET');
@@ -123,8 +137,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const top2 = [c2[0], c2[1] - 22.92];
   await m.stroke([await m.scr(top2), await m.scr([c2[0] + 8, top2[1]]), await m.scr([c2[0] + 22, top2[1] + 8])], { steps: 5, frame: 12 });
   const crank = await probe(() => __cogs.W.cogs.map(c => ({ motor: c.motor, rpm: c.w * 60 / (2 * Math.PI) })));
-  const DET = [5, 7.5, 10, 12, 15, 20, 24, 30, 40, 45, 60, 72, 80, 90, 120, 144, 160, 180, 240, 300];
-  check('flick the teeth clockwise: that cog drives at a detent', crank[0].motor === 0 && crank[1].motor > 0 && DET.includes(crank[1].motor), crank.map(c => c.motor));
+  check('flick the teeth clockwise: that cog takes over as the driver, clockwise', crank[0].motor === 0 && crank[1].motor > 0, crank.map(c => c.motor));
   check('the train follows the new driver', near(crank[0].rpm, -crank[1].motor / 2, 1e-9), crank.map(c => c.rpm));
   await m.stroke([await m.scr(top2), await m.scr([c2[0] + 12, top2[1]])], { steps: 4, frame: 10, hold: 0 });
   await m.stroke([await m.scr(top2), await m.scr([c2[0] + 12, top2[1]]), await m.scr([c2[0] + 12.1, top2[1]])], { steps: 3, frame: 90 });

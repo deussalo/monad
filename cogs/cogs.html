@@ -1053,9 +1053,12 @@ function drive(c,rpm){
   if(c.driver)for(const o of W.cogs)if(o.driver===c.driver){o.motor=0;o.revs=0}
   if(S.bpm)c.revs=rpm*S.beats/S.bpm;else c.motor=rpm;solve();
 }
+// A released crank keeps its speed; it settles on a step only when let go within DETENT_PULL of one.
+const DETENT_PULL=Math.log(1.06);
 function detent(rpm){
   const a=Math.abs(rpm);if(a<3)return 0;
-  return Math.sign(rpm)*detents().reduce((b,d)=>Math.abs(Math.log(d/a))<Math.abs(Math.log(b/a))?d:b);
+  const d=detents().reduce((b,d)=>Math.abs(Math.log(d/a))<Math.abs(Math.log(b/a))?d:b);
+  return Math.abs(Math.log(d/a))<DETENT_PULL?Math.sign(rpm)*d:rpm;
 }
 const trackScrap=s=>{ui.scrap=offStage(s)};
 function endScrap(type,o){const gone=ui.scrap;ui.scrap=false;if(gone)removeObj(type,o);else changed(true)}
@@ -1208,10 +1211,10 @@ function begin(s){
     near(dist({x:o.x1,y:o.y1}),22,()=>G.span(type,o,s,1));near(dist({x:o.x2,y:o.y2}),22,()=>G.span(type,o,s,2));
     near(segDist(p,o.x1,o.y1,o.x2,o.y2)*Z+8,22,()=>G.span(type,o,s,0))}
   for(const o of W.belts)for(const l of beltLines(o))near(segDist(p,...l)*Z+10,22,()=>G.belt(o));
+  const c=pickCog(p,()=>true,14/Z),d=c&&dist(c),Rs=c&&radius(c)*Z;
+  if(c&&Rs>=30)near(Math.abs(d-Rs),14,()=>G.rim(c,s));
   if(best)return best.make();
-  const c=pickCog(p,()=>true,14/Z);
-  if(c){const d=dist(c),Rs=radius(c)*Z;
-    if(Rs>=30&&Math.abs(d-Rs)<=14)return G.rim(c,s);
+  if(c){
     if(noteMode(c)&&d>Math.max(22,Rs*.2)&&cellAt(c,p))return G.notes(c,s);
     return G.cog(c,s)}
   return G.pan(s);
@@ -1805,7 +1808,7 @@ else demo();
 edits.reset();
 if(shared)loadShared(shared[1]).then(()=>edits.reset()).catch(e=>notice(`This share link could not be loaded: ${e.message}`));
 clock.off=nowSec()-simT;
-window.__cogs=Object.defineProperties({W,S,SPACE,stats,clock,get simT(){return simT},serialize,deserialize,solve,toScreen,radius,ringR,armTip,beltLines,stringLen,
+window.__cogs=Object.defineProperties({W,S,SPACE,stats,clock,get simT(){return simT},serialize,deserialize,solve,toScreen,radius,ringR,armTip,renderTh,beltLines,stringLen,
   get sel(){return sel&&{type:sel.type,id:sel.o.id}},get group(){return group.map(g=>g.type).sort()},get armed(){return ui.armed},get flying(){return !!ui.cam},
   engine:()=>({state:engineState,ac:ac&&ac.state,...engineStats}),
   worldKey,undo:()=>edits.undo(),redo:()=>edits.redo(),get undos(){return edits.past.length},get redos(){return edits.future.length},get pending(){return edits.pending},commit:()=>edits.commit()},Object.getOwnPropertyDescriptors(PROBE));
