@@ -32,6 +32,24 @@ const SHOTS = process.env.COGS_SHOTS || '';
   check('drawn motion advances with the frame clock (worst frame within 5%)', smooth < .05, +smooth.toFixed(4));
   await shot('desk-01-demo');
 
+  console.log('ENGINE');
+  const steal = await probe(async () => {
+    const url = 'data:text/javascript;charset=utf-8,' + encodeURIComponent(document.querySelector('#engine').textContent);
+    const strike = (at, k, amp) => [at, k, amp, .0008, 0, 0, 3, 220, 330, 440, 1, .5, .3, 2, 2, 2];
+    const render = async (voices, strikes) => {
+      const ac = new OfflineAudioContext(2, 128 * 40, 48000);
+      await ac.audioWorklet.addModule(url);
+      const n = new AudioWorkletNode(ac, 'cogs-engine', { outputChannelCount: [2], processorOptions: { voices, lines: 16, space: { ...SPACE, wet: 0 } } });
+      n.connect(ac.destination);
+      ac.suspend(256 / 48000).then(async () => { n.port.postMessage({ type: 'strikes', d: new Float64Array(strikes.flat()) }); await new Promise(r => setTimeout(r, 100)); ac.resume(); });
+      return (await ac.startRendering()).getChannelData(0);
+    };
+    const at = 128 * 10 + 20, alone = await render(64, [strike(at, 2, .5)]), stolen = await render(1, [strike(512, 1, .002), strike(at, 2, .5)]);
+    let gap = 0; for (let i = 128 * 11; i < alone.length; i++) gap = Math.max(gap, Math.abs(alone[i] - stolen[i]));
+    return gap;
+  });
+  is('a strike that steals the only voice sounds at its own sample, as if alone', steal, 0);
+
   console.log('TOOLBAR');
   const bar = () => probe(() => ({ open: __cogs.open, drawer: document.querySelector('#drawer').offsetWidth, stageR: Math.round(__cogs.stage().r) }));
   const opened = await bar();

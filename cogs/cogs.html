@@ -261,9 +261,10 @@ class CogsEngine extends AudioWorkletProcessor{
     const len=Math.max(8,Math.round((d[o+3]||.002)*fs));this.cLen[v]=len;this.cN[v]=len;
     const p=Math.max(-1,Math.min(1,d[o+5]||0)),a=(p+1)*Math.PI/4;this.plT[v]=Math.cos(a);this.prT[v]=Math.sin(a);this.dl[v]=off||0;
   }
+  offset(d,o){return Math.max(0,Math.min(BLOCK-1,Math.round(d[o]-this.frame)))}
   // false: every voice is already fading out, so the strike has to wait.
   start(d,o){
-    const V=this.V,key=d[o+1],off=Math.max(0,Math.min(BLOCK-1,Math.round(d[o]-this.frame)));
+    const V=this.V,key=d[o+1],off=this.offset(d,o);
     for(let v=0;v<V;v++)if(this.on[v]&&this.key[v]===key&&this.fade[v]===0){this.strikes++;this.load(v,d,o,off);return true}
     let free=-1;for(let v=0;v<V;v++)if(!this.on[v]){free=v;break}
     const n=this.active(),poly=Math.sqrt(8/Math.max(8,n+1));
@@ -314,7 +315,7 @@ class CogsEngine extends AudioWorkletProcessor{
     this.pl[v]=pl;this.pr[v]=pr;this.env[v]=env;this.envStep[v]=es;this.e[v]=e;
     if(fl>0){
       this.fade[v]=fl;
-      if(fl<=1e-9){const d=this.pend[v];this.on[v]=0;this.fade[v]=0;if(d)this.begin(v,d,this.pendAt[v])}
+      if(fl<=1e-9){const d=this.pend[v];this.on[v]=0;this.fade[v]=0;if(d){const o=this.pendAt[v];this.begin(v,d,o,this.offset(d,o));this.renderVoice(v,n,L,R)}}
     }else if(!exciting&&cN===0&&e<1e-11)this.on[v]=0;
   }
   process(inputs,outputs){
