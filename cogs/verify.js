@@ -83,26 +83,16 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   check('drawn motion advances with the frame clock (worst frame within 5%)', smooth < .05, +smooth.toFixed(4));
   await m.shot('01-demo');
 
-  console.log('DEMO GROOVE');
-  const STEP = 60 / 110 / 4, g0 = await m.reset(); await wait(4800);
-  const ev = await probe(([t0, span]) => __cogs.stats.log.filter(l => l.t >= t0 && l.t < t0 + span).map(l => [l.src, l.t]), [g0, 32 * STEP]);
-  const kick0 = ev.find(([src]) => src.endsWith('>pad10'))[1];
-  const playedOn = T0 => {
-    const at = {}, off = [];
-    for (const [src, t] of ev) {
-      const k = (t - T0) / STEP, key = src.endsWith('>reader13') ? 'melody' : src.split('>')[1];
-      if (!near(k, Math.round(k), src.includes('>pad') ? 1e-6 : 2e-3)) off.push([src, k]);
-      (at[key] ||= []).push(key === 'melody' ? [((Math.round(k) % 32) + 32) % 32, +src.match(/ring(\d+)/)[1]] : ((Math.round(k) % 16) + 16) % 16);
-    }
-    const set = xs => [...new Set(xs.map(String))].sort().join(' ');
-    return { off, kick: set(at.pad10), snare: set(at.pad11), hat: set(at.pad12), bass: set(at.string14), melody: set(at.melody) };
-  };
-  const MEL = [[0, 5], [3, 6], [6, 8], [8, 7], [10, 6], [12, 5], [14, 4], [16, 3], [19, 4], [22, 5], [24, 6], [26, 7], [28, 6], [30, 4]];
-  const want = shift => ({ off: [], kick: '0 10 6', snare: '12 4', hat: '0 10 12 14 2 4 6 8', bass: '0 6',
-    melody: [...new Set(MEL.map(([s, r]) => String([(s + shift) % 32, r])))].sort().join(' ') });
-  const fits = [0, 6, 10].flatMap(o => [0, 16].map(shift => [playedOn(kick0 - o * STEP), want(shift)])).find(([got, w]) => JSON.stringify(got) === JSON.stringify(w));
-  check('demo plays kick, snare, hats, bass and melody on the 16th grid', !!fits, fits ? fits[0] : playedOn(kick0));
-  check('demo: no event scheduled late', (await probe(() => __cogs.stats.late)) === 0, await probe(() => __cogs.stats.late));
+  console.log('DEFAULT WORLD');
+  const WANT = JSON.parse(require('fs').readFileSync(path.join(__dirname, 'src', 'default-world.json'), 'utf8'));
+  const parts = w => JSON.stringify({ ...w, S: { ...w.S, zoom: 0 }, view: 0, cogs: w.cogs.map(c => ({ ...c, th: 0 })) });
+  check('a fresh page opens the default world exactly (camera and phase aside)', parts(await probe(() => __cogs.serialize())) === parts(WANT), 'see src/default-world.json');
+  const g0 = await m.reset();
+  is('holding the glyph open over the panel presses nothing beneath it', await probe(() => [__cogs.W.cogs.length, __cogs.clock.paused]), [7, false]);
+  await wait(4800);
+  const heard = await probe(([t0, span]) => [...new Set(__cogs.stats.log.filter(l => l.t >= t0 && l.t < t0 + span).map(l => l.src.split('>')[1]))].sort(), [g0, 4 * 60 / 110 * 2]);
+  is('over two bars every driven pad and reader sounds', heard, ['pad10', 'pad11', 'pad12', 'pad31', 'reader13', 'reader26']);
+  check('default world: no event scheduled late', (await probe(() => __cogs.stats.late)) === 0, await probe(() => __cogs.stats.late));
   await m.act('clear'); await m.world('bpm lock', 0); await m.world('zoom', 1.6); await m.dev(false);
 
   console.log('GEARS');

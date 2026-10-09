@@ -54,9 +54,12 @@ function reveal(){
   if(dx||dy)fly(view.x+dx/S.zoom,view.y+dy/S.zoom,S.zoom);
 }
 Object.assign(G,{
+  // The press that opens the panel lifts over it, and the browser turns that lift into a click on whatever
+  // control now lies under the finger; the panel ignores input until that click has passed.
   glyph(){
-    const timer=setTimeout(()=>{togglePanel(true);buzz(15)},600);
-    return {tap(){clearTimeout(timer);setPaused(!clock.paused)},up(){clearTimeout(timer)},cancel(){clearTimeout(timer)}};
+    const dev=$('#dev'),timer=setTimeout(()=>{togglePanel(true);dev.style.pointerEvents='none';buzz(15)},600);
+    const end=()=>{clearTimeout(timer);setTimeout(()=>{dev.style.pointerEvents=''},350)};
+    return {tap(){clearTimeout(timer);setPaused(!clock.paused)},up:end,cancel:end};
   },
   bezel(b,i,s0){
     const p=b.sectors[i],steps=stepsOf(p),per=steps?clamp(300/steps,8,40)*Math.PI/180:0;

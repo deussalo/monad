@@ -2,7 +2,7 @@
 mount();resize();
 const saved=storage.get(),shared=location.hash.match(/^#w=([\w-]+)/);
 if(saved)try{deserialize(JSON.parse(saved))}catch(e){console.error('cogs: saved world rejected:',e.message);demo()}
-else{demo();const f=fitTarget();Object.assign(view,{x:f.x,y:f.y});S.zoom=f.z}
+else demo();
 edits.reset();
 if(shared)loadShared(shared[1]).then(()=>edits.reset()).catch(e=>console.error('cogs: shared world rejected:',e.message));
 clock.off=nowSec()-simT;

@@ -363,34 +363,10 @@ function deserialize(j){
   Object.assign(S,j.S);Object.assign(SPACE,j.SPACE);Object.assign(view,j.view);
   select(null);solve();applyAudioSettings();syncRows();changed();
 }
-// The demo groove, in 16th-note steps of a 4/4 bar: [arm id, cog id, arm length, target, steps it sounds on].
-const GROOVE=[[6,1,62,'pad10',[0,6,10]],[7,2,56,'pad11',[4,12]],[8,3,38,'pad12',[0,2,4,6]],[9,4,70,'string14',[0]]];
-const MELODY=[[0,5],[3,6],[6,8],[8,7],[10,6],[12,5],[14,4],[16,3],[19,4],[22,5],[24,6],[26,7],[28,6],[30,4]];
-function demo(){
-  const R=n=>n*TOOTH/TAU,K={x:0,y:0},N={x:2*R(24),y:0},H={x:3*R(24)+R(12),y:0},B={x:-2*R(24),y:0},D={x:0,y:R(24)+R(48)};
-  const drum=(kind,v,level)=>makeVoice(kind,{level,velSense:.35,...v});
-  deserialize({S:{...S,bpm:110,beats:4},SPACE:{...SPACE},view:{x:20,y:40},
-    cogs:[{id:1,...K,n:24,motor:27.5,revs:1,layer:0,th:0,track:null},{id:2,...N,n:24,motor:0,layer:0,th:0,track:null},
-      {id:3,...H,n:12,motor:0,layer:0,th:0,track:null},{id:4,...B,n:24,motor:0,layer:0,th:0,track:null},
-      {id:5,...D,n:48,motor:0,layer:0,th:0,track:{rings:10,base:57,scale:'minpent',div:32,dots:[]}}],
-    arms:GROOVE.map(([id,cog,len])=>({id,cog,a:0,r0:0,len})),
-    pads:[{id:10,x:0,y:-58,r:11,voice:drum('kick',{tune:48,sweep:4,pdecay:.04,decay:.45},1.1)},
-      {id:11,x:N.x+33,y:-50,r:10,voice:drum('snare',{tune:185,tone:.4,cutoff:3200,decay:.17},.9)},
-      {id:12,x:H.x+32,y:24,r:7,voice:drum('hat',{cutoff:8500,decay:.035},.4)}],
-    readers:[{id:13,x1:D.x+18,y1:D.y,x2:D.x+R(48),y2:D.y,voice:makeVoice('modal',{level:.55,velSense:.3,body:'bar',bright:.5,hard:.45,decay:1.1})}],
-    strings:[{id:14,x1:B.x-26.8,y1:-150,x2:B.x-26.8,y2:110,kind:'string',f200:143,quant:1,decay:1.6,damp:.7,hard:.35,level:.8,velSense:.4}]});
-  const [k,n,h,b,d]=W.cogs;
-  for(const[c,parent]of [[k,d],[n,k],[h,n],[b,k]])interlock(c,parent);
-  const step=S.beats*60/S.bpm/16,hit={pad:o=>(c,arm)=>{const w=hitWindow(c,arm,o);return w.beta-Math.sign(c.w)*w.half},
-    string:o=>(c,arm)=>{const L=stringLen(o),u=((c.x-o.x1)*(o.x2-o.x1)+(c.y-o.y1)*(o.y2-o.y1))/(L*L),fx=o.x1+(o.x2-o.x1)*u,fy=o.y1+(o.y2-o.y1)*u;
-      return Math.atan2(fy-c.y,fx-c.x)-Math.sign(c.w)*Math.acos(Math.hypot(fx-c.x,fy-c.y)/(arm.r0+arm.len))}};
-  const target=name=>{const[,type,id]=name.match(/^(pad|string)(\d+)$/);return hit[type](W[type+'s'].find(o=>o.id===+id))};
-  for(const[id,,,name,steps]of GROOVE){const arm=W.arms.find(a=>a.id===id),c=arm.cog,angle=target(name)(c,arm);
-    W.arms.push(...steps.slice(1).map((st,i)=>({...arm,id:W.next+i,a:wrap(angle-c.th-c.w*st*step)})));W.next+=steps.length-1;
-    arm.a=wrap(angle-c.th-c.w*steps[0]*step)}
-  d.track.dots=MELODY.map(([st,ring])=>({ring,a:wrap(-Math.sign(d.w)*st*TAU/d.track.div),p:1,v:1}));
-  changed(true);
-}
+const DEFAULT_WORLD=
+//@include default-world.json
+;
+function demo(){deserialize(structuredClone(DEFAULT_WORLD));const f=fitTarget();Object.assign(view,{x:f.x,y:f.y});S.zoom=f.z}
 
 const b64url={enc:u=>{let s='';for(const b of u)s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')},
   dec:s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0))};
