@@ -1569,11 +1569,23 @@ function refreshInspector(){if(!$('#dev').hidden)syncRows()}
 let roAt=0;const meterBuf=new Float32Array(2048);
 function tick(){
   syncClock();
-  if(!clock.paused){clock.view=nowSec()-clock.off;advance(clock.view+S.lookahead)}
+  if(!clock.paused)advance(nowSec()-clock.off+S.lookahead);
 }
-function frame(){
+// currentTime advances in whole audio callbacks (10-40 ms on phones) and holds the start of the
+// current one, so drawing from it stutters; the largest recent (currentTime - performance.now)
+// is the true offset. getOutputTimestamp is not used: headless Chrome reports stale pairs.
+const audioOffsets=[];let heardOffset=null,lastFrameSec=0;
+function heardAt(frameSec){
+  if(!clock.audio)return nowSec()-clock.off;
+  audioOffsets.push(ac.currentTime-performance.now()/1000);if(audioOffsets.length>90)audioOffsets.shift();
+  const target=Math.max(...audioOffsets)-(ac.outputLatency||ac.baseLatency||0)+clock.shift-clock.off;
+  const dt=clamp(frameSec-lastFrameSec,0,.1),err=target-heardOffset;lastFrameSec=frameSec;
+  if(heardOffset===null||Math.abs(err)>.25)heardOffset=target;else heardOffset+=clamp(err,-.02*dt,.02*dt);
+  return frameSec+heardOffset;
+}
+function frame(ts){
   syncClock();
-  if(!clock.paused)clock.view=nowSec()-clock.off;
+  if(!clock.paused)clock.view=Math.min(simT,Math.max(clock.view,heardAt(ts/1000)));
   if(meter){meter.getFloatTimeDomainData(meterBuf);let m=0;for(const x of meterBuf)m=Math.max(m,Math.abs(x));peak=Math.max(m,peak*.95)}
   stepCamera();draw();
   const now=performance.now();

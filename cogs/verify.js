@@ -26,11 +26,12 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
     const t = {
       p, errs, probe, scr,
       // A path of screen points, with a frame between moves so velocities read like a finger.
-      async stroke(pts, { steps = 8, frame = 16, hold = 0 } = {}) {
+      async stroke(pts, { steps = 8, frame = 16, hold = 0, mid = null } = {}) {
         await T('touchStart', [pts[0]]);
         if (hold) await wait(hold);
         for (let i = 1; i < pts.length; i++) for (let k = 1; k <= steps; k++) { await T('touchMove', [lerp(pts[i - 1], pts[i], k / steps)]); if (frame) await wait(frame); }
-        await T('touchEnd', []);
+        if (mid) await mid();
+        await T('touchEnd', []); await p.waitForFunction(() => !__cogs.flying);
       },
       async tap(s, gap = 460) { await T('touchStart', [s]); await T('touchEnd', []); await wait(gap); await p.waitForFunction(() => !__cogs.flying); },
       async dbl(s) { await T('touchStart', [s]); await T('touchEnd', []); await T('touchStart', [s]); await T('touchEnd', []); await wait(100); await p.waitForFunction(() => !__cogs.flying); },
@@ -77,13 +78,16 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await p.goto(FILE); await wait(500);
   await m.tap(await m.empty());
   await p.waitForFunction(() => __cogs.engine().state === 'ready' && __cogs.engine().ac === 'running', null, { timeout: 5000 });
+  const smooth = await probe(() => new Promise(r => { const s = []; const f = ts => { s.push([ts, __cogs.clock.view * 1000]); if (s.length < 40) requestAnimationFrame(f); else {
+    const k = s.slice(1).map(([t, v], i) => (v - s[i][1]) / (t - s[i][0])).filter(Number.isFinite); r(Math.max(...k.map(x => Math.abs(x - 1)))); } }; requestAnimationFrame(f); }));
+  check('drawn motion advances with the frame clock (worst frame within 5%)', smooth < .05, +smooth.toFixed(4));
   await m.shot('01-demo');
   await m.act('clear'); await m.world('zoom', 1.6); await m.dev(false);
 
   console.log('GEARS');
   await m.stroke([await m.shelf('cog'), await m.scr([30, 60]), await m.scr([0, 0])]);
   await m.drag([22.92, 0], [46, 0]);
-  await m.stroke([await m.shelf('cog'), await m.scr([70, 0])], { hold: 0 });
+  await m.stroke([await m.shelf('cog'), await m.scr([70, 0])], { mid: () => m.shot('02-carry-snap') });
   const gears = await probe(() => __cogs.W.cogs.map(c => ({ n: c.n, x: c.x, y: c.y, rpm: c.w * 60 / (2 * Math.PI), jam: c.jam })));
   check('rim pulled out to 46: 24 teeth; a fresh cog: 12', gears[0].n === 24 && gears[1].n === 12, gears.map(g => g.n));
   check('second cog snapped to pitch distance 68.75', near(Math.hypot(gears[1].x - gears[0].x, gears[1].y - gears[0].y), 36 * 12 / (2 * Math.PI), 1e-9), gears[1].x - gears[0].x);
@@ -102,6 +106,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await m.stroke([await m.scr(top2), await m.scr([c2[0] + 12, top2[1]])], { steps: 4, frame: 10, hold: 0 });
   await m.stroke([await m.scr(top2), await m.scr([c2[0] + 12, top2[1]]), await m.scr([c2[0] + 12.1, top2[1]])], { steps: 3, frame: 90 });
   check('crank, hold still, let go: the train stops', JSON.stringify(await rpm()) === '[0,0]', await rpm());
+  if (SHOTS) await m.stroke([await m.scr(top2), await m.scr([c2[0] + 14, top2[1] + 4])], { steps: 6, frame: 8, mid: () => m.shot('03-crank') });
   await m.tap(await m.scr([c1[0] - 20, c1[1] - 15])); await m.field('motor rpm', 60); await m.dev(false);
 
   console.log('ARMS AND PADS');
@@ -115,7 +120,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await m.fromShelf('pad', [98.75, 20]);
   const built = await probe(() => ({ arms: __cogs.W.arms.map(a => [a.cog.id, +a.len.toFixed(1)]), pads: __cogs.W.pads.length }));
   check('arms dropped on each cog, tips swung out to 80 and 40', built.arms.length === 2 && near(built.arms[0][1], 80, 1) && near(built.arms[1][1], 40, 1), built.arms);
-  await m.shot('02-built-paused');
+  await m.shot('04-built-paused');
   await m.glyph();
   const h0 = await m.reset(); await wait(4300);
   const hitsIn4 = [await m.count('>pad' + (await probe(() => __cogs.W.pads[0].id)), h0, 4), await m.count('>pad' + (await probe(() => __cogs.W.pads[1].id)), h0, 4)];
@@ -138,7 +143,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await m.tap(await m.scr([c2[0] - 12, c2[1]])); await m.field('motor rpm', 100); await m.dev(false); await wait(150);
   const jam = await probe(() => __cogs.W.cogs.map(c => [c.jam, c.w]));
   check('two disagreeing motors jam the train', jam.every(([j, w]) => j && w === 0), jam);
-  await m.shot('03-jam');
+  await m.shot('05-jam');
   await m.field('motor rpm', -120);
   const ok = await probe(() => __cogs.W.cogs.map(c => [c.jam, c.w * 60 / (2 * Math.PI)]));
   check('agreeing motors turn', ok.every(([j]) => !j) && near(ok[1][1], -120, 1e-9), ok);
@@ -148,7 +153,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await m.tap(await m.scr([-60, -30]));
   const bz = await probe(() => { const b = __cogs.activeBezel(); return b && { cx: b.cx, cy: b.cy, R: b.R, n: b.sectors.length }; });
   check('tap a pad: its bezel blooms, one sector per kick param', bz && bz.n === 7, bz);
-  await m.shot('04-pad-bezel');
+  await m.shot('06-pad-bezel');
   const sector = (b, i, f) => { const a = -Math.PI / 2 + (i + f) * 2 * Math.PI / b.n; return [b.cx + Math.cos(a) * b.R, b.cy + Math.sin(a) * b.R]; };
   const tune0 = await probe(() => __cogs.W.pads[0].voice.tune);
   await m.stroke([sector(bz, 1, .2), sector(bz, 1, .5), sector(bz, 1, .8), sector(bz, 1, 1.2)]);
@@ -167,13 +172,13 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   is('double tap the disc: flies in until its face is the score', await probe(() => { const c = __cogs.W.cogs[2]; return c.track.rings > 1 && __cogs.radius(c) * .65 / 11 * __cogs.S.zoom >= 12; }), true);
   for (const [dx, dy] of [[40, 0], [0, -70], [-80, 0]]) await m.tap(await m.scr([discXY[0] + dx, discXY[1] + dy]));
   is('three taps set three pins', await probe(() => __cogs.W.cogs[2].track.dots.length), 3);
-  await m.shot('05-disc-notes');
+  await m.shot('07-disc-notes');
   await m.dbl(await m.empty()); await wait(200);
   await m.fromShelf('reader', [discXY[0], discXY[1] - 45]);
   const rd0 = await probe(() => { const r = __cogs.W.readers[0]; return r && [r.x1, r.y1, r.x2, r.y2].map(v => +v.toFixed(1)); });
   check('reader dropped on the disc lies along its radius', rd0 && near(rd0[0], discXY[0], 1e-6) && near(rd0[2], discXY[0], 1e-6) && rd0[1] > rd0[3], rd0);
   await m.tap(await m.scr([discXY[0] - 60, discXY[1] + 20]));
-  await m.shot('06-disc-bezel');
+  await m.shot('08-disc-bezel');
   is('tap the disc: its tuning bezel (scale, root, divisions, rings)', await probe(() => __cogs.activeBezel()?.sectors.length), 4);
   await m.field('motor rpm', 30); await m.dev(false);
   const disc = await probe(() => { const c = __cogs.W.cogs[2]; return { n: c.n, dots: c.track.dots.length, rpm: c.w * 60 / (2 * Math.PI), strikes: __cogs.engine().strikes }; });
@@ -209,7 +214,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await m.dev(false); await m.tap(await m.empty()); await m.world('zoom', .2); await m.dev(false); await wait(250);
   const room = await probe(() => { const b = __cogs.activeBezel(); return b && { cx: b.cx, cy: b.cy, R: b.R, n: b.sectors.length }; });
   check('zoom out past the machine: the room bezel', room && room.n === 10, room);
-  await m.shot('07-room');
+  await m.shot('09-room');
   const wet0 = await probe(() => __cogs.SPACE.wet);
   await m.stroke([sector(room, 0, .8), sector(room, 0, .5), sector(room, 0, .2)]);
   const wet1 = await probe(() => __cogs.SPACE.wet);
@@ -268,7 +273,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await m.drag([-100, -20], [-100, -60]);
   await m.tap(await m.scr([-150, -40]));
   is('tap a string: its bezel', await probe(() => __cogs.activeBezel()?.sectors.length), 8);
-  await m.shot('08-string-belt');
+  await m.shot('10-string-belt');
   await m.dev(true); await wait(300);
   const note = await probe(() => document.querySelector('#inspector [data-k="note"] b').textContent);
   check('160 px string at 220 Hz/200 px quantizes to C#4', note.startsWith('C#4 61'), note);
@@ -293,12 +298,12 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await m.stroke([await onRing(0), await onRing(.5), await onRing(1), await onRing(1.5), await onRing(2), await onRing(2.6)], { steps: 4, hold: 600 });
   const eu = await probe(() => { const t = __cogs.W.cogs[2].track; return t.dots.map(d => [d.ring, Math.round(d.a / (2 * Math.PI) * t.div)]); });
   check('hold an empty socket on ring 2, sweep 3 steps: euclid 3 in 16', eu.length === 3 && eu.every(([r]) => r === 2), eu);
-  await m.shot('09-euclid');
+  await m.shot('11-euclid');
   const pin = eu[0], pinS = await probe(([ring, k]) => { const c = __cogs.W.cogs[2], R = __cogs.ringR(c, ring), a = k * 2 * Math.PI / c.track.div + c.th - c.w * (__cogs.simT - __cogs.clock.view); const s = __cogs.toScreen({ x: c.x + Math.cos(a) * R, y: c.y + Math.sin(a) * R }); return [s.x, s.y]; }, pin);
   await m.stroke([pinS, [pinS[0] + .5, pinS[1]]], { steps: 1, hold: 600 });
   const ob = await probe(() => { const b = __cogs.activeBezel(); return b && { cx: b.cx, cy: b.cy, R: b.R, n: b.sectors.length, sel: __cogs.sel && __cogs.sel.type }; });
   check('hold a pin: its odds bezel', ob && ob.n === 2 && ob.sel === 'dot', ob);
-  await m.shot('10-pin-odds');
+  await m.shot('12-pin-odds');
   await m.stroke([sector(ob, 0, .7), sector(ob, 0, .45), sector(ob, 0, .2)]);
   const odds = await probe(() => __cogs.W.cogs[2].track.dots.map(d => +d.p.toFixed(2)));
   check('drag the odds sector back: that pin plays less often', odds.filter(x => x < 1).length === 1, odds);
@@ -335,7 +340,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const here = counts(await probe(() => __cogs.serialize())), there = counts(await sp.evaluate(() => __cogs.serialize()));
   check('shared url rebuilds the same world', JSON.stringify(here) === JSON.stringify(there), [here, there]);
 
-  if (SHOTS) { await m.world('zoom', 1); await m.dev(false); await m.dbl(await m.empty()); await m.shot('11-alpha-machine'); await tp.shot('12-pinched'); }
+  if (SHOTS) { await m.world('zoom', 1); await m.dev(false); await m.dbl(await m.empty()); await m.shot('13-alpha-machine'); await tp.shot('14-pinched'); }
   check('page errors', m.errs.length === 0 && tp.errs.length === 0, [...m.errs, ...tp.errs].slice(0, 3));
   console.log(pass ? '\nCOGS: PASS' : '\nCOGS: FAIL');
   await b.close(); process.exit(pass ? 0 : 1);
