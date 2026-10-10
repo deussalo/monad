@@ -967,7 +967,9 @@ function fitTarget(){
 const RPM_DETENTS=[5,7.5,10,12,15,20,24,30,40,45,60,72,80,90,120,144,160,180,240,300];
 const BAR_DETENTS=[1/8,1/6,1/4,1/3,1/2,2/3,3/4,1,4/3,3/2,2,3,4,6,8];
 const detents=()=>S.bpm?BAR_DETENTS.map(r=>r*S.bpm/S.beats):RPM_DETENTS;
-const gaugeAngle=rpm=>Math.sign(rpm)*clamp(Math.log(Math.max(1,Math.abs(rpm))/2.5)/Math.log(120),0,1)*1.7*Math.PI;
+const GAUGE_SWEEP=1.7*Math.PI,GAUGE_REST=.04;
+const gaugeAngle=rpm=>Math.sign(rpm)*clamp(Math.log(Math.max(1,Math.abs(rpm))/2.5)/Math.log(120),0,1)*GAUGE_SWEEP;
+const gaugeRpm=a=>{const k=Math.abs(a)/GAUGE_SWEEP;return k<GAUGE_REST?0:Math.sign(a)*2.5*Math.pow(120,k)};
 function drawCrankGauge(k){
   const c=k.c,s=toScreen(c),R=radius(c)*S.zoom+22,a0=-Math.PI/2;
   cx.lineWidth=1;cx.strokeStyle=DIM;
@@ -978,7 +980,7 @@ function drawCrankGauge(k){
 }
 
 /* ---------- touch ---------- */
-const ui={armed:null,room:false,carry:null,scrap:false,crank:null,cam:null,sector:null,bezelOwner:null,bezelAt:0,lastTap:null,auditionAt:0,snapped:false,t:0,dotOf:null,dotAt:null,sealAt:0,sealOk:false,shared:''};
+const ui={armed:null,room:false,carry:null,scrap:false,crank:null,cam:null,sector:null,bezelOwner:null,bezelAt:0,lastTap:null,auditionAt:0,snapped:false,dotOf:null,dotAt:null,sealAt:0,sealOk:false,shared:''};
 const wrapPi=a=>wrap(a+Math.PI)-Math.PI;
 function buzz(ms){try{const u=navigator.userActivation;if(navigator.vibrate&&(!u||u.hasBeenActive))navigator.vibrate(ms)}catch(e){}}
 // Play a part now, at a middling velocity, the way the sim would strike it.
@@ -1064,15 +1066,13 @@ function placeCog(c,p){
   c.layer=axle?Math.max(...stackOf(axle).filter(o=>o!==c).map(o=>o.layer))+1:0;
   if(!axle)snap(c);solve();
 }
-// The cog you push becomes the train's only motor; under tempo lock it is set in revolutions per bar.
-// A cog's own motor, in the unit the tempo lock reads (revs per bar) as well as in rpm.
-function setMotor(c,rpm){c.motor=rpm;c.revs=S.bpm?rpm*S.beats/S.bpm:0}
-// Cranking hands the whole train to this cog.
+const rpmOf=c=>c.w*60/TAU;
+// Giving a cog a speed makes it its train's only motor, held as rpm and as revolutions per bar for the tempo lock.
 function drive(c,rpm){
-  if(c.driver)for(const o of W.cogs)if(o.driver===c.driver)setMotor(o,0);
-  setMotor(c,rpm);solve();
+  for(const o of c.driver?W.cogs.filter(o=>o.driver===c.driver):[c]){o.motor=0;o.revs=0}
+  c.motor=rpm;c.revs=S.bpm?rpm*S.beats/S.bpm:0;solve();
 }
-// A released crank keeps its speed; it settles on a step only when let go within DETENT_PULL of one.
+// A released dial keeps its speed; it settles on a step only when let go within DETENT_PULL of one.
 const DETENT_PULL=Math.log(1.06);
 function detent(rpm){
   const a=Math.abs(rpm);if(a<3)return 0;
@@ -1173,22 +1173,20 @@ const G={
       up(){ui.snapped=false;if(ui.scrap){ui.scrap=false;for(const o of stack)removeObj('cog',o)}else changed(true)},
       tap(){choose('cog',c)},dbl(s){focus('cog',c,s)}};
   },
-  // On the rim: push the teeth along to crank, pull outward or inward to change the tooth count.
+  // On the rim: turn it to move the cog's speed along the dial, pull outward or inward to change the tooth count.
   rim(c,s0){
-    let mode=null,samples=[],grow=null;const min=c.track?12:6,ang=s=>{const q=screenToWorld(s);return Math.atan2(q.y-c.y,q.x-c.x)};
+    let mode=null,dial=0,at=0,grow=null;const min=c.track?12:6,ang=s=>{const q=screenToWorld(s);return Math.atan2(q.y-c.y,q.x-c.x)};
     return {o:c,
       move(s){
         if(!mode){const sc=toScreen(c),rx=s0.x-sc.x,ry=s0.y-sc.y,mx=s.x-s0.x,my=s.y-s0.y;
           mode=Math.abs(mx*rx+my*ry)>Math.abs(mx*ry-my*rx)?'teeth':'crank';
-          if(mode==='crank'){ui.crank={c};samples=[{t:ui.t,a:ang(s0)}]}}
+          if(mode==='crank'){ui.crank={c};dial=gaugeAngle(rpmOf(c));at=ang(s0)}}
         if(mode==='teeth'){grow??=resizer(c);const n=clamp(Math.round(grow.radiusThrough(screenToWorld(s))*TAU/TOOTH),min,240);if(n!==c.n){grow.set(n);buzz(3)}return}
-        const t=ui.t,last=samples[samples.length-1],a=last.a+wrapPi(ang(s)-last.a);samples.push({t,a});
-        while(samples.length>2&&t-samples[1].t>90)samples.shift();
-        const f=samples[0],dt=(t-f.t)/1000;if(dt>.01)drive(c,clamp((a-f.a)/dt*60/TAU,-600,600));
+        const a=ang(s);dial=clamp(dial+wrapPi(a-at),-GAUGE_SWEEP,GAUGE_SWEEP);at=a;drive(c,gaugeRpm(dial));
       },
       up(){
         if(mode==='teeth'){if(!grow?.anchor&&stackOf(c).length===1)snap(c);changed(true);return}
-        if(mode==='crank'){const still=ui.t-samples[samples.length-1].t>110;drive(c,still?0:detent(motorRpm(c)));ui.crank=null;buzz(12);changed(true)}
+        if(mode==='crank'){drive(c,detent(rpmOf(c)));ui.crank=null;buzz(12);changed(true)}
       },
       cancel(){ui.crank=null},
       tap(){choose('cog',c)},dbl(s){focus('cog',c,s)}};
@@ -1267,7 +1265,7 @@ cv.addEventListener('pointermove',e=>{
   if(!fingers.has(e.pointerId))return;const s=local(e);fingers.set(e.pointerId,s);
   if(pinch){if(fingers.size>=2){const p=pinchNow();zoomAt(p.mid,pinch.zoom*p.d/pinch.d,pinch.anchor)}return}
   if(!gesture||gesture.id!==e.pointerId)return;
-  gesture.last=s;ui.t=e.timeStamp;
+  gesture.last=s;
   if(!gesture.moved&&Math.hypot(s.x-gesture.s0.x,s.y-gesture.s0.y)<8)return;
   gesture.moved=true;gesture.g.move?.(s);
 });
@@ -1281,7 +1279,7 @@ const endPointer=e=>{
   }
   if(!gesture||gesture.id!==e.pointerId)return;
   const g=gesture;gesture=null;const s=local(e);
-  ui.t=e.timeStamp;if(g.moved||e.timeStamp-g.t0>450){g.g.up?.(s);return}
+  if(g.moved||e.timeStamp-g.t0>450){g.g.up?.(s);return}
   const t=e.timeStamp,l=ui.lastTap;
   if(l&&t-l.t<400&&Math.hypot(s.x-l.s.x,s.y-l.s.y)<30&&l.o===g.g.o&&g.g.dbl){ui.lastTap=null;g.g.dbl(s)}
   else{ui.lastTap={t,s,o:g.g.o};g.g.tap?.(s)}
@@ -1545,14 +1543,13 @@ function buildInspector(){
   const o=sel&&sel.o,f=inspector;
   if(sel&&sel.type==='cog'){
     numRow(f,'teeth',6,240,1,()=>o.n,v=>{resizer(o).set(v);changed(true)});
-    numRow(f,'motor rpm',-600,600,.1,()=>motorRpm(o),v=>{setMotor(o,v);changed(true)});
-    selRow(f,'revs/bar',REVS,()=>REVS.reduce((a,b)=>Math.abs(frac(b)-o.revs)<Math.abs(frac(a)-o.revs)?b:a),v=>{o.revs=frac(v);changed(true)});
+    numRow(f,'rpm',-600,600,.1,()=>rpmOf(o),v=>{drive(o,v);changed(true)});
+    selRow(f,'revs/bar',REVS,()=>REVS.reduce((a,b)=>Math.abs(frac(b)-o.revs)<Math.abs(frac(a)-o.revs)?b:a),v=>{if(S.bpm)drive(o,frac(v)*S.bpm/S.beats);else o.revs=frac(v);changed(true)});
     numRow(f,'layer',0,7,1,...bind(o,'layer',()=>changed(true)));
     numRow(f,'x',-3000,3000,.5,...bind(o,'x',()=>changed(true)));
     numRow(f,'y',-3000,3000,.5,...bind(o,'y',()=>changed(true)));
     numRow(f,'phase deg',0,360,.1,()=>wrap(o.th)*180/Math.PI,v=>{o.th=v*Math.PI/180;changed()});
     roRow(f,'radius',()=>radius(o).toFixed(2));
-    roRow(f,'rpm',()=>(o.w*60/TAU).toFixed(3));
     roRow(f,'period ms',()=>o.w?(1000*TAU/Math.abs(o.w)).toFixed(2):'-');
     roRow(f,'ratio',()=>o.driver?`${(o.w/o.driver.w||0).toFixed(4)} of c${o.driver.id}`:'-');
     roRow(f,'state',()=>o.jam?'JAM':o.w?'turning':'idle');

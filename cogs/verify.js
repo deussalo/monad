@@ -130,21 +130,26 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   check('rim pulled out to 46: 24 teeth; a fresh cog: 12', gears[0].n === 24 && gears[1].n === 12, gears.map(g => g.n));
   check('second cog snapped to pitch distance 68.75', near(Math.hypot(gears[1].x - gears[0].x, gears[1].y - gears[0].y), 36 * 12 / (2 * Math.PI), 1e-9), gears[1].x - gears[0].x);
   const [c1, c2] = gears.map(g => [g.x, g.y]);
-  await m.tap(await m.scr([c1[0] - 20, c1[1] - 15])); await m.field('motor rpm', 60); await m.dev(false);
+  await m.tap(await m.scr([c1[0] - 20, c1[1] - 15])); await m.field('rpm', 60); await m.dev(false);
   const rpm = () => probe(() => __cogs.W.cogs.map(c => +(c.w * 60 / (2 * Math.PI)).toFixed(6)));
   check('60 rpm drives -120 rpm', JSON.stringify(await rpm()) === '[60,-120]', await rpm());
 
   console.log('CRANK');
   const top2 = [c2[0], c2[1] - 22.92];
-  await m.stroke([await m.scr(top2), await m.scr([c2[0] + 8, top2[1]]), await m.scr([c2[0] + 22, top2[1] + 8])], { steps: 5, frame: 12 });
+  const turn = async (from, by, hold) => { const [cx, cy] = await m.scr(c2), [x, y] = await m.scr(top2), r = Math.hypot(x - cx, y - cy), a0 = Math.atan2(y - cy, x - cx) + from;
+    await m.stroke([0, .25, .5, .75, 1].map(k => [cx + Math.cos(a0 + by * k) * r, cy + Math.sin(a0 + by * k) * r]), { steps: 4, frame: 12, mid: hold ? () => wait(hold) : null }); };
+  const dial = rpm => Math.sign(rpm) * Math.log(Math.abs(rpm) / 2.5) / Math.log(120) * 1.7 * Math.PI, undial = a => Math.sign(a) * 2.5 * Math.pow(120, Math.abs(a) / (1.7 * Math.PI));
+  await turn(0, .8, 400);
   const crank = await probe(() => __cogs.W.cogs.map(c => ({ motor: c.motor, rpm: c.w * 60 / (2 * Math.PI) })));
-  check('flick the teeth clockwise: that cog takes over as the driver, clockwise', crank[0].motor === 0 && crank[1].motor > 0, crank.map(c => c.motor));
+  check('turn the driven cog\'s rim clockwise and hold still before letting go: it takes over as the driver, .8 rad along the dial from -120', crank[0].motor === 0 && near(crank[1].motor, undial(dial(-120) + .8), 4), [crank.map(c => c.motor), undial(dial(-120) + .8)]);
   check('the train follows the new driver', near(crank[0].rpm, -crank[1].motor / 2, 1e-9), crank.map(c => c.rpm));
-  await m.stroke([await m.scr(top2), await m.scr([c2[0] + 12, top2[1]])], { steps: 4, frame: 10, hold: 0 });
-  await m.stroke([await m.scr(top2), await m.scr([c2[0] + 12, top2[1]]), await m.scr([c2[0] + 12.1, top2[1]])], { steps: 3, frame: 90 });
-  check('crank, hold still, let go: the train stops', JSON.stringify(await rpm()) === '[0,0]', await rpm());
+  await turn(.8, -dial((await rpm())[1]));
+  check('turn on clockwise to the middle of the dial: the train stops', JSON.stringify(await rpm()) === '[0,0]', await rpm());
+  await turn(.8, 1.2);
+  const onward = await rpm();
+  check('and on round: it runs clockwise', onward[1] > 3 && near(onward[0], -onward[1] / 2, 1e-6), onward);
   if (SHOTS) await m.stroke([await m.scr(top2), await m.scr([c2[0] + 14, top2[1] + 4])], { steps: 6, frame: 8, mid: () => m.shot('03-crank') });
-  await m.tap(await m.scr([c1[0] - 20, c1[1] - 15])); await m.field('motor rpm', 60); await m.dev(false);
+  await m.tap(await m.scr([c1[0] - 20, c1[1] - 15])); await m.field('rpm', 60); await m.dev(false);
 
   console.log('ARMS AND PADS');
   await m.glyph();
@@ -175,16 +180,12 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   check('impact speed = w * tangent radius', near(hits.vA, hits.vTangent, 1e-6), [hits.vA, hits.vTangent]);
   check('no event scheduled late', hits.late === 0, hits.late);
 
-  console.log('JAM');
+  console.log('SPEED ON A DRIVEN COG');
   await m.tap(await m.empty());
-  await m.tap(await m.scr([c2[0] - 12, c2[1]])); await m.field('motor rpm', 100); await m.dev(false); await wait(150);
-  const jam = await probe(() => __cogs.W.cogs.map(c => [c.jam, c.w]));
-  check('two disagreeing motors jam the train', jam.every(([j, w]) => j && w === 0), jam);
-  await m.shot('05-jam');
-  await m.field('motor rpm', -120);
-  const ok = await probe(() => __cogs.W.cogs.map(c => [c.jam, c.w * 60 / (2 * Math.PI)]));
-  check('agreeing motors turn', ok.every(([j]) => !j) && near(ok[1][1], -120, 1e-9), ok);
-  await m.field('motor rpm', 0); await m.dev(false);
+  await m.tap(await m.scr([c2[0] - 12, c2[1]])); await m.field('rpm', 100); await m.dev(false); await wait(150);
+  is('give the driven cog a speed: it becomes the train\'s one motor, nothing jams', await probe(() => __cogs.W.cogs.map(c => [c.jam, c.motor, +(c.w * 60 / (2 * Math.PI)).toFixed(6)])), [[false, 0, -50], [false, 100, 100]]);
+  await m.field('rpm', -120); await m.dev(false);
+  is('and back', await rpm(), [60, -120]);
 
   console.log('PAD BEZEL');
   await m.tap(await m.scr([-60, -30]));
@@ -218,7 +219,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await m.tap(await m.scr([discXY[0] - 60, discXY[1] + 20]));
   await m.shot('08-disc-bezel');
   is('tap the disc: its tuning bezel (scale, root, divisions, rings)', await probe(() => __cogs.activeBezel()?.sectors.length), 4);
-  await m.field('motor rpm', 30); await m.dev(false);
+  await m.field('rpm', 30); await m.dev(false);
   const disc = await probe(() => { const c = __cogs.W.cogs[2]; return { n: c.n, dots: c.track.dots.length, rpm: c.w * 60 / (2 * Math.PI), strikes: __cogs.engine().strikes }; });
   check('disc: 48 teeth, 3 dots, 30 rpm', disc.n === 48 && disc.dots === 3 && near(disc.rpm, 30, 1e-9), disc);
   const d0 = await m.reset(); await wait(4300);
@@ -312,7 +313,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await m.act('clear'); await m.world('zoom', 1.4); await m.dev(false);
   const rpms = () => probe(() => __cogs.W.cogs.map(c => +(c.w * 60 / (2 * Math.PI)).toFixed(6)));
   await m.fromShelf('cog', [-100, 0]); await m.drag([-100 + 22.92, 0], [-54, 0]);
-  await m.tap(await m.scr([-110, 15])); await m.field('motor rpm', 60); await m.dev(false);
+  await m.tap(await m.scr([-110, 15])); await m.field('rpm', 60); await m.dev(false);
   await m.fromShelf('cog', [100, 0]);
   await m.fromShelf('belt', [-100, 20], [100, 5]);
   check('open belt: same direction, ratio 24/12', JSON.stringify(await rpms()) === '[60,120]', await rpms());
