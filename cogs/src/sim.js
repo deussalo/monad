@@ -339,11 +339,10 @@ const edits={past:[],future:[],cur:null,pending:false,timer:0,held:false,
 // Put the parts of a snapshot back without touching the clock: each cog takes the phase it
 // would have now had it kept the speed it had then, and keeps its revolution count.
 function restore(s){
-  const turns=new Map(W.cogs.map(c=>[c.id,c.turns])),kept=sel&&{type:sel.type,id:sel.o.id};
+  const kept=sel&&{type:sel.type,id:sel.o.id};
   const j=JSON.parse(s.key);Object.assign(j.S,{zoom:S.zoom});j.view={...view};
   for(const c of j.cogs){const p=s.phase.get(c.id);c.th=wrap(p.th+p.w*(simT-s.t))}
-  deserialize(j);
-  for(const c of W.cogs)c.turns=turns.get(c.id)??0;
+  reload(j);
   const back=kept&&W[kept.type+'s']?.find(o=>o.id===kept.id);if(back)select(kept.type,back);
   clearTimeout(edits.timer);edits.pending=false;
 }
@@ -377,6 +376,8 @@ function deserialize(j){
   Object.assign(S,j.S);Object.assign(SPACE,j.SPACE);Object.assign(view,j.view);
   select(null);solve();applyAudioSettings();syncRows();changed();
 }
+// Rebuild the world from j with every surviving cog keeping its revolution count.
+function reload(j){const turns=new Map(W.cogs.map(c=>[c.id,c.turns]));deserialize(j);for(const c of W.cogs)c.turns=turns.get(c.id)??0}
 const DEFAULT_WORLD=
 //@include default-world.json
 ;

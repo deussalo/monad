@@ -280,6 +280,24 @@ const SHOTS = process.env.COGS_SHOTS || '';
   is('one ctrl+z undoes the whole rim pull', await train(), g1);
   await shot('desk-06-resize');
 
+  console.log('COPY AND PASTE');
+  await p.mouse.click(...await scr([0, 250])); await settle();
+  const orig = await train(), [bx0, by0] = await scr([-160, -90]), [bx1, by1] = await scr([150, 90]);
+  await p.keyboard.down('Control'); await p.mouse.move(bx0, by0); await p.mouse.down(); await p.mouse.move(bx1, by1, { steps: 8 }); await p.mouse.up(); await p.keyboard.up('Control');
+  is('ctrl-drag a box round the train: three cogs selected', await probe(() => __cogs.group.length), 3);
+  await p.keyboard.press('Control+c'); await p.mouse.move(...await scr([0, 220])); await p.keyboard.press('Control+v'); await settle();
+  const both = await train(), cxs = orig.map(c => c.x), mx = (Math.min(...cxs) + Math.max(...cxs)) / 2;
+  check('ctrl+c, ctrl+v: the originals stay and a copy lands centred under the pointer, still meshed and turning alike',
+    JSON.stringify(both.slice(0, 3)) === JSON.stringify(orig) && both.length === 6 && both.slice(3).every((c, i) => near(c.x, orig[i].x - mx, 1e-6) && near(c.y, orig[i].y + 220, 1e-6) && c.n === orig[i].n && c.rpm === orig[i].rpm && !c.jam), both.slice(3));
+  is('the copy is selected', await probe(() => __cogs.group), ['cog', 'cog', 'cog']);
+  await shot('desk-07-paste');
+  await p.keyboard.press('Control+x'); await settle();
+  is('ctrl+x takes the copy away', await train(), orig);
+  await p.mouse.move(...await scr([0, -220])); await p.keyboard.press('Control+v'); await settle();
+  is('and ctrl+v puts it back under the pointer', (await train()).slice(3).map(c => Math.round(c.y)), [-220, -220, -220]);
+  await p.keyboard.press('Control+z'); await settle(); await p.keyboard.press('Control+z'); await settle(); await p.keyboard.press('Control+z'); await settle();
+  is('three ctrl+z: paste, cut and paste undone', await train(), orig);
+
   check('page errors', errs.length === 0, errs.slice(0, 3));
   console.log(pass ? '\nCOGS DESK: PASS' : '\nCOGS DESK: FAIL');
   await b.close(); process.exit(pass ? 0 : 1);

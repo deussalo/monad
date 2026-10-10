@@ -182,7 +182,7 @@ function drawCrankGauge(k){
 }
 
 /* ---------- touch ---------- */
-const ui={armed:null,room:false,carry:null,scrap:false,crank:null,cam:null,sector:null,bezelOwner:null,bezelAt:0,lastTap:null,auditionAt:0,snapped:false,dotOf:null,dotAt:null,sealAt:0,sealOk:false,shared:''};
+const ui={armed:null,hover:null,room:false,carry:null,scrap:false,crank:null,cam:null,sector:null,bezelOwner:null,bezelAt:0,lastTap:null,auditionAt:0,snapped:false,dotOf:null,dotAt:null,sealAt:0,sealOk:false,shared:''};
 const wrapPi=a=>wrap(a+Math.PI)-Math.PI;
 function buzz(ms){try{const u=navigator.userActivation;if(navigator.vibrate&&(!u||u.hasBeenActive))navigator.vibrate(ms)}catch(e){}}
 // Play a part now, at a middling velocity, the way the sim would strike it.
@@ -232,6 +232,33 @@ function removeSel(){
   for(const{type,o}of items)if(type!=='belt'||W.belts.includes(o))removeObj(type,o);
 }
 const PART_LISTS=['cog','arm','pad','reader','string','belt'];
+// A copied cog takes its arms; a belt comes when both its cogs do.
+let partClip=null;
+function copyParts(){
+  const items=group.length?group:sel&&sel.type!=='dot'?[sel]:[];if(!items.length)return false;
+  const ids=new Set(items.map(x=>x.o.id)),j=serialize(),own=o=>ids.has(o.id);
+  partClip={cogs:j.cogs.filter(own),arms:j.arms.filter(a=>own(a)||ids.has(a.cog)),pads:j.pads.filter(own),readers:j.readers.filter(own),
+    strings:j.strings.filter(own),belts:j.belts.filter(b=>ids.has(b.a)&&ids.has(b.b))};
+  return true;
+}
+// Paste lands centred under the pointer, or a step down-right of the original when the pointer is off the stage.
+function pasteParts(){
+  if(!partClip)return false;
+  const j=serialize(),id=new Map(),fresh=o=>{const n=W.next+id.size;id.set(o.id,n);return n},c=structuredClone(partClip);
+  const pts=[...c.cogs,...c.pads,...[...c.readers,...c.strings].map(mid)],step=30/S.zoom;
+  let dx=step,dy=step;
+  if(pts.length&&ui.hover){const xs=pts.map(p=>p.x),ys=pts.map(p=>p.y),at=screenToWorld(ui.hover);dx=at.x-(Math.min(...xs)+Math.max(...xs))/2;dy=at.y-(Math.min(...ys)+Math.max(...ys))/2}
+  for(const o of [...c.cogs,...c.pads]){o.id=fresh(o);o.x+=dx;o.y+=dy}
+  for(const o of [...c.readers,...c.strings]){o.id=fresh(o);o.x1+=dx;o.y1+=dy;o.x2+=dx;o.y2+=dy}
+  c.arms=c.arms.filter(a=>id.has(a.cog)||j.cogs.some(o=>o.id===a.cog));
+  for(const a of c.arms){if(id.has(a.cog))a.cog=id.get(a.cog);else a.a+=.4;a.id=fresh(a)}
+  for(const b of c.belts){b.a=id.get(b.a);b.b=id.get(b.b);b.id=fresh(b)}
+  for(const k of Object.keys(c))j[k].push(...c[k]);
+  reload(j);
+  const made=new Set(id.values()),pasted=PART_LISTS.flatMap(type=>W[type+'s'].filter(o=>made.has(o.id)).map(o=>({type,o})));
+  if(pasted.length===1)select(pasted[0].type,pasted[0].o);else group=pasted;
+  changed(true);return true;
+}
 const typeOf=o=>PART_LISTS.find(t=>W[t+'s'].includes(o))||null;
 function boxSelect(a,b){
   const x0=Math.min(a.x,b.x),x1=Math.max(a.x,b.x),y0=Math.min(a.y,b.y),y1=Math.max(a.y,b.y),inside=q=>q.x>=x0&&q.x<=x1&&q.y>=y0&&q.y<=y1,g=[];
@@ -463,8 +490,9 @@ cv.addEventListener('pointerdown',e=>{
   if(fingers.size>=2){dropGesture();repinch();return}
   if(fingers.size===1&&!pinch)gesture={id:e.pointerId,g:pointerGesture(e,s),s0:s,last:s,t0:e.timeStamp,moved:false};
 });
+cv.addEventListener('pointerleave',()=>{ui.hover=null});
 cv.addEventListener('pointermove',e=>{
-  if(!fingers.has(e.pointerId))return;const s=local(e);fingers.set(e.pointerId,s);
+  ui.hover=local(e);if(!fingers.has(e.pointerId))return;const s=local(e);fingers.set(e.pointerId,s);
   if(pinch){if(fingers.size>=2){const p=pinchNow();zoomAt(p.mid,pinch.zoom*p.d/pinch.d,pinch.anchor)}return}
   if(!gesture||gesture.id!==e.pointerId)return;
   gesture.last=s;
@@ -498,6 +526,7 @@ document.addEventListener('keydown',e=>{
   if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)||rollKey(e))return;
   const k=e.key.toLowerCase();
   if((e.ctrlKey||e.metaKey)&&!e.altKey&&(k==='z'||k==='y')){e.preventDefault();if(k==='z'&&!e.shiftKey)edits.undo();else edits.redo();return}
+  if((e.ctrlKey||e.metaKey)&&!e.altKey&&(k==='c'&&copyParts()||k==='x'&&copyParts()&&(removeSel(),true)||k==='v'&&pasteParts())){e.preventDefault();return}
   if(e.ctrlKey||e.metaKey||e.altKey)return;
   if(PART_KEYS[k])armPart(PART_KEYS[k]);else if(k==='s'||k==='escape')armPart(null);
   else if(e.key==='?')togglePanel();else if(e.key==='0')flyFit();
