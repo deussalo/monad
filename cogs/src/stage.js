@@ -542,6 +542,7 @@ function setDot(t,cell,on){const i=dotAt(t,cell.ring,cell.a);if(on&&i<0)t.dots.p
 
 /* ---------- roll: the disc unwrapped into a strip, time left to right ---------- */
 const NOTE_NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const MIDI_NOTES=Array.from({length:97},(_,i)=>i+12);
 const noteName=m=>NOTE_NAMES[m%12]+(Math.floor(m/12)-1);
 let roll=null;
 const rollDir=c=>c.w<0?-1:1;
@@ -556,7 +557,7 @@ function readerPlayheads(c){
   }
   return out;
 }
-function rollGeom(){const t=roll.c.track,L=roll.label,cw=Math.max(6,Math.floor((roll.box.clientWidth-L)/t.div));return {cw,W:L+cw*t.div,H:roll.row*t.rings}}
+function rollGeom(){const t=roll.c.track,L=roll.label,cw=Math.max(roll.minCell,Math.floor((roll.box.clientWidth-L)/t.div));return {cw,W:L+cw*t.div,H:roll.row*t.rings}}
 const colAngle=(c,col)=>wrap(-rollDir(c)*col*TAU/c.track.div);
 const rollCol=(c,d)=>Math.round(rollU(c,d.a)*c.track.div)%c.track.div;
 // The pointer in grid units: columns from the first step, rows from the top ring.
@@ -613,10 +614,17 @@ function drawRoll(){
   const c=roll.c,t=c.track,g=rollGeom(),cv2=roll.cv,x=cv2.getContext('2d'),gw=g.cw*t.div,L=roll.label,RH=roll.row;
   if(cv2.width!==g.W*dpr||cv2.height!==g.H*dpr){cv2.width=g.W*dpr;cv2.height=g.H*dpr;cv2.style.width=g.W+'px';cv2.style.height=g.H+'px'}
   x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle=BG;x.fillRect(0,0,g.W,g.H);
+  const keys=roll.keys,kx=keys?.getContext('2d');
+  if(keys){
+    keys.parentElement.style.width=g.W+'px';
+    if(keys.width!==L*dpr||keys.height!==g.H*dpr){keys.width=L*dpr;keys.height=g.H*dpr;keys.style.width=L+'px';keys.style.height=g.H+'px'}
+    kx.setTransform(dpr,0,0,dpr,0,0);kx.font='11px monospace';kx.textBaseline='middle';
+  }
   x.font=`${clamp(Math.round(RH*.7),9,12)}px monospace`;x.textBaseline='middle';
   for(let row=0;row<t.rings;row++){
     const note=ringNote(t,t.rings-1-row),y=row*RH;
     x.fillStyle=DIM;x.fillText(noteName(note),2,y+RH/2);
+    if(kx){kx.fillStyle=[1,3,6,8,10].includes(note%12)?BG:PAD;kx.fillRect(0,y,L,RH);kx.fillStyle=FG;kx.fillText(noteName(note),3,y+RH/2);kx.fillStyle=FAINT;kx.fillRect(0,y+RH-1,L,1)}
     if(note%12===t.base%12){x.fillStyle=PAD;x.fillRect(L,y,gw,RH)}
   }
   x.lineWidth=1;
@@ -636,14 +644,23 @@ function drawRoll(){
   if(m){x.lineWidth=1;x.strokeStyle=SEL;x.setLineDash([5,4]);x.strokeRect(L+m.x0*g.cw+.5,m.y0*RH+.5,(m.x1-m.x0)*g.cw,(m.y1-m.y0)*RH);x.setLineDash([])}
 }
 // The strip goes into `strip`, its controls into `tools`; row and label are in CSS px.
-function rollSection(c,{strip,tools,row,label}){
+function rollSection(c,{strip,tools,row,label,minCell=6}){
   const t=c.track,cv2=el('canvas'),box=el('div',{className:'roll'},cv2);
   box.style.cssText='overflow-x:auto;margin:4px 0';cv2.style.cssText='display:block;touch-action:none;cursor:crosshair';
   cv2.tabIndex=0;cv2.style.outline='none';
-  roll={cv:cv2,box,c,row,label,marquee:null};
+  const keys=minCell>6?el('canvas'):null;
+  if(keys){
+    keys.style.cssText='position:sticky;left:0;z-index:1;flex-shrink:0;touch-action:pan-y';
+    cv2.style.marginLeft=-label+'px';cv2.style.flexShrink='0';
+    box.replaceChildren(el('div',{style:'display:flex'},keys,cv2));
+    keys.onpointerdown=e=>{const ring=t.rings-1-Math.floor((e.clientY-keys.getBoundingClientRect().top)/row);if(ring>=0&&ring<t.rings)sound(discReader(c),ringNote(t,ring),c.id*128+ring)};
+  }
+  roll={cv:cv2,keys,box,c,row,label,minCell,marquee:null};
   if(rollSelOf!==c){rollSel.clear();rollAnchor=null;rollSelOf=c}
   // A press: ctrl/cmd draws a box (a click toggles one pin), a selected pin drags the set,
   // anything else clears a selection, or paints when there is none.
+  const paintCell=(cell,on)=>{const fresh=dotAt(t,cell.ring,cell.a)<0;setDot(t,pin(cell),on);
+    if(on&&fresh)sound(discReader(c),ringNote(t,cell.ring),c.id*128+cell.ring)};
   let press=null;
   cv2.onpointerdown=e=>{
     const at=rollAt(e),cell=rollCell(e),hit=cell&&t.dots.find(d=>sameCell(d,cell));
@@ -652,13 +669,13 @@ function rollSection(c,{strip,tools,row,label}){
     if(hit&&rollSel.has(hit)){press={from:selPins(t).map(d=>[d,d.a,d.ring]),col:cell.col,ring:cell.ring,moved:false};return}
     if(rollSel.size){rollSel.clear();press=null;return}
     if(!cell){press=null;return}
-    press={paint:!hit};setDot(t,pin(cell),press.paint);
+    press={paint:!hit};paintCell(cell,press.paint);
   };
   cv2.onpointermove=e=>{
     if(!press)return;const at=rollAt(e);
     if(roll.marquee){Object.assign(roll.marquee,{x1:at.x,y1:at.y});return}
     if(press.from){const dc=Math.floor(at.x)-press.col,dr=t.rings-1-Math.floor(at.y)-press.ring;if(dc||dr||press.moved){press.moved=true;moveSel(c,press.from,dc,dr)}return}
-    const cell=rollCell(e);if(cell)setDot(t,pin(cell),press.paint);
+    const cell=rollCell(e);if(cell)paintCell(cell,press.paint);
   };
   cv2.onpointerup=cv2.onpointercancel=()=>{
     const p=press,m=roll.marquee;press=null;roll.marquee=null;if(!p)return;
@@ -709,8 +726,8 @@ function numRow(parent,label,min,max,step,get,set,def){
   if(def!==undefined){row.ondblclick=()=>put(def);row.title='double-click: '+def}
   parent.append(row);rows.push(sync);sync();return row;
 }
-function selRow(parent,label,options,get,set){
-  const s=el('select',{},...options.map(o=>el('option',{value:o,textContent:o})));
+function selRow(parent,label,options,get,set,labelOf=o=>o){
+  const s=el('select',{},...options.map(o=>el('option',{value:o,textContent:labelOf(o)})));
   const sync=()=>{s.value=get()};s.onchange=()=>set(s.value);
   const row=el('div',{className:'row'},el('span',{textContent:label}),s,el('span'));row.dataset.k=label;
   parent.append(row);rows.push(sync);sync();return row;
@@ -763,7 +780,12 @@ function voiceRows(f,owner,withNote){
   selRow(f,'kind',Object.keys(VOICES),()=>v.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense});buildInspector();changed()});
   for(const[k,l,a,b,s]of [...VOICE_DEFS[v.kind],...COMMON_DEFS]){
     if(k==='note'&&!withNote)continue;
-    if(Array.isArray(a))selRow(f,l,a,()=>v[k],x=>{v[k]=x;changed()});else numRow(f,l,a,b,s,...bind(v,k,changed),makeVoice(v.kind)[k]);
+    if(k==='note')selRow(f,l,MIDI_NOTES,()=>v.note,x=>{v.note=+x;audition(owner,true);changed()},noteName);
+    else if(k==='octave'){
+      selRow(f,'octave offset',['-3','-2','-1','0','1','2','3'],()=>String(v.octave),x=>{v.octave=+x;audition(owner,true);changed()});
+      if(withNote)roRow(f,'pitch',()=>noteName(voiceMidi(v,v.note)));
+    }
+    else if(Array.isArray(a))selRow(f,l,a,()=>v[k],x=>{v[k]=x;changed()});else numRow(f,l,a,b,s,...bind(v,k,changed),makeVoice(v.kind)[k]);
   }
 }
 function buildInspector(){
@@ -787,7 +809,7 @@ function buildInspector(){
     if(o.track){
       const t=o.track;
       numRow(f,'rings',1,36,1,...bind(t,'rings',()=>{t.dots=t.dots.filter(d=>d.ring<t.rings);changed()}),TRACK_DEFAULT.rings);
-      numRow(f,'base midi',12,108,1,...bind(t,'base',changed),TRACK_DEFAULT.base);
+      selRow(f,'root note',MIDI_NOTES,()=>t.base,x=>{t.base=+x;audition(o,true);changed()},noteName);
       selRow(f,'scale',Object.keys(SCALES),()=>t.scale,v=>{t.scale=v;changed()});
       numRow(f,'div',1,96,1,...bind(t,'div',changed),TRACK_DEFAULT.div);
       roRow(f,'dots',()=>t.dots.length);

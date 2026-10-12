@@ -8,7 +8,7 @@
 <style>
 :root{color-scheme:dark;--bg:var(--rig-bg,#111);--fg:var(--rig-text,#ddd);--dim:var(--rig-text-dim,#666);--faint:var(--rig-text-faint,#2a2a2a);--line:var(--rig-border,#333);--hot:var(--rig-gold,#fc4);--sel:var(--rig-blue,#4cf);--bad:var(--rig-red,#f44);--read:var(--rig-teal,#6cf);--pad:var(--rig-surface-raised,#222)}
 *{box-sizing:border-box}
-fieldset{border:0;margin:0 0 6px;padding:4px 6px}
+fieldset{min-width:0;border:0;margin:0 0 6px;padding:4px 6px}
 legend{color:var(--dim);padding:0 4px}
 .row{display:grid;grid-template-columns:76px 1fr 70px;gap:4px;align-items:center;margin:2px 0}
 .ro{display:grid;grid-template-columns:76px 1fr;gap:4px;margin:1px 0}.ro b{font-weight:normal;color:var(--hot)}
@@ -34,6 +34,18 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #dev input[type=range]{touch-action:none}
 #dev[hidden],#scrim[hidden]{display:none}
 #panel{max-width:440px;margin:0 auto;padding:6px}
+#edit-part{position:fixed;left:var(--space-3,12px);top:calc(env(safe-area-inset-top,0px) + var(--space-3,12px));min-height:44px;padding:var(--space-3,12px);border:1px solid var(--line)}
+#edit-part[hidden],#editor-head{display:none}
+#dev[data-editor]:not([data-editor=""]){top:max(14vh,env(safe-area-inset-top,0px));border-radius:var(--space-3,12px) var(--space-3,12px) 0 0}
+#dev[data-editor]:not([data-editor=""]) #editor-head{display:flex;align-items:center;gap:var(--space-2,8px);padding:var(--space-2,8px);position:sticky;top:0;background:var(--bg);z-index:1}
+#editor-title{flex:1;color:var(--hot)}
+#dev[data-editor]:not([data-editor=""]) #panel{max-width:none;padding:var(--space-2,8px)}
+#dev[data-editor]:not([data-editor=""]) button,#dev[data-editor]:not([data-editor=""]) .row,#dev[data-editor]:not([data-editor=""]) input[type=number],#dev[data-editor]:not([data-editor=""]) select{min-height:44px}
+#dev[data-editor]:not([data-editor=""]) #panel>fieldset:not(#inspector),#dev[data-editor]:not([data-editor=""]) #inspector>legend{display:none}
+#dev[data-editor]:not([data-editor=""]) #inspector>:is([data-k="x"],[data-k="y"],[data-k="radius"]),
+#dev[data-editor="patch"] #inspector>:is([data-k="x1"],[data-k="y1"],[data-k="x2"],[data-k="y2"]),
+#dev[data-editor="notes"] #inspector>:is([data-k="teeth"],[data-k="rpm"],[data-k="revs/bar"],[data-k="layer"],[data-k="phase deg"],.ro){display:none}
+.roll-nav{display:flex;justify-content:space-between;gap:var(--space-1,4px)}
 </style>
 </head>
 <body>
@@ -41,7 +53,11 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 <div id="notice" hidden onclick="this.hidden=true"></div>
 <div id="safe"></div>
 <div id="scrim" hidden></div>
-<div id="dev" hidden><div id="panel"></div></div>
+<button id="edit-part" hidden aria-label="Edit selected part"></button>
+<div id="dev" hidden role="dialog" aria-label="Part controls">
+  <div id="editor-head"><span id="editor-title"></span><button id="editor-undo" aria-label="Undo">↶</button><button id="editor-redo" aria-label="Redo">↷</button><button id="editor-close">close</button></div>
+  <div id="panel"></div>
+</div>
 <script type="text/x-cogs-worklet" id="engine">
 'use strict';
 const TAU=Math.PI*2,LN1000=6.907755278982137,MAXM=6,BLOCK=128;
@@ -392,10 +408,10 @@ const BODIES={harmonic:[1,2,3,4,5],bell:[1,1.183,1.506,2.0,2.514],plate:[1,1.594
   bar:[1,2.756,5.404,8.933,13.34],bowl:[1,2.32,4.25,6.63,9.38]};
 const SCALES={chromatic:[0,1,2,3,4,5,6,7,8,9,10,11],major:[0,2,4,5,7,9,11],minor:[0,2,3,5,7,8,10],
   dorian:[0,2,3,5,7,9,10],pentatonic:[0,2,4,7,9],minpent:[0,3,5,7,10],whole:[0,2,4,6,8,10]};
-const VOICES={modal:{note:60,body:'bell',bend:1,bright:.6,hard:.6,decay:1.2,damp:.8},
+const VOICES={modal:{note:60,octave:0,body:'bell',bend:1,bright:.6,hard:.6,decay:1.2,damp:.8},
   kick:{tune:52,sweep:3,pdecay:.045,decay:.35},snare:{tune:190,tone:.35,cutoff:1800,decay:.16},hat:{cutoff:7500,decay:.045}};
 const VOICE_DEFS={
-  modal:[['note','note',12,108,1],['body','body',Object.keys(BODIES)],['bend','bend',0,1,.01],['bright','bright',0,1,.01],
+  modal:[['note','note',12,108,1],['octave','octave',-3,3,1],['body','body',Object.keys(BODIES)],['bend','bend',0,1,.01],['bright','bright',0,1,.01],
     ['hard','hard',0,1,.01],['decay','decay s',.02,8,.01],['damp','damp',0,2,.01]],
   kick:[['tune','tune Hz',20,200,1],['sweep','sweep x',1,10,.1],['pdecay','p decay s',.005,.3,.001],['decay','decay s',.02,2,.01]],
   snare:[['tune','tune Hz',60,600,1],['tone','tone',0,1,.01],['cutoff','cutoff Hz',200,12000,10],['decay','decay s',.02,1,.005]],
@@ -538,7 +554,7 @@ function dotCross(c,dot,rd,dt){
   const t=simT+dt*hit.f,turn=c.turns+Math.floor((c.th+c.w*dt*hit.f)/TAU);
   if(dot.p<1&&chance(c.id,dot.ring,dot.a,turn)>=dot.p)return;
   const midi=rd.tines?scaleNote(rd.combBase,rd.combScale,Math.min(rd.tines-1,Math.floor(hit.u*rd.tines))):ringNote(c.track,dot.ring);
-  rd.hits++;rd.lastV=hit.vn;rd.lastMidi=midi;dot.flash=rd.flash=t;
+  rd.hits++;rd.lastV=hit.vn;rd.lastMidi=voiceMidi(rd.voice,midi);dot.flash=rd.flash=t;
   const v=rd.voice,key=rd.id*128+midi;
   fire(v,t,hit.vn,hit.x,'cog'+c.id+'.ring'+dot.ring+'>reader'+rd.id,dot.v,
     (when,amp,pan,vx)=>v.kind==='modal'?modal(v,midi,when,amp,pan,key,vx):drum(v,when,amp,pan));
@@ -620,8 +636,9 @@ function strike(f,g,t,when,amp,pan,key,contact){
   if(!strikes.length)queueMicrotask(flushStrikes);
   strikes.push(when*ac.sampleRate,key,amp*.3,contact,0,pan,f.length,...f,...g,...t);
 }
+const voiceMidi=(v,midi)=>clamp(midi+(v.kind==='modal'?12*v.octave:0),0,127);
 function modal(v,midi,when,amp,pan,key,x){
-  const H=BODIES.harmonic,F=BODIES[v.body],f0=hz(midi),f=[],g=[],t=[];
+  const H=BODIES.harmonic,F=BODIES[v.body],f0=hz(voiceMidi(v,midi)),f=[],g=[],t=[];
   for(let k=0;k<H.length;k++){const r=H[k]+(F[k]-H[k])*v.bend;f.push(f0*r);g.push(k?Math.pow(v.bright,k):1);t.push(v.decay*Math.pow(r,-v.damp))}
   strike(f,g,t,when,amp,pan,key,contactTime(v.hard,x));
 }
@@ -722,14 +739,17 @@ function deserialize(j){
   const cogs=j.cogs.map(c=>({revs:0,...c,w:0,turns:0}));
   const byId=new Map(cogs.map(c=>[c.id,c]));
   const cog=(id,who)=>{const c=byId.get(id);if(!c)throw new Error(`${who}: no cog ${id}`);return c};
-  for(const o of [...j.pads,...j.readers])if(!VOICES[o.voice.kind])throw new Error(`${o.id}: voice kind ${o.voice.kind}`);
+  const importedVoice=o=>{
+    const v=o.voice;if(!VOICES[v.kind])throw new Error(`${o.id}: voice kind ${v.kind}`);
+    return v.kind==='modal'?{...v,octave:v.octave??0}:v;
+  };
   for(const c of cogs)if(c.track)c.track={...c.track,dots:c.track.dots.map(d=>({p:1,v:1,...d}))};
   const next={cogs,
     arms:j.arms.map(a=>({flex:.5,...a,cog:cog(a.cog,'arm '+a.id)})),
     belts:j.belts.map(b=>({...b,a:cog(b.a,'belt '+b.id),b:cog(b.b,'belt '+b.id)})),
     strings:j.strings.map(s=>({...s,hits:0,lastV:0})),
-    pads:j.pads.map(p=>({...p,hits:0,lastV:0})),
-    readers:j.readers.map(r=>({tines:0,combBase:60,combScale:'major',...r,hits:0,lastV:0}))};
+    pads:j.pads.map(p=>({...p,voice:importedVoice(p),hits:0,lastV:0})),
+    readers:j.readers.map(r=>({tines:0,combBase:60,combScale:'major',...r,voice:importedVoice(r),hits:0,lastV:0}))};
   Object.assign(W,next);
   W.next=1+Math.max(0,...Object.values(next).flat().map(o=>o.id));
   Object.assign(S,j.S);Object.assign(SPACE,j.SPACE);Object.assign(view,j.view);
@@ -767,8 +787,8 @@ const DEFAULT_WORLD=
   {"id":12,"x":192.42818263663048,"y":24,"r":7,"voice":{"level":0.4,"velSense":0.35,"cutoff":7500,"decay":0.045,"kind":"hat"}},
   {"id":31,"x":222.46613092003602,"y":166.69735791102195,"r":7.665916721747587,"voice":{"level":0.7,"velSense":0.7,"tune":190,"tone":0.35,"cutoff":1000,"decay":0.16,"kind":"snare"}}],
 "readers":[
-  {"id":13,"x1":18,"y1":137.50987083139756,"x2":91.67324722093171,"y2":137.50987083139756,"voice":{"level":0.55,"velSense":0.3,"body":"harmonic","bright":1,"hard":1,"decay":4.39,"note":60,"bend":1,"damp":0.8,"kind":"modal"},"tines":19,"combBase":31,"combScale":"chromatic"},
-  {"id":26,"x1":139.652909175694,"y1":187.23855416684592,"x2":181.57573488664934,"y2":169.50813308032613,"voice":{"level":0.7,"velSense":0.7,"note":60,"body":"harmonic","bend":1,"bright":0.6,"hard":1,"decay":1.2,"damp":0.8,"kind":"modal"},"tines":28,"combBase":28,"combScale":"major"}],
+  {"id":13,"x1":18,"y1":137.50987083139756,"x2":91.67324722093171,"y2":137.50987083139756,"voice":{"level":0.55,"velSense":0.3,"body":"harmonic","bright":1,"hard":1,"decay":4.39,"note":60,"bend":1,"damp":0.8,"kind":"modal","octave":0},"tines":19,"combBase":31,"combScale":"chromatic"},
+  {"id":26,"x1":139.652909175694,"y1":187.23855416684592,"x2":181.57573488664934,"y2":169.50813308032613,"voice":{"level":0.7,"velSense":0.7,"note":60,"body":"harmonic","bend":1,"bright":0.6,"hard":1,"decay":1.2,"damp":0.8,"kind":"modal","octave":0},"tines":28,"combBase":28,"combScale":"major"}],
 "belts":[],
 "strings":[
   {"id":14,"x1":-244.2563067749534,"y1":-132.96687735205956,"x2":-244.2563067749534,"y2":127.03312264794043,"kind":"string","f200":143,"quant":1,"decay":1.6,"damp":0.7,"hard":0.35,"level":0.8,"velSense":0.4}]}
@@ -1327,6 +1347,7 @@ function setDot(t,cell,on){const i=dotAt(t,cell.ring,cell.a);if(on&&i<0)t.dots.p
 
 /* ---------- roll: the disc unwrapped into a strip, time left to right ---------- */
 const NOTE_NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const MIDI_NOTES=Array.from({length:97},(_,i)=>i+12);
 const noteName=m=>NOTE_NAMES[m%12]+(Math.floor(m/12)-1);
 let roll=null;
 const rollDir=c=>c.w<0?-1:1;
@@ -1341,7 +1362,7 @@ function readerPlayheads(c){
   }
   return out;
 }
-function rollGeom(){const t=roll.c.track,L=roll.label,cw=Math.max(6,Math.floor((roll.box.clientWidth-L)/t.div));return {cw,W:L+cw*t.div,H:roll.row*t.rings}}
+function rollGeom(){const t=roll.c.track,L=roll.label,cw=Math.max(roll.minCell,Math.floor((roll.box.clientWidth-L)/t.div));return {cw,W:L+cw*t.div,H:roll.row*t.rings}}
 const colAngle=(c,col)=>wrap(-rollDir(c)*col*TAU/c.track.div);
 const rollCol=(c,d)=>Math.round(rollU(c,d.a)*c.track.div)%c.track.div;
 // The pointer in grid units: columns from the first step, rows from the top ring.
@@ -1398,10 +1419,17 @@ function drawRoll(){
   const c=roll.c,t=c.track,g=rollGeom(),cv2=roll.cv,x=cv2.getContext('2d'),gw=g.cw*t.div,L=roll.label,RH=roll.row;
   if(cv2.width!==g.W*dpr||cv2.height!==g.H*dpr){cv2.width=g.W*dpr;cv2.height=g.H*dpr;cv2.style.width=g.W+'px';cv2.style.height=g.H+'px'}
   x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle=BG;x.fillRect(0,0,g.W,g.H);
+  const keys=roll.keys,kx=keys?.getContext('2d');
+  if(keys){
+    keys.parentElement.style.width=g.W+'px';
+    if(keys.width!==L*dpr||keys.height!==g.H*dpr){keys.width=L*dpr;keys.height=g.H*dpr;keys.style.width=L+'px';keys.style.height=g.H+'px'}
+    kx.setTransform(dpr,0,0,dpr,0,0);kx.font='11px monospace';kx.textBaseline='middle';
+  }
   x.font=`${clamp(Math.round(RH*.7),9,12)}px monospace`;x.textBaseline='middle';
   for(let row=0;row<t.rings;row++){
     const note=ringNote(t,t.rings-1-row),y=row*RH;
     x.fillStyle=DIM;x.fillText(noteName(note),2,y+RH/2);
+    if(kx){kx.fillStyle=[1,3,6,8,10].includes(note%12)?BG:PAD;kx.fillRect(0,y,L,RH);kx.fillStyle=FG;kx.fillText(noteName(note),3,y+RH/2);kx.fillStyle=FAINT;kx.fillRect(0,y+RH-1,L,1)}
     if(note%12===t.base%12){x.fillStyle=PAD;x.fillRect(L,y,gw,RH)}
   }
   x.lineWidth=1;
@@ -1421,14 +1449,23 @@ function drawRoll(){
   if(m){x.lineWidth=1;x.strokeStyle=SEL;x.setLineDash([5,4]);x.strokeRect(L+m.x0*g.cw+.5,m.y0*RH+.5,(m.x1-m.x0)*g.cw,(m.y1-m.y0)*RH);x.setLineDash([])}
 }
 // The strip goes into `strip`, its controls into `tools`; row and label are in CSS px.
-function rollSection(c,{strip,tools,row,label}){
+function rollSection(c,{strip,tools,row,label,minCell=6}){
   const t=c.track,cv2=el('canvas'),box=el('div',{className:'roll'},cv2);
   box.style.cssText='overflow-x:auto;margin:4px 0';cv2.style.cssText='display:block;touch-action:none;cursor:crosshair';
   cv2.tabIndex=0;cv2.style.outline='none';
-  roll={cv:cv2,box,c,row,label,marquee:null};
+  const keys=minCell>6?el('canvas'):null;
+  if(keys){
+    keys.style.cssText='position:sticky;left:0;z-index:1;flex-shrink:0;touch-action:pan-y';
+    cv2.style.marginLeft=-label+'px';cv2.style.flexShrink='0';
+    box.replaceChildren(el('div',{style:'display:flex'},keys,cv2));
+    keys.onpointerdown=e=>{const ring=t.rings-1-Math.floor((e.clientY-keys.getBoundingClientRect().top)/row);if(ring>=0&&ring<t.rings)sound(discReader(c),ringNote(t,ring),c.id*128+ring)};
+  }
+  roll={cv:cv2,keys,box,c,row,label,minCell,marquee:null};
   if(rollSelOf!==c){rollSel.clear();rollAnchor=null;rollSelOf=c}
   // A press: ctrl/cmd draws a box (a click toggles one pin), a selected pin drags the set,
   // anything else clears a selection, or paints when there is none.
+  const paintCell=(cell,on)=>{const fresh=dotAt(t,cell.ring,cell.a)<0;setDot(t,pin(cell),on);
+    if(on&&fresh)sound(discReader(c),ringNote(t,cell.ring),c.id*128+cell.ring)};
   let press=null;
   cv2.onpointerdown=e=>{
     const at=rollAt(e),cell=rollCell(e),hit=cell&&t.dots.find(d=>sameCell(d,cell));
@@ -1437,13 +1474,13 @@ function rollSection(c,{strip,tools,row,label}){
     if(hit&&rollSel.has(hit)){press={from:selPins(t).map(d=>[d,d.a,d.ring]),col:cell.col,ring:cell.ring,moved:false};return}
     if(rollSel.size){rollSel.clear();press=null;return}
     if(!cell){press=null;return}
-    press={paint:!hit};setDot(t,pin(cell),press.paint);
+    press={paint:!hit};paintCell(cell,press.paint);
   };
   cv2.onpointermove=e=>{
     if(!press)return;const at=rollAt(e);
     if(roll.marquee){Object.assign(roll.marquee,{x1:at.x,y1:at.y});return}
     if(press.from){const dc=Math.floor(at.x)-press.col,dr=t.rings-1-Math.floor(at.y)-press.ring;if(dc||dr||press.moved){press.moved=true;moveSel(c,press.from,dc,dr)}return}
-    const cell=rollCell(e);if(cell)setDot(t,pin(cell),press.paint);
+    const cell=rollCell(e);if(cell)paintCell(cell,press.paint);
   };
   cv2.onpointerup=cv2.onpointercancel=()=>{
     const p=press,m=roll.marquee;press=null;roll.marquee=null;if(!p)return;
@@ -1494,8 +1531,8 @@ function numRow(parent,label,min,max,step,get,set,def){
   if(def!==undefined){row.ondblclick=()=>put(def);row.title='double-click: '+def}
   parent.append(row);rows.push(sync);sync();return row;
 }
-function selRow(parent,label,options,get,set){
-  const s=el('select',{},...options.map(o=>el('option',{value:o,textContent:o})));
+function selRow(parent,label,options,get,set,labelOf=o=>o){
+  const s=el('select',{},...options.map(o=>el('option',{value:o,textContent:labelOf(o)})));
   const sync=()=>{s.value=get()};s.onchange=()=>set(s.value);
   const row=el('div',{className:'row'},el('span',{textContent:label}),s,el('span'));row.dataset.k=label;
   parent.append(row);rows.push(sync);sync();return row;
@@ -1548,7 +1585,12 @@ function voiceRows(f,owner,withNote){
   selRow(f,'kind',Object.keys(VOICES),()=>v.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense});buildInspector();changed()});
   for(const[k,l,a,b,s]of [...VOICE_DEFS[v.kind],...COMMON_DEFS]){
     if(k==='note'&&!withNote)continue;
-    if(Array.isArray(a))selRow(f,l,a,()=>v[k],x=>{v[k]=x;changed()});else numRow(f,l,a,b,s,...bind(v,k,changed),makeVoice(v.kind)[k]);
+    if(k==='note')selRow(f,l,MIDI_NOTES,()=>v.note,x=>{v.note=+x;audition(owner,true);changed()},noteName);
+    else if(k==='octave'){
+      selRow(f,'octave offset',['-3','-2','-1','0','1','2','3'],()=>String(v.octave),x=>{v.octave=+x;audition(owner,true);changed()});
+      if(withNote)roRow(f,'pitch',()=>noteName(voiceMidi(v,v.note)));
+    }
+    else if(Array.isArray(a))selRow(f,l,a,()=>v[k],x=>{v[k]=x;changed()});else numRow(f,l,a,b,s,...bind(v,k,changed),makeVoice(v.kind)[k]);
   }
 }
 function buildInspector(){
@@ -1572,7 +1614,7 @@ function buildInspector(){
     if(o.track){
       const t=o.track;
       numRow(f,'rings',1,36,1,...bind(t,'rings',()=>{t.dots=t.dots.filter(d=>d.ring<t.rings);changed()}),TRACK_DEFAULT.rings);
-      numRow(f,'base midi',12,108,1,...bind(t,'base',changed),TRACK_DEFAULT.base);
+      selRow(f,'root note',MIDI_NOTES,()=>t.base,x=>{t.base=+x;audition(o,true);changed()},noteName);
       selRow(f,'scale',Object.keys(SCALES),()=>t.scale,v=>{t.scale=v;changed()});
       numRow(f,'div',1,96,1,...bind(t,'div',changed),TRACK_DEFAULT.div);
       roRow(f,'dots',()=>t.dots.length);
@@ -1655,11 +1697,40 @@ function onResize(){const s=getComputedStyle($('#safe'));safeTop=parseFloat(s.pa
 const shelfTop=()=>CH-SHELF_H-safeBot;
 const stage=()=>({l:0,r:CW,t:safeTop,b:shelfTop()});
 const offStage=s=>s.y>=shelfTop();
-function drawChrome(){const b=activeBezel();if(b)drawBezel(b);if(ui.carry&&ui.carry.ghost)drawGhost(ui.carry.ghost);drawShelf();drawGlyph()}
+function drawChrome(){const b=activeBezel();if(b)drawBezel(b);if(ui.carry&&ui.carry.ghost)drawGhost(ui.carry.ghost);drawShelf();drawGlyph();syncEditor()}
 const panelShown=()=>!$('#dev').hidden,inspectorLive=panelShown;
-function togglePanel(open=$('#dev').hidden){$('#dev').hidden=$('#scrim').hidden=!open;if(open){syncRows();buildInspector()}}
-const placeRoll=(c,f)=>rollSection(c,{strip:f,tools:f,row:11,label:30});
-const mount=()=>{buildPanel(btn=>btn('close',()=>togglePanel(false)));$('#scrim').onclick=()=>togglePanel(false)};
+function togglePanel(open=$('#dev').hidden,mode=''){
+  $('#dev').dataset.editor=mode;$('#dev').hidden=$('#scrim').hidden=!open;
+  if(open){syncRows();buildInspector()}
+}
+function placeRoll(c,f){
+  const phone=$('#dev').dataset.editor==='notes';
+  rollSection(c,{strip:f,tools:f,row:phone?32:11,label:phone?44:30,minCell:phone?28:6});
+  if(!phone)return;
+  roll.box.style.maxHeight='36vh';roll.box.style.overflow='auto';
+  const nav=el('div',{className:'roll-nav'}),box=roll.box;
+  for(const [label,dx,dy]of [['← time',-1,0],['time →',1,0],['↑ pitch',0,-1],['pitch ↓',0,1]])
+    nav.append(el('button',{textContent:label,onclick:()=>box.scrollBy({left:dx*box.clientWidth*.75,top:dy*128,behavior:'smooth'})}));
+  f.prepend(box,nav);
+}
+const editorMode=()=>sel?.type==='cog'&&sel.o.track?'notes':sel?.o.voice?'patch':'';
+let editorOwner=null;
+function syncEditor(){
+  const mode=editorMode(),button=$('#edit-part');
+  button.hidden=!mode||panelShown()||!!ui.carry;
+  const label=mode==='notes'?'♫ notes':'♫ patch';if(button.textContent!==label)button.textContent=label;
+  if(!panelShown()||!$('#dev').dataset.editor)return;
+  if(!mode){togglePanel(false);return}
+  if(editorOwner!==sel.o){editorOwner=sel.o;togglePanel(true,mode)}
+  const title=$('#editor-title'),labelled=`${sel.type==='cog'?'disc':sel.type} ${sel.o.id} · ${mode}`;
+  if(title.textContent!==labelled)title.textContent=labelled;
+}
+function mount(){
+  buildPanel(btn=>btn('close',()=>togglePanel(false)));
+  $('#scrim').onclick=$('#editor-close').onclick=()=>togglePanel(false);
+  $('#editor-undo').onclick=()=>edits.undo();$('#editor-redo').onclick=()=>edits.redo();
+  $('#edit-part').onclick=()=>{editorOwner=sel.o;togglePanel(true,editorMode());syncEditor()};
+}
 // The shelf never changes, so it is painted once per size and blitted.
 let shelfArt=null;
 function drawShelf(){
@@ -1745,7 +1816,7 @@ const ICON={
   odds:'M12 3a9 9 0 1 0 .01 0M12 3v9h9',string:'M3 19L21 5M3 19h.01M21 5h.01',quant:'M4 20V14M9 20V9M14 20V12M19 20V4',
   seal:'M12 3a9 9 0 1 0 .01 0M12 7l1.5 3.2 3.5.4-2.6 2.4.7 3.5-3.1-1.8-3.1 1.8.7-3.5L7 10.6l3.5-.4z'};
 const icons=new Map();const iconPath=k=>{let p=icons.get(k);if(!p){p=new Path2D(ICON[k]);icons.set(k,p)}return p};
-const VOICE_ICON={note:'fork',tune:'fork',body:'bell',bend:'bend',bright:'bright',hard:'hard',decay:'decay',pdecay:'pdecay',damp:'damp',
+const VOICE_ICON={note:'fork',octave:'scale',tune:'fork',body:'bell',bend:'bend',bright:'bright',hard:'hard',decay:'decay',pdecay:'pdecay',damp:'damp',
   sweep:'sweep',tone:'tone',cutoff:'cutoff',level:'level',velSense:'vel'};
 const numSector=(icon,o,k,min,max,step,after)=>({icon,min,max,step,log:min>0&&max/min>=20,get:()=>o[k],set:x=>{o[k]=x;after&&after()}});
 const defSector=(icon,o,def,after)=>numSector(icon,o,def[0],def[2],def[3],def[4],after);

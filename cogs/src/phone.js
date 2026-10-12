@@ -5,11 +5,40 @@ function onResize(){const s=getComputedStyle($('#safe'));safeTop=parseFloat(s.pa
 const shelfTop=()=>CH-SHELF_H-safeBot;
 const stage=()=>({l:0,r:CW,t:safeTop,b:shelfTop()});
 const offStage=s=>s.y>=shelfTop();
-function drawChrome(){const b=activeBezel();if(b)drawBezel(b);if(ui.carry&&ui.carry.ghost)drawGhost(ui.carry.ghost);drawShelf();drawGlyph()}
+function drawChrome(){const b=activeBezel();if(b)drawBezel(b);if(ui.carry&&ui.carry.ghost)drawGhost(ui.carry.ghost);drawShelf();drawGlyph();syncEditor()}
 const panelShown=()=>!$('#dev').hidden,inspectorLive=panelShown;
-function togglePanel(open=$('#dev').hidden){$('#dev').hidden=$('#scrim').hidden=!open;if(open){syncRows();buildInspector()}}
-const placeRoll=(c,f)=>rollSection(c,{strip:f,tools:f,row:11,label:30});
-const mount=()=>{buildPanel(btn=>btn('close',()=>togglePanel(false)));$('#scrim').onclick=()=>togglePanel(false)};
+function togglePanel(open=$('#dev').hidden,mode=''){
+  $('#dev').dataset.editor=mode;$('#dev').hidden=$('#scrim').hidden=!open;
+  if(open){syncRows();buildInspector()}
+}
+function placeRoll(c,f){
+  const phone=$('#dev').dataset.editor==='notes';
+  rollSection(c,{strip:f,tools:f,row:phone?32:11,label:phone?44:30,minCell:phone?28:6});
+  if(!phone)return;
+  roll.box.style.maxHeight='36vh';roll.box.style.overflow='auto';
+  const nav=el('div',{className:'roll-nav'}),box=roll.box;
+  for(const [label,dx,dy]of [['← time',-1,0],['time →',1,0],['↑ pitch',0,-1],['pitch ↓',0,1]])
+    nav.append(el('button',{textContent:label,onclick:()=>box.scrollBy({left:dx*box.clientWidth*.75,top:dy*128,behavior:'smooth'})}));
+  f.prepend(box,nav);
+}
+const editorMode=()=>sel?.type==='cog'&&sel.o.track?'notes':sel?.o.voice?'patch':'';
+let editorOwner=null;
+function syncEditor(){
+  const mode=editorMode(),button=$('#edit-part');
+  button.hidden=!mode||panelShown()||!!ui.carry;
+  const label=mode==='notes'?'♫ notes':'♫ patch';if(button.textContent!==label)button.textContent=label;
+  if(!panelShown()||!$('#dev').dataset.editor)return;
+  if(!mode){togglePanel(false);return}
+  if(editorOwner!==sel.o){editorOwner=sel.o;togglePanel(true,mode)}
+  const title=$('#editor-title'),labelled=`${sel.type==='cog'?'disc':sel.type} ${sel.o.id} · ${mode}`;
+  if(title.textContent!==labelled)title.textContent=labelled;
+}
+function mount(){
+  buildPanel(btn=>btn('close',()=>togglePanel(false)));
+  $('#scrim').onclick=$('#editor-close').onclick=()=>togglePanel(false);
+  $('#editor-undo').onclick=()=>edits.undo();$('#editor-redo').onclick=()=>edits.redo();
+  $('#edit-part').onclick=()=>{editorOwner=sel.o;togglePanel(true,editorMode());syncEditor()};
+}
 // The shelf never changes, so it is painted once per size and blitted.
 let shelfArt=null;
 function drawShelf(){
@@ -95,7 +124,7 @@ const ICON={
   odds:'M12 3a9 9 0 1 0 .01 0M12 3v9h9',string:'M3 19L21 5M3 19h.01M21 5h.01',quant:'M4 20V14M9 20V9M14 20V12M19 20V4',
   seal:'M12 3a9 9 0 1 0 .01 0M12 7l1.5 3.2 3.5.4-2.6 2.4.7 3.5-3.1-1.8-3.1 1.8.7-3.5L7 10.6l3.5-.4z'};
 const icons=new Map();const iconPath=k=>{let p=icons.get(k);if(!p){p=new Path2D(ICON[k]);icons.set(k,p)}return p};
-const VOICE_ICON={note:'fork',tune:'fork',body:'bell',bend:'bend',bright:'bright',hard:'hard',decay:'decay',pdecay:'pdecay',damp:'damp',
+const VOICE_ICON={note:'fork',octave:'scale',tune:'fork',body:'bell',bend:'bend',bright:'bright',hard:'hard',decay:'decay',pdecay:'pdecay',damp:'damp',
   sweep:'sweep',tone:'tone',cutoff:'cutoff',level:'level',velSense:'vel'};
 const numSector=(icon,o,k,min,max,step,after)=>({icon,min,max,step,log:min>0&&max/min>=20,get:()=>o[k],set:x=>{o[k]=x;after&&after()}});
 const defSector=(icon,o,def,after)=>numSector(icon,o,def[0],def[2],def[3],def[4],after);

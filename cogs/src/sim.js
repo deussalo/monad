@@ -33,10 +33,10 @@ const BODIES={harmonic:[1,2,3,4,5],bell:[1,1.183,1.506,2.0,2.514],plate:[1,1.594
   bar:[1,2.756,5.404,8.933,13.34],bowl:[1,2.32,4.25,6.63,9.38]};
 const SCALES={chromatic:[0,1,2,3,4,5,6,7,8,9,10,11],major:[0,2,4,5,7,9,11],minor:[0,2,3,5,7,8,10],
   dorian:[0,2,3,5,7,9,10],pentatonic:[0,2,4,7,9],minpent:[0,3,5,7,10],whole:[0,2,4,6,8,10]};
-const VOICES={modal:{note:60,body:'bell',bend:1,bright:.6,hard:.6,decay:1.2,damp:.8},
+const VOICES={modal:{note:60,octave:0,body:'bell',bend:1,bright:.6,hard:.6,decay:1.2,damp:.8},
   kick:{tune:52,sweep:3,pdecay:.045,decay:.35},snare:{tune:190,tone:.35,cutoff:1800,decay:.16},hat:{cutoff:7500,decay:.045}};
 const VOICE_DEFS={
-  modal:[['note','note',12,108,1],['body','body',Object.keys(BODIES)],['bend','bend',0,1,.01],['bright','bright',0,1,.01],
+  modal:[['note','note',12,108,1],['octave','octave',-3,3,1],['body','body',Object.keys(BODIES)],['bend','bend',0,1,.01],['bright','bright',0,1,.01],
     ['hard','hard',0,1,.01],['decay','decay s',.02,8,.01],['damp','damp',0,2,.01]],
   kick:[['tune','tune Hz',20,200,1],['sweep','sweep x',1,10,.1],['pdecay','p decay s',.005,.3,.001],['decay','decay s',.02,2,.01]],
   snare:[['tune','tune Hz',60,600,1],['tone','tone',0,1,.01],['cutoff','cutoff Hz',200,12000,10],['decay','decay s',.02,1,.005]],
@@ -179,7 +179,7 @@ function dotCross(c,dot,rd,dt){
   const t=simT+dt*hit.f,turn=c.turns+Math.floor((c.th+c.w*dt*hit.f)/TAU);
   if(dot.p<1&&chance(c.id,dot.ring,dot.a,turn)>=dot.p)return;
   const midi=rd.tines?scaleNote(rd.combBase,rd.combScale,Math.min(rd.tines-1,Math.floor(hit.u*rd.tines))):ringNote(c.track,dot.ring);
-  rd.hits++;rd.lastV=hit.vn;rd.lastMidi=midi;dot.flash=rd.flash=t;
+  rd.hits++;rd.lastV=hit.vn;rd.lastMidi=voiceMidi(rd.voice,midi);dot.flash=rd.flash=t;
   const v=rd.voice,key=rd.id*128+midi;
   fire(v,t,hit.vn,hit.x,'cog'+c.id+'.ring'+dot.ring+'>reader'+rd.id,dot.v,
     (when,amp,pan,vx)=>v.kind==='modal'?modal(v,midi,when,amp,pan,key,vx):drum(v,when,amp,pan));
@@ -261,8 +261,9 @@ function strike(f,g,t,when,amp,pan,key,contact){
   if(!strikes.length)queueMicrotask(flushStrikes);
   strikes.push(when*ac.sampleRate,key,amp*.3,contact,0,pan,f.length,...f,...g,...t);
 }
+const voiceMidi=(v,midi)=>clamp(midi+(v.kind==='modal'?12*v.octave:0),0,127);
 function modal(v,midi,when,amp,pan,key,x){
-  const H=BODIES.harmonic,F=BODIES[v.body],f0=hz(midi),f=[],g=[],t=[];
+  const H=BODIES.harmonic,F=BODIES[v.body],f0=hz(voiceMidi(v,midi)),f=[],g=[],t=[];
   for(let k=0;k<H.length;k++){const r=H[k]+(F[k]-H[k])*v.bend;f.push(f0*r);g.push(k?Math.pow(v.bright,k):1);t.push(v.decay*Math.pow(r,-v.damp))}
   strike(f,g,t,when,amp,pan,key,contactTime(v.hard,x));
 }
@@ -363,14 +364,17 @@ function deserialize(j){
   const cogs=j.cogs.map(c=>({revs:0,...c,w:0,turns:0}));
   const byId=new Map(cogs.map(c=>[c.id,c]));
   const cog=(id,who)=>{const c=byId.get(id);if(!c)throw new Error(`${who}: no cog ${id}`);return c};
-  for(const o of [...j.pads,...j.readers])if(!VOICES[o.voice.kind])throw new Error(`${o.id}: voice kind ${o.voice.kind}`);
+  const importedVoice=o=>{
+    const v=o.voice;if(!VOICES[v.kind])throw new Error(`${o.id}: voice kind ${v.kind}`);
+    return v.kind==='modal'?{...v,octave:v.octave??0}:v;
+  };
   for(const c of cogs)if(c.track)c.track={...c.track,dots:c.track.dots.map(d=>({p:1,v:1,...d}))};
   const next={cogs,
     arms:j.arms.map(a=>({flex:.5,...a,cog:cog(a.cog,'arm '+a.id)})),
     belts:j.belts.map(b=>({...b,a:cog(b.a,'belt '+b.id),b:cog(b.b,'belt '+b.id)})),
     strings:j.strings.map(s=>({...s,hits:0,lastV:0})),
-    pads:j.pads.map(p=>({...p,hits:0,lastV:0})),
-    readers:j.readers.map(r=>({tines:0,combBase:60,combScale:'major',...r,hits:0,lastV:0}))};
+    pads:j.pads.map(p=>({...p,voice:importedVoice(p),hits:0,lastV:0})),
+    readers:j.readers.map(r=>({tines:0,combBase:60,combScale:'major',...r,voice:importedVoice(r),hits:0,lastV:0}))};
   Object.assign(W,next);
   W.next=1+Math.max(0,...Object.values(next).flat().map(o=>o.id));
   Object.assign(S,j.S);Object.assign(SPACE,j.SPACE);Object.assign(view,j.view);

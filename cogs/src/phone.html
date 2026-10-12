@@ -16,6 +16,18 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #dev input[type=range]{touch-action:none}
 #dev[hidden],#scrim[hidden]{display:none}
 #panel{max-width:440px;margin:0 auto;padding:6px}
+#edit-part{position:fixed;left:var(--space-3,12px);top:calc(env(safe-area-inset-top,0px) + var(--space-3,12px));min-height:44px;padding:var(--space-3,12px);border:1px solid var(--line)}
+#edit-part[hidden],#editor-head{display:none}
+#dev[data-editor]:not([data-editor=""]){top:max(14vh,env(safe-area-inset-top,0px));border-radius:var(--space-3,12px) var(--space-3,12px) 0 0}
+#dev[data-editor]:not([data-editor=""]) #editor-head{display:flex;align-items:center;gap:var(--space-2,8px);padding:var(--space-2,8px);position:sticky;top:0;background:var(--bg);z-index:1}
+#editor-title{flex:1;color:var(--hot)}
+#dev[data-editor]:not([data-editor=""]) #panel{max-width:none;padding:var(--space-2,8px)}
+#dev[data-editor]:not([data-editor=""]) button,#dev[data-editor]:not([data-editor=""]) .row,#dev[data-editor]:not([data-editor=""]) input[type=number],#dev[data-editor]:not([data-editor=""]) select{min-height:44px}
+#dev[data-editor]:not([data-editor=""]) #panel>fieldset:not(#inspector),#dev[data-editor]:not([data-editor=""]) #inspector>legend{display:none}
+#dev[data-editor]:not([data-editor=""]) #inspector>:is([data-k="x"],[data-k="y"],[data-k="radius"]),
+#dev[data-editor="patch"] #inspector>:is([data-k="x1"],[data-k="y1"],[data-k="x2"],[data-k="y2"]),
+#dev[data-editor="notes"] #inspector>:is([data-k="teeth"],[data-k="rpm"],[data-k="revs/bar"],[data-k="layer"],[data-k="phase deg"],.ro){display:none}
+.roll-nav{display:flex;justify-content:space-between;gap:var(--space-1,4px)}
 </style>
 </head>
 <body>
@@ -23,7 +35,11 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 <div id="notice" hidden onclick="this.hidden=true"></div>
 <div id="safe"></div>
 <div id="scrim" hidden></div>
-<div id="dev" hidden><div id="panel"></div></div>
+<button id="edit-part" hidden aria-label="Edit selected part"></button>
+<div id="dev" hidden role="dialog" aria-label="Part controls">
+  <div id="editor-head"><span id="editor-title"></span><button id="editor-undo" aria-label="Undo">↶</button><button id="editor-redo" aria-label="Redo">↷</button><button id="editor-close">close</button></div>
+  <div id="panel"></div>
+</div>
 <script type="text/x-cogs-worklet" id="engine">
 'use strict';
 //@include engine.worklet.js

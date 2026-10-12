@@ -1,6 +1,6 @@
 # cogs: the touch design
 
-One idea carries the design: **you hold the machine in your hand, and the closer you look, the more of it you can touch.** The screen has no forms and no words. It shows a workbench with a shelf of parts, one small balance-wheel glyph, and the machine itself.
+One idea carries the design: **you hold the machine in your hand, and the closer you look, the more of it you can touch.** The workbench shows a shelf of parts, one small balance-wheel glyph, and the machine itself. Selecting a disc or a synth reveals a notes or patch button; it opens a labelled touch editor without entering the dev layer.
 
 ## The model
 
@@ -13,8 +13,9 @@ One idea carries the design: **you hold the machine in your hand, and the closer
 | **Set speed** | **Push the teeth** along the rim, the way you would turn a real wheel. The whole train turns with your finger while you crank. A flick leaves it spinning at the flick's speed, snapped to a detent. Hold still and let go to stop it. The cog you last pushed becomes the train's motor, so two motors can never fight. |
 | **Arm** | Drag the blued tip to swing the arm and change its length. |
 | **Pad** | Drag to move. Drag the rim to change the contact radius. Tap it to hear it. |
-| **Tune a patch** | Select a pad or a reader and a **bezel** blooms around it: a ring of sectors, one per parameter, each with a glyph and a brass value arc. Drag around a sector to turn it. A ring gives endless travel, so fine control needs no extra mode. Stepped values such as notes click by in detents with a haptic tick, and every change plays the pad, so you tune by ear. A choice, such as the kind or the body, steps forward when tapped. |
-| **Write notes** | Zoom into a disc until its rings are finger-sized. The face then becomes the score: tap a pin socket to set or clear it, or drag to paint along. Further out, the same drag moves the disc. |
+| **Tune a patch** | Select a pad or a reader and a **bezel** blooms around it: a ring of sectors, one per parameter, each with a glyph and a brass value arc. Drag up or down from a sector to turn it. Stepped values such as notes click by in detents with a haptic tick, and every change plays the pad, so you tune by ear. A choice, such as the kind or the body, steps forward when tapped. |
+| **Write notes** | Select a disc and tap **notes** for a pop-up piano roll. Tap or drag to paint pins; time and pitch arrows scroll the score. The roll shares the desktop editor, with undo, probability, velocity and Euclidean fill. You can still zoom into the disc and paint directly on its face. |
+| **Set synth pitch** | Select a pad or reader and tap **patch**. Pitched pads have a named MIDI note selector; pitched pads and readers have an octave offset from −3 to +3. The offset transposes playback and auditions, not the disc score or comb. |
 | **Tune a disc** | When the disc is selected and fits on screen, a bezel around its rim sets the scale, the root, the divisions and the number of rings. |
 | **Room** | Pinch out past the whole machine. It shrinks to a medallion, and the **room** bezel appears around it: wet, size, decay, air, shimmer, freeze and master. |
 | **Pause** | Tap the balance-wheel glyph. It swings while time runs. A long press opens the dev layer, which holds the old numeric panel. |
@@ -61,7 +62,7 @@ Watchmaking, not wireframe.
 | pad x, y, radius | body drag, rim drag |
 | voice kind and params | the bezel |
 | rings, base, scale, div | the disc bezel |
-| dots, roll | the disc face at patch zoom; the roll stays in the dev layer |
+| dots, roll | the pop-up notes editor, or the disc face at patch zoom |
 | space (20 params) | the room bezel exposes 7; the rest are in the dev layer |
 | master | the room bezel |
 | zoom | pinch and double tap |
