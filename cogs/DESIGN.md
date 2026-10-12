@@ -1,6 +1,6 @@
 # cogs: the touch design
 
-One idea carries the design: **you hold the machine in your hand, and the closer you look, the more of it you can touch.** The workbench shows a shelf of parts, one small balance-wheel glyph, and the machine itself. Selecting a disc or a synth reveals a notes or patch button; it opens a labelled touch editor without entering the dev layer.
+One idea carries the design: **you hold the machine in your hand, and the closer you look, the more of it you can touch.** The workbench shows a shelf of parts, one small balance-wheel glyph, and the machine itself. Selecting a disc or a synth reveals a notes or patch button; it opens a labelled touch editor without entering the dev layer. Pressing a control shows **option: setting** across the bottom, updates it while adjusting, and keeps it for 1.8 seconds after release. The parts shelf has no shortcut letters.
 
 ## The model
 
@@ -16,8 +16,8 @@ One idea carries the design: **you hold the machine in your hand, and the closer
 | **Tune a patch** | Select a pad or a reader and a **bezel** blooms around it: a ring of sectors, one per parameter, each with a glyph and a brass value arc. Drag up or down from a sector to turn it. Stepped values such as notes click by in detents with a haptic tick, and every change plays the pad, so you tune by ear. A choice, such as the kind or the body, steps forward when tapped. |
 | **Write notes** | Select a disc and tap **notes** for a pop-up piano roll. Tap or drag to paint pins; time and pitch arrows scroll the score. The roll shares the desktop editor, with undo, probability, velocity and Euclidean fill. You can still zoom into the disc and paint directly on its face. |
 | **Set synth pitch** | Select a pad or reader and tap **patch**. Pitched pads have a named MIDI note selector; pitched pads and readers have an octave offset from −3 to +3. The offset transposes playback and auditions, not the disc score or comb. |
-| **Tune a disc** | When the disc is selected and fits on screen, a bezel around its rim sets the scale, the root, the divisions and the number of rings. |
-| **Room** | Pinch out past the whole machine. It shrinks to a medallion, and the **room** bezel appears around it: wet, size, decay, air, shimmer, freeze and master. |
+| **Tune a disc** | When the disc is selected and its bezel fits on screen, the bezel sets the scale, root, divisions and number of rings. Changing lane count never hides it, including at one lane; zoomed-in discs retain access through the notes button. |
+| **Room** | Pinch out past the whole machine. It shrinks to a medallion, and the **room** bezel appears around it: wet, size, decay, air, shimmer, freeze and master. Freeze is a tap-only on/off toggle; boolean panel controls are switches, never sliders. |
 | **Pause** | Tap the balance-wheel glyph. It swings while time runs. A long press opens the dev layer, which holds the old numeric panel. |
 
 ## Gestures
@@ -76,7 +76,7 @@ Watchmaking, not wireframe.
 - **Belts:** a belt sits on the shelf. Drop it on cog A and it stretches like a band from A to your finger. Let go over cog B and it loops. Tap the belt to cross it, which reverses the direction. Drag it to the shelf to remove it.
 - **Tempo lock:** BPM is a sector on the room bezel. With tempo lock on, crank detents become revolutions per bar (¼, ⅓, ½, 1, 2…), and the crank gauge draws them as notches with pip counts.
 - **Strings and bars:** a string part on the shelf lands as a short span. Drag an end to stretch it: the pitch plays as it changes, with detents on scale tones. The pluck point is where an arm crosses it, drawn as a bright node, so you shape the timbre by moving the arm or the string.
-- **Comb reader:** a reader variant with tines. At patch zoom you tune each tine by dragging its tip; its length is its pitch, as on a real comb.
+- **Reader modes:** **disc notes** takes pitch from each pin's ring; **comb** takes pitch from where the pin crosses the reader. The bezel and patch sheet expose both modes, all four voices and, for modal synthesis, all five bodies. Comb mode reveals tine count, named root note and scale.
 - **Probability per dot:** long-press a pin and a small ring blooms around it. Drag around that ring to set its odds; the pin becomes a pie of that fraction.
 - **Euclidean fill:** long-press an empty socket on a ring, then sweep around the ring. Pins spread evenly, one more for each step you sweep.
 - **Flapper arms:** this needs no control. The blued hand bends on impact, in proportion to the hit, and springs back.

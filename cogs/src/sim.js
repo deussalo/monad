@@ -57,6 +57,9 @@ const renderTh=c=>c.th-c.w*(simT-clock.view);
 const ringR=(c,i)=>{const n=c.track.rings,r=radius(c);return n>1?r*(.25+.65*i/(n-1)):r*.6};
 const scaleNote=(base,scale,i)=>{const sc=SCALES[scale];return base+sc[i%sc.length]+12*Math.floor(i/sc.length)};
 const ringNote=(t,i)=>scaleNote(t.base,t.scale,i);
+const READER_MODES=['disc notes','comb'];
+const readerMode=r=>r.tines?'comb':'disc notes';
+function setReaderMode(r,mode){r.tines=mode==='comb'?(r.tines||12):0}
 const motorRpm=c=>S.bpm&&c.revs?c.revs*S.bpm/S.beats:c.motor;
 function chance(...n){let h=(S.seed|0)^0x9e3779b9;for(const x of n){h=Math.imul(h^Math.round(x*4096),0x85ebca6b);h^=h>>>13;h=Math.imul(h,0xc2b2ae35);h^=h>>>16}return (h>>>0)/4294967296}
 

@@ -28,12 +28,16 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #dev[data-editor="patch"] #inspector>:is([data-k="x1"],[data-k="y1"],[data-k="x2"],[data-k="y2"]),
 #dev[data-editor="notes"] #inspector>:is([data-k="teeth"],[data-k="rpm"],[data-k="revs/bar"],[data-k="layer"],[data-k="phase deg"],.ro){display:none}
 .roll-nav{display:flex;justify-content:space-between;gap:var(--space-1,4px)}
+#interaction{position:fixed;left:0;right:0;bottom:0;z-index:30;padding:var(--space-2,8px) var(--space-3,12px) calc(env(safe-area-inset-bottom,0px) + var(--space-2,8px));background:var(--bg);border-top:1px solid var(--line);color:var(--hot);font-size:14px;text-align:center;pointer-events:none}
+#interaction[hidden]{display:none}
+#dev{padding-bottom:calc(env(safe-area-inset-bottom,0px) + var(--space-12,48px))}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="notice" hidden onclick="this.hidden=true"></div>
 <div id="safe"></div>
+<output id="interaction" hidden aria-live="polite"></output>
 <div id="scrim" hidden></div>
 <button id="edit-part" hidden aria-label="Edit selected part"></button>
 <div id="dev" hidden role="dialog" aria-label="Part controls">

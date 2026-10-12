@@ -405,7 +405,7 @@ const G={
   // On the rim: turn it to move the cog's speed along the dial, pull outward or inward to change the tooth count.
   rim(c,s0){
     let mode=null,dial=0,at=0,grow=null;const min=c.track?12:6,ang=s=>{const q=screenToWorld(s);return Math.atan2(q.y-c.y,q.x-c.x)};
-    return {o:c,
+    return {o:c,readout:()=>mode==='crank'?`speed rpm: ${rpmOf(c).toFixed(1)}`:`teeth: ${c.n}`,
       move(s){
         if(!mode){const sc=toScreen(c),rx=s0.x-sc.x,ry=s0.y-sc.y,mx=s.x-s0.x,my=s.y-s0.y;
           mode=Math.abs(mx*rx+my*ry)>Math.abs(mx*ry-my*rx)?'teeth':'crank';
@@ -523,7 +523,7 @@ cv.addEventListener('wheel',e=>{
 document.addEventListener('pointerup',initAudio);
 document.addEventListener('keydown',e=>{
   initAudio();
-  if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)||rollKey(e))return;
+  if(/INPUT|TEXTAREA|SELECT|BUTTON/.test(e.target.tagName)||rollKey(e))return;
   const k=e.key.toLowerCase();
   if((e.ctrlKey||e.metaKey)&&!e.altKey&&(k==='z'||k==='y')){e.preventDefault();if(k==='z'&&!e.shiftKey)edits.undo();else edits.redo();return}
   if((e.ctrlKey||e.metaKey)&&!e.altKey&&(k==='c'&&copyParts()||k==='x'&&copyParts()&&(removeSel(),true)||k==='v'&&pasteParts())){e.preventDefault();return}
@@ -706,9 +706,8 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
 const panel=$('#panel'),rows=[],readouts=[];
 function el(tag,props={},...kids){const e=Object.assign(document.createElement(tag),props);e.append(...kids);return e}
 function section(title,parent=panel){const f=el('fieldset',{},el('legend',{textContent:title}));parent.append(f);return f}
-// A slider and its number. Wheel over either nudges by 1% of the range, shift by one step;
-// shift-drag on the slider moves ten times finer; double-click resets to `def` when there is one.
 function numRow(parent,label,min,max,step,get,set,def){
+  if(min===0&&max===1&&step===1)return toggleRow(parent,label,get,set);
   const range=el('input',{type:'range',min,max,step}),num=el('input',{type:'number',min,max,step});
   const sync=()=>{const v=get(),shown=+(+v).toFixed(4);if(+range.value!==+v)range.value=v;if(+num.value!==shown)num.value=shown};
   const put=v=>{if(!Number.isFinite(v))return;set(clamp(+(Math.round(v/step)*step).toFixed(6),min,max));sync()};
@@ -724,6 +723,13 @@ function numRow(parent,label,min,max,step,get,set,def){
   };
   const row=el('div',{className:'row'},el('span',{textContent:label}),range,num);row.dataset.k=label;
   if(def!==undefined){row.ondblclick=()=>put(def);row.title='double-click: '+def}
+  parent.append(row);rows.push(sync);sync();return row;
+}
+function toggleRow(parent,label,get,set){
+  const button=el('button',{role:'switch',ariaLabel:label});
+  const sync=()=>{const on=!!get();button.ariaChecked=String(on);button.textContent=on?'on':'off'};
+  button.onclick=()=>{set(get()?0:1);sync()};
+  const row=el('div',{className:'row'},el('span',{textContent:label}),button,el('span'));row.dataset.k=label;
   parent.append(row);rows.push(sync);sync();return row;
 }
 function selRow(parent,label,options,get,set,labelOf=o=>o){
@@ -834,10 +840,13 @@ function buildInspector(){
   }else if(sel&&sel.type==='reader'){
     for(const k of ['x1','y1','x2','y2'])numRow(f,k,-3000,3000,.5,...bind(o,k,changed));
     voiceRows(f,o,false);
-    numRow(f,'comb tines',0,36,1,...bind(o,'tines',changed),0);
-    numRow(f,'comb base',12,108,1,...bind(o,'combBase',changed),60);
+    selRow(f,'reader mode',READER_MODES,()=>readerMode(o),mode=>{setReaderMode(o,mode);buildInspector();changed()});
+    if(o.tines){
+      numRow(f,'comb tines',1,36,1,...bind(o,'tines',changed),12);
+      selRow(f,'comb note',MIDI_NOTES,()=>o.combBase,v=>{o.combBase=+v;audition(o,true);changed()},noteName);
+      selRow(f,'comb scale',Object.keys(SCALES),()=>o.combScale,v=>{o.combScale=v;changed()});
+    }
     roRow(f,'last note',()=>o.lastMidi==null?'-':noteName(o.lastMidi));
-    selRow(f,'comb scale',Object.keys(SCALES),()=>o.combScale,v=>{o.combScale=v;changed()});
     roRow(f,'hits',()=>o.hits);
     roRow(f,'last vn',()=>o.lastV.toFixed(1));
   }else if(sel&&sel.type==='belt'){

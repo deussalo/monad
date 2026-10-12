@@ -1,11 +1,11 @@
 /* ---------- phone: shelf, glyph, bezel ---------- */
-const SHELF_H=76;
+const SHELF_H=76,INTERACTION_H=36;
 let safeTop=0,safeBot=0;
 function onResize(){const s=getComputedStyle($('#safe'));safeTop=parseFloat(s.paddingTop)||0;safeBot=parseFloat(s.paddingBottom)||0}
-const shelfTop=()=>CH-SHELF_H-safeBot;
+const shelfTop=()=>CH-SHELF_H-INTERACTION_H-safeBot;
 const stage=()=>({l:0,r:CW,t:safeTop,b:shelfTop()});
 const offStage=s=>s.y>=shelfTop();
-function drawChrome(){const b=activeBezel();if(b)drawBezel(b);if(ui.carry&&ui.carry.ghost)drawGhost(ui.carry.ghost);drawShelf();drawGlyph();syncEditor()}
+function drawChrome(){const b=activeBezel();if(b)drawBezel(b);if(ui.carry&&ui.carry.ghost)drawGhost(ui.carry.ghost);drawShelf();drawGlyph();syncEditor();drawInteraction()}
 const panelShown=()=>!$('#dev').hidden,inspectorLive=panelShown;
 function togglePanel(open=$('#dev').hidden,mode=''){
   $('#dev').dataset.editor=mode;$('#dev').hidden=$('#scrim').hidden=!open;
@@ -22,7 +22,7 @@ function placeRoll(c,f){
   f.prepend(box,nav);
 }
 const editorMode=()=>sel?.type==='cog'&&sel.o.track?'notes':sel?.o.voice?'patch':'';
-let editorOwner=null;
+let editorOwner=null,editorOpenedAt=-Infinity;
 function syncEditor(){
   const mode=editorMode(),button=$('#edit-part');
   button.hidden=!mode||panelShown()||!!ui.carry;
@@ -33,11 +33,53 @@ function syncEditor(){
   const title=$('#editor-title'),labelled=`${sel.type==='cog'?'disc':sel.type} ${sel.o.id} · ${mode}`;
   if(title.textContent!==labelled)title.textContent=labelled;
 }
+const GESTURE_READOUT={
+  bezel:(b,i)=>{const p=b.sectors[i];return p.action?`${p.label}: copy link`:`${p.label}: ${p.format(p.get())}`},
+  carry:kind=>`place part: ${kind}`,armed:kind=>`place part: ${kind}`,
+  glyph:()=>panelShown()?'controls: open':`playback: ${clock.paused?'paused':'playing'}`,
+  arm:a=>`arm length: ${Math.round(a.len)} px · angle: ${Math.round(wrap(a.a)*180/Math.PI)}°`,
+  pad:(o,s,rim)=>rim?`pad radius: ${settingText(o.r)} px`:`pad voice: ${o.voice.kind}${o.voice.kind==='modal'?' · '+noteName(voiceMidi(o.voice,o.voice.note)):''}`,
+  span:(type,o,s,end)=>o.f200?`${o.kind} note: ${noteName(Math.round(stringMidi(o)))} · ${Math.round(stringLen(o))} px`:`reader ${end?'length':'mode'}: ${end?Math.round(stringLen(o))+' px':readerMode(o)+' · '+o.voice.kind}`,
+  belt:b=>`belt crossed: ${onOff(b.cross)}`,
+  cog:c=>`${c.track?'disc':'cog'} position: ${Math.round(c.x)}, ${Math.round(c.y)}`,
+  notes:(c,s)=>{const cell=cellAt(c,screenToWorld(gesture?.last||s));return cell?`disc note: ${noteName(ringNote(c.track,cell.ring))}`:`disc notes: ${c.track.dots.length} pins`},
+  pan:()=>`view: ${Math.round(S.zoom*100)}% · ${Math.round(view.x)}, ${Math.round(view.y)}`,
+  group:()=>`move parts: ${group.length}`,marquee:()=>`select parts: ${group.length}`,
+};
+let interactionRead=null,interactionUntil=0;
+function showInteraction(read,held=false){interactionRead=read;interactionUntil=held?Infinity:performance.now()+1800;drawInteraction()}
+function drawInteraction(){
+  const output=$('#interaction');output.hidden=!interactionRead||performance.now()>interactionUntil;
+  if(output.hidden)return;const text=interactionRead();if(output.textContent!==text)output.textContent=text;
+}
+function controlReadout(target){
+  const control=target.closest('input,select,textarea,button');if(!control)return null;
+  const row=control.closest('[data-k]'),label=row?.dataset.k||control.ariaLabel||control.textContent;
+  return ()=>`${label||'json'}: ${control.matches('select')?control.selectedOptions[0]?.textContent:control.role==='switch'?onOff(control.ariaChecked==='true'):control.matches('input')?control.value:control.matches('textarea')?'edit':'pressed'}`;
+}
+function rollReadout(e){
+  if(!roll||(e.target!==roll.cv&&e.target!==roll.keys))return null;
+  const c=roll.c,cell=e.target===roll.keys?{ring:c.track.rings-1-Math.floor((e.clientY-roll.keys.getBoundingClientRect().top)/roll.row)}:rollCell(e);
+  if(!cell||cell.ring<0||cell.ring>=c.track.rings)return null;
+  const label=noteName(ringNote(c.track,cell.ring));
+  return ()=>e.target===roll.keys?`audition note: ${label}`:`disc note: ${label} · ${onOff(dotAt(c.track,cell.ring,cell.a)>=0)}`;
+}
 function mount(){
+  for(const[kind,describe]of Object.entries(GESTURE_READOUT)){
+    const make=G[kind];G[kind]=(...args)=>{const g=make(...args);g.readout=()=>describe(...args);return g};
+  }
+  cv.addEventListener('pointerdown',()=>showInteraction(gesture?.g.readout||(()=>`view zoom: ${Math.round(S.zoom*100)}%`),true));
+  document.addEventListener('pointerdown',e=>{if(e.target===cv)return;const read=rollReadout(e)||controlReadout(e.target);if(read)showInteraction(read,true)});
+  document.addEventListener('pointermove',e=>{if(e.buttons){const read=rollReadout(e);if(read)showInteraction(read,true)}});
+  for(const type of ['input','change','click'])document.addEventListener(type,e=>{const read=controlReadout(e.target);if(read)showInteraction(read)});
+  for(const type of ['pointerup','pointercancel'])addEventListener(type,()=>{if(interactionRead){interactionUntil=performance.now()+1800;drawInteraction()}});
   buildPanel(btn=>btn('close',()=>togglePanel(false)));
-  $('#scrim').onclick=$('#editor-close').onclick=()=>togglePanel(false);
+  // Chrome can retarget the opening tap's click to the newly exposed scrim.
+  $('#scrim').onclick=()=>{if(performance.now()-editorOpenedAt>200)togglePanel(false)};
+  $('#editor-close').onclick=()=>togglePanel(false);
   $('#editor-undo').onclick=()=>edits.undo();$('#editor-redo').onclick=()=>edits.redo();
-  $('#edit-part').onclick=()=>{editorOwner=sel.o;togglePanel(true,editorMode());syncEditor()};
+  const openEditor=()=>{const mode=editorMode();if(panelShown()||!mode)return;editorOwner=sel.o;editorOpenedAt=performance.now();togglePanel(true,mode);syncEditor()};
+  $('#edit-part').onpointerup=$('#edit-part').onclick=openEditor;
 }
 // The shelf never changes, so it is painted once per size and blitted.
 let shelfArt=null;
@@ -50,9 +92,8 @@ function drawShelf(){
   cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=ui.scrap?.35:1;cx.drawImage(shelfArt.art,0,Math.round(top*dpr));cx.globalAlpha=1;
   cx.setTransform(dpr,0,0,dpr,0,0);
   if(ui.scrap){cx.fillStyle=BAD;cx.globalAlpha=.2+.08*Math.sin(performance.now()/90);cx.fillRect(0,top,CW,h);cx.globalAlpha=1}
-  const sw=CW/PARTS.length;cx.font='10px monospace';cx.textAlign='left';cx.textBaseline='top';
-  PARTS.forEach((kind,i)=>{const on=ui.armed===kind;cx.fillStyle=on?HOT:DIM;cx.fillText(KEY_OF[kind],sw*i+5,top+5);
-    if(on){cx.strokeStyle=HOT;cx.lineWidth=1;cx.strokeRect(sw*i+2,top+2,sw-4,h-4)}});
+  const sw=CW/PARTS.length;
+  PARTS.forEach((kind,i)=>{if(ui.armed===kind){cx.strokeStyle=HOT;cx.lineWidth=1;cx.strokeRect(sw*i+2,top+2,sw-4,h-4)}});
 }
 function paintShelf(h){
   const sw=CW/PARTS.length;
@@ -97,7 +138,7 @@ Object.assign(G,{
     const done=()=>{ui.sector=null;changed(true)};
     return {o:b.owner,
       move(s){
-        if(p.action)return;
+        if(p.action||p.toggle)return;
         const dy=s0.y-s.y,was=p.get();
         if(p.options)stepChoice(p,Math.round(dy/OPTION_PX),v0);
         else if(steps)p.set(clamp(v0+Math.round(dy/per)*p.step,p.min,p.max));
@@ -126,35 +167,42 @@ const ICON={
 const icons=new Map();const iconPath=k=>{let p=icons.get(k);if(!p){p=new Path2D(ICON[k]);icons.set(k,p)}return p};
 const VOICE_ICON={note:'fork',octave:'scale',tune:'fork',body:'bell',bend:'bend',bright:'bright',hard:'hard',decay:'decay',pdecay:'pdecay',damp:'damp',
   sweep:'sweep',tone:'tone',cutoff:'cutoff',level:'level',velSense:'vel'};
-const numSector=(icon,o,k,min,max,step,after)=>({icon,min,max,step,log:min>0&&max/min>=20,get:()=>o[k],set:x=>{o[k]=x;after&&after()}});
-const defSector=(icon,o,def,after)=>numSector(icon,o,def[0],def[2],def[3],def[4],after);
-const choiceSector=(icon,options,get,set)=>({icon,options,get,set});
+const settingText=x=>typeof x==='number'?String(+x.toFixed(3)):String(x);
+const onOff=x=>x?'on':'off';
+const numSector=(icon,label,o,k,min,max,step,after)=>({icon,label,min,max,step,format:['note','base','combBase'].includes(k)?noteName:settingText,
+  log:min>0&&max/min>=20,get:()=>o[k],set:x=>{o[k]=x;after&&after()}});
+const defSector=(icon,o,def,after)=>numSector(icon,def[1],o,def[0],def[2],def[3],def[4],after);
+const choiceSector=(icon,label,options,get,set,format=settingText)=>({icon,label,options,get,set,format,toggle:format===onOff});
 function voiceSectors(owner,withNote){
-  const v=owner.voice,out=[choiceSector('kind',Object.keys(VOICES),()=>owner.voice.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense})})];
+  const v=owner.voice,out=[choiceSector('kind','voice',Object.keys(VOICES),()=>owner.voice.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense})})];
   for(const def of [...VOICE_DEFS[v.kind],...COMMON_DEFS]){
     if(def[0]==='note'&&!withNote)continue;
-    out.push(Array.isArray(def[2])?choiceSector(VOICE_ICON[def[0]],def[2],()=>v[def[0]],x=>{v[def[0]]=x}):defSector(VOICE_ICON[def[0]],v,def));
+    out.push(Array.isArray(def[2])?choiceSector(VOICE_ICON[def[0]],def[1],def[2],()=>v[def[0]],x=>{v[def[0]]=x}):defSector(VOICE_ICON[def[0]],v,def));
   }
   return out;
 }
-const readerSectors=o=>[...voiceSectors(o,false),numSector('comb',o,'tines',0,36,1),numSector('fork',o,'combBase',12,108,1),
-  choiceSector('scale',Object.keys(SCALES),()=>o.combScale,x=>{o.combScale=x})];
-const stringSectors=o=>[choiceSector('string',['string','bar'],()=>o.kind,x=>{o.kind=x}),numSector('fork',o,'f200',20,2000,1),
-  choiceSector('quant',[0,1],()=>o.quant,x=>{o.quant=x}),numSector('decay',o,'decay',0,8,.01),numSector('damp',o,'damp',0,2,.01),
-  numSector('hard',o,'hard',0,1,.01),numSector('level',o,'level',0,1.5,.01),numSector('vel',o,'velSense',0,1,.01)];
+function readerSectors(o){
+  const out=[...voiceSectors(o,false),choiceSector('comb','reader mode',READER_MODES,()=>readerMode(o),mode=>setReaderMode(o,mode))];
+  if(o.tines)out.push(numSector('comb','comb tines',o,'tines',1,36,1),numSector('fork','comb note',o,'combBase',12,108,1),
+    choiceSector('scale','comb scale',Object.keys(SCALES),()=>o.combScale,x=>{o.combScale=x}));
+  return out;
+}
+const stringSectors=o=>[choiceSector('string','instrument',['string','bar'],()=>o.kind,x=>{o.kind=x}),numSector('fork','tuning Hz',o,'f200',20,2000,1),
+  choiceSector('quant','quantize',[0,1],()=>o.quant,x=>{o.quant=x},onOff),numSector('decay','decay s',o,'decay',0,8,.01),numSector('damp','damping',o,'damp',0,2,.01),
+  numSector('hard','hardness',o,'hard',0,1,.01),numSector('level','level',o,'level',0,1.5,.01),numSector('vel','velocity sense',o,'velSense',0,1,.01)];
 function trackSectors(c){
   const t=c.track;
-  return [choiceSector('scale',Object.keys(SCALES),()=>t.scale,x=>{t.scale=x}),numSector('fork',t,'base',12,108,1),
-    numSector('div',t,'div',1,96,1),numSector('rings',t,'rings',1,36,1,()=>{t.dots=t.dots.filter(d=>d.ring<t.rings)})];
+  return [choiceSector('scale','scale',Object.keys(SCALES),()=>t.scale,x=>{t.scale=x}),numSector('fork','root note',t,'base',12,108,1),
+    numSector('div','steps',t,'div',1,96,1),numSector('rings','rings',t,'rings',1,36,1,()=>{t.dots=t.dots.filter(d=>d.ring<t.rings)})];
 }
-const dotSectors=d=>[numSector('odds',d,'p',0,1,.01),numSector('level',d,'v',0,1,.01)];
+const dotSectors=d=>[numSector('odds','probability',d,'p',0,1,.01),numSector('level','velocity',d,'v',0,1,.01)];
 const ROOM=[['wet','wet'],['size','size'],['tail','decay'],['air','highMult'],['shimmer','shimmer']];
 function roomSectors(){
   const out=ROOM.map(([icon,k])=>defSector(icon,SPACE,SPACE_DEFS.find(d=>d[0]===k),roomEdited));
-  out.push(choiceSector('freeze',[0,1],()=>SPACE.freeze,x=>{SPACE.freeze=x;roomEdited()}));
+  out.push(choiceSector('freeze','reverb freeze',[0,1],()=>SPACE.freeze,x=>{SPACE.freeze=x;roomEdited()},onOff));
   out.push(defSector('level',S,S_DEFS.find(d=>d[0]==='master'),roomEdited));
-  out.push(numSector('tempo',S,'bpm',0,300,1,()=>changed(true)),numSector('beats',S,'beats',1,16,1,()=>changed(true)));
-  out.push({icon:'seal',action:share});
+  out.push(numSector('tempo','tempo bpm',S,'bpm',0,300,1,()=>changed(true)),numSector('beats','beats/bar',S,'beats',1,16,1,()=>changed(true)));
+  out.push({icon:'seal',label:'share',action:share});
   return out;
 }
 async function share(){
@@ -165,7 +213,7 @@ async function share(){
 const norm=p=>p.log?Math.log(p.get()/p.min)/Math.log(p.max/p.min):(p.get()-p.min)/(p.max-p.min);
 const stepsOf=p=>!p.options&&!p.action&&p.step>=1&&(p.max-p.min)/p.step<=120?(p.max-p.min)/p.step:0;
 function setNorm(p,n){n=clamp(n,0,1);const x=p.log?p.min*Math.pow(p.max/p.min,n):p.min+(p.max-p.min)*n;p.set(clamp(+(Math.round(x/p.step)*p.step).toFixed(6),p.min,p.max))}
-function stepChoice(p,d,from=p.get()){const i=p.options.indexOf(from);p.set(p.options[(i+d+p.options.length)%p.options.length])}
+function stepChoice(p,d,from=p.get()){const n=p.options.length,i=p.options.indexOf(from);p.set(p.options[((i+d)%n+n)%n])}
 function activeBezel(){
   if(ui.carry)return null;
   let b=null;const o=sel&&sel.o,ring=(at,size,sectors)=>{const c=toScreen(at);return {cx:c.x,cy:c.y,R:clamp(size+46,92,132),sectors,owner:o}};
@@ -174,7 +222,10 @@ function activeBezel(){
   else if(sel.type==='reader')b=ring(mid(o),stringLen(o)*S.zoom/2,readerSectors(o));
   else if(sel.type==='string')b=ring(mid(o),stringLen(o)*S.zoom/2,stringSectors(o));
   else if(sel.type==='dot')b=ring(ui.dotAt,0,dotSectors(o));
-  else if(sel.type==='cog'&&o.track&&!noteMode(o)){const c=toScreen(o);b={cx:c.x,cy:c.y,R:clamp(radius(o)*S.zoom+40,92,150),sectors:trackSectors(o),owner:o}}
+  else if(sel.type==='cog'&&o.track){
+    const R=Math.max(92,radius(o)*S.zoom+40);
+    if(R+BEZEL_W+8<=Math.min(CW,shelfTop()-safeTop)/2){const c=toScreen(o);b={cx:c.x,cy:c.y,R,sectors:trackSectors(o),owner:o}}
+  }
   if(!b){ui.bezelOwner=null;return null}
   if(ui.bezelOwner!==b.owner){ui.bezelOwner=b.owner;ui.bezelAt=performance.now()}
   return b;
@@ -187,7 +238,7 @@ function drawBezel(b){
     const a0=-Math.PI/2+i*span+.025,a1=a0+span-.05,am=(a0+a1)/2,active=ui.sector===i&&ui.bezelOwner===b.owner;
     cx.beginPath();cx.arc(b.cx,b.cy,R+BEZEL_W,a0,a1);cx.arc(b.cx,b.cy,R-BEZEL_W,a1,a0,true);cx.closePath();
     cx.fillStyle=active?PAD:BG;cx.fill();cx.strokeStyle=FAINT;cx.lineWidth=1;cx.stroke();
-    const rv=R+BEZEL_W-5;let ink=active?HOT:FG;
+    const rv=R+BEZEL_W-5;let ink=p.toggle?(p.get()?HOT:DIM):active?HOT:FG;
     if(p.action){const age=performance.now()-(ui.sealAt||-1e9);if(age<900)ink=ui.sealOk?HOT:BAD}
     else if(p.options){
       const m=p.options.length,cur=p.options.indexOf(p.get());
