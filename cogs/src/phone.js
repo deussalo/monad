@@ -43,9 +43,9 @@ function sheetDrag(){
 }
 function placeRoll(c,f){
   const phone=$('#dev').dataset.editor==='notes';
-  rollSection(c,{strip:f,tools:f,row:phone?32:11,label:phone?44:30,minCell:phone?28:6});
+  rollSection(c,{strip:f,tools:f,row:phone?32:11,label:phone?28:30,minCell:phone?28:6});
   if(!phone)return;
-  roll.box.style.maxHeight='48vh';roll.box.style.overflow='auto';
+  roll.box.style.maxHeight='calc(86vh - 190px)';roll.box.style.overflow='auto';
   // The selection's actions, always in place so the strip never jumps: duplicate, copy, paste, delete.
   const c0=c,act=(icon,label,fn)=>{const b=el('button',{ariaLabel:label,innerHTML:rx(icon,20),onclick:()=>{fn();buzz(6)}});b.dataset.roll=label;return b};
   const bar=el('div',{className:'roll-sel'},act('CardStackPlus','duplicate',()=>dupSel(c0)),act('Copy','copy',()=>copySel(c0)),
@@ -62,7 +62,10 @@ function syncRollBar(){
 function syncEditor(){syncRollBar();
   const mode=editorMode(),button=$('#edit-part'),start=$('#to-start'),busy=(panelShown()&&!sheetMin())||!!ui.carry;
   button.hidden=!mode||busy;$('#delete-part').hidden=!(sel||group.length)||busy;
-  start.hidden=busy;const top=shelfTop()-54+'px';if(start.style.top!==top)start.style.top=$('#part-bar').style.top=top;
+  start.hidden=$('#history').hidden=busy;const top=shelfTop()-54+'px';if(start.style.top!==top)start.style.top=$('#part-bar').style.top=$('#history').style.top=top;
+  const noUndo=!edits.past.length,noRedo=!edits.future.length;
+  if($('#undo-all').disabled!==noUndo)$('#undo-all').disabled=$('#editor-undo').disabled=noUndo;
+  if($('#redo-all').disabled!==noRedo)$('#redo-all').disabled=$('#editor-redo').disabled=noRedo;
   if(button.dataset.mode!==mode){button.dataset.mode=mode;button.ariaLabel=mode==='notes'?'Edit notes':'Edit patch';button.innerHTML=PART_BAR_ICON[mode]}
   if(!panelShown()||!$('#dev').dataset.editor)return;
   if(!mode){togglePanel(false);return}
@@ -117,6 +120,8 @@ function mount(){
   $('#editor-close').onclick=()=>togglePanel(false);
   $('#delete-part').innerHTML=rx('Trash',22);$('#to-start').innerHTML=rx('TrackPrevious',22);
   $('#editor-undo').innerHTML=rx('Reset',20);$('#editor-redo').innerHTML=rx('Reset',20,true);$('#editor-close').innerHTML=rx('Cross2',20);
+  $('#undo-all').innerHTML=rx('Reset',22);$('#redo-all').innerHTML=rx('Reset',22,true);
+  $('#undo-all').onclick=()=>{edits.undo();buzz(6)};$('#redo-all').onclick=()=>{edits.redo();buzz(6)};
   $('#editor-undo').onclick=()=>edits.undo();$('#editor-redo').onclick=()=>edits.redo();
   sheetDrag();
   const openEditor=()=>{const mode=editorMode();if(panelShown()&&sheetMin()&&$('#dev').dataset.editor===mode){setSheetMin(false);return}if(panelShown()||!mode)return;editorOwner=sel.o;editorOpenedAt=performance.now();togglePanel(true,mode);syncEditor()};

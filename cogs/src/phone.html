@@ -17,7 +17,10 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #dev[hidden],#scrim[hidden]{display:none}
 #panel{max-width:440px;margin:0 auto;padding:6px}
 #part-bar{position:fixed;left:var(--space-2,8px);display:flex;gap:var(--space-2,8px)}
-#part-bar button,#to-start,#editor-head button{min-height:44px;min-width:44px;padding:0;border:0;background:none;display:grid;place-items:center;color:var(--fg)}
+#history{position:fixed;left:50%;transform:translateX(-50%);display:flex;gap:var(--space-2,8px)}
+#history[hidden]{display:none}
+#history button:disabled{opacity:.3}
+#part-bar button,#to-start,#history button,#editor-head button{min-height:44px;min-width:44px;padding:0;border:0;background:none;display:grid;place-items:center;color:var(--fg)}
 #to-start{position:fixed;right:62px}
 #edit-part[hidden],#delete-part[hidden],#to-start[hidden],#editor-head{display:none}
 /* The sheet's top: a grab bar and, for an editor, its head. Drag it down to tuck the sheet away to just this strip,
@@ -54,6 +57,7 @@ body.sheet-min #interaction{bottom:var(--peek,80px);border-bottom:1px solid var(
 <div id="scrim" hidden></div>
 <div id="part-bar"><button id="edit-part" hidden aria-label="Edit selected part"></button><button id="delete-part" hidden aria-label="Delete selected"></button></div>
 <button id="to-start" hidden aria-label="Set to start"></button>
+<div id="history"><button id="undo-all" aria-label="Undo"></button><button id="redo-all" aria-label="Redo"></button></div>
 <div id="dev" hidden role="dialog" aria-label="Part controls">
   <div id="sheet-top"><div id="grab" role="button" aria-label="Tuck away or bring back the sheet"></div>
   <div id="editor-head"><span id="editor-title"></span><button id="editor-undo" aria-label="Undo"></button><button id="editor-redo" aria-label="Redo"></button><button id="editor-close" aria-label="Close"></button></div></div>

@@ -70,7 +70,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
             && ![...W.readers, ...W.strings].some(o => seg(o.x1, o.y1, o.x2, o.y2)) && !W.belts.some(o => __cogs.beltLines(o).some(l => seg(...l)))
             && !W.arms.some(a => near(a.cog.x, a.cog.y, a.r0 + a.len)) && !(b && Math.abs(Math.hypot(sx - b.cx, sy - b.cy) - b.R) < 50);
         }, b = __cogs.activeBezel();
-        for (let sy = 90; sy < shelfTop() - 30; sy += 20) for (let sx = 30; sx < innerWidth - 30; sx += 20) if (ok(sx, sy)) return [sx, sy];
+        for (let sy = 90; sy < shelfTop() - 60; sy += 20) for (let sx = 30; sx < innerWidth - 30; sx += 20) if (ok(sx, sy)) return [sx, sy];
         return null;
       }),
     };
@@ -338,6 +338,13 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   is('pressed again later: every turning cog lands where it did the first time', await train(), first);
 
   console.log('NOTES SHEET');
+  const hist = await tp.probe(() => ['#undo-all', '#redo-all'].map(s => { const b = document.querySelector(s), r = b.getBoundingClientRect(); return { at: [r.x + r.width / 2, r.y + r.height / 2], off: b.disabled, shown: r.width > 0 }; }));
+  check('undo and redo sit in the thumb row, always shown', hist.every(h => h.shown && h.at[1] > 844 * .7), hist);
+  const wk0 = await tp.probe(() => __cogs.worldKey()), un = await tp.probe(() => __cogs.undos);
+  await tp.tap(hist[0].at);
+  check('the global undo steps the machine back', un > 0 && await tp.probe(() => __cogs.worldKey()) !== wk0, un);
+  await tp.tap(hist[1].at);
+  is('and redo steps it forward again', await tp.probe(() => __cogs.worldKey()) === wk0, true);
   is('the part buttons sit bottom left, level with set-to-start', await tp.probe(() => { const r = document.querySelector('#part-bar').getBoundingClientRect(), s = document.querySelector('#to-start').getBoundingClientRect(); return [r.left < 20, Math.abs(r.top - s.top) < 1.5]; }), [true, true]);
   const discAt = await tp.probe(() => { const c = __cogs.W.cogs.find(c => c.track), s = __cogs.toScreen(c), r = __cogs.radius(c) * __cogs.S.zoom; return { id: c.id, s: [s.x + r * .35, s.y - r * .35] }; });
   await tp.tap(await tp.empty()); await tp.tap(discAt.s);
@@ -351,7 +358,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const rg = await tp.probe(id => {
     const box = document.querySelector('#inspector .roll'); box.scrollLeft = box.scrollTop = 0;
     const cv = box.querySelectorAll('canvas')[1], r = cv.getBoundingClientRect();
-    return { x: r.left + 44, y: r.top, cw: (r.width - 44) / 16, row: 32, rows: Math.round(r.height / 32) };
+    return { x: r.left + 28, y: r.top, cw: (r.width - 28) / 16, row: 32, rows: Math.round(r.height / 32) };
   }, discAt.id);
   const at = (col, row) => [rg.x + col * rg.cw, rg.y + (row + .5) * rg.row];
   await tp.tap(at(1.5, 0));
@@ -365,7 +372,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   is('tap it to select, then drag its tab: three more steps', (await trackOf(discAt.id)).map(d => d.len), [4]);
   await tp.tap(at(9.5, 2)); await tp.tap(at(9.5, 2));
   const fresh = (await trackOf(discAt.id)).map(d => d.len).sort();
-  is('the next new note is one step, not the last length', fresh, [1, 4]);
+  is('the next new note takes the last touched length on this disc', fresh, [4, 4]);
   is('no brush length control', await tp.probe(() => !document.querySelector('[data-k="brush len"]') && !document.querySelector('.roll-hint')), true);
   await tp.stroke([at(0.5, 0), at(10.5, 2.4)], { steps: 8, hold: 550 });
   is('hold empty grid, then drag: a box selects both notes, none added', [await tp.probe(() => __cogs.rollSel), (await trackOf(discAt.id)).length], [2, 2]);
@@ -374,12 +381,17 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   is('duplicate: four notes, the copies selected', [(await trackOf(discAt.id)).length, await tp.probe(() => __cogs.rollSel)], [4, 2]);
   await tp.tap((await rbtn('delete notes')).at);
   is('delete: back to two, nothing selected, the buttons rest', [(await trackOf(discAt.id)).length, await tp.probe(() => __cogs.rollSel), (await rbtn('delete notes')).off], [2, 0, true]);
-  const lane = await tp.probe(() => { const r = document.querySelector('#inspector .roll').querySelectorAll('canvas')[2].getBoundingClientRect(); return { x: r.left + 44, top: r.top, h: r.height }; });
+  const lane = await tp.probe(() => { const r = document.querySelector('#inspector .roll').querySelectorAll('canvas')[2].getBoundingClientRect(); return { x: r.left + 28, top: r.top, h: r.height }; });
   const lx = lane.x + 9.5 * rg.cw;
   await tp.p.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))); await tp.stroke([[lx, lane.top + 16], [lx, lane.top + lane.h - 4]], { steps: 6 });
   const vels = (await tp.probe(id => __cogs.W.cogs.find(c => c.id === id).track.dots.map(d => [d.ring, d.v]), discAt.id)).sort();
   check('drag down the velocity lane under a note: only that note goes soft', vels.length === 2 && vels.find(v => v[0] === 2)[1] < .2 && vels.find(v => v[0] === 4)[1] === 1, vels);
   await tp.shot('08-notes-lane');
+  const n0s = (await trackOf(discAt.id)).length, sl0 = await tp.probe(() => document.querySelector('#inspector .roll').scrollLeft);
+  await tp.stroke([at(11.5, 1), at(7.5, 1)], { steps: 6 });
+  const sl1 = await tp.probe(() => document.querySelector('#inspector .roll').scrollLeft);
+  check('one finger slides on empty grid: the strip pans, no note', sl1 > sl0 + 40 && (await trackOf(discAt.id)).length === n0s, [sl0, sl1]);
+  await tp.probe(() => { document.querySelector('#inspector .roll').scrollLeft = 0; });
   is('the chrome icons are Radix', await tp.probe(() => ['#delete-part', '#to-start', '#editor-undo', '#editor-close'].map(s => document.querySelector(s + ' svg')?.getAttribute('viewBox'))), ['0 0 15 15', '0 0 15 15', '0 0 15 15', '0 0 15 15']);
 
   const sheetRect = () => tp.probe(() => { const d = document.querySelector('#dev'), r = d.getBoundingClientRect(); return { top: Math.round(r.top), min: d.classList.contains('min'), hidden: d.hidden, scrim: document.querySelector('#scrim').hidden }; });
@@ -402,6 +414,18 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const grab3 = await centre('#grab');
   await tp.stroke([grab3, [grab3[0], grab3[1] + 80]], { steps: 6 }); await wait(400);
   is('drag down again from the strip: the sheet closes', (await sheetRect()).hidden, true);
+  await tp.dbl(await tp.empty()); await wait(500);
+  const disc2 = await tp.probe(id => { const c = __cogs.W.cogs.find(c => c.track && c.id !== id), s = __cogs.toScreen(c), r = __cogs.radius(c) * __cogs.S.zoom; c.track.dots = []; c.track.div = 16; return { id: c.id, s: [s.x + r * .35, s.y - r * .35] }; }, discAt.id);
+  for (let k = 0; k < 8 && await tp.probe(() => __cogs.sel && __cogs.sel.id) !== disc2.id; k++) {
+    const pt = await tp.probe(([id, k]) => { const c = __cogs.W.cogs.find(c => c.id === id), s = __cogs.toScreen(c), r = __cogs.radius(c) * __cogs.S.zoom * .55, a = k * Math.PI / 4; return [s.x + Math.cos(a) * r, s.y + Math.sin(a) * r]; }, [disc2.id, k]);
+    if (pt[0] < 10 || pt[0] > 380 || pt[1] < 60 || pt[1] > 640) continue;
+    await tp.tap(await tp.empty()); await tp.tap(pt);
+  }
+  await tp.tap(await centre('#edit-part')); await wait(150);
+  const rg2 = await tp.probe(() => { const r = document.querySelector('#inspector .roll').querySelectorAll('canvas')[1].getBoundingClientRect(); return { x: r.left + 28, y: r.top, cw: (r.width - 28) / 16 }; });
+  await tp.tap([rg2.x + 1.5 * rg2.cw, rg2.y + 16]);
+  is('another disc keeps its own pen: its first note is one step', [await tp.probe(() => __cogs.sel && __cogs.sel.id), (await trackOf(disc2.id)).map(d => d.len)], [disc2.id, [1]]);
+  await tp.tap(await centre('#editor-close'));
   check('page errors', m.errs.length === 0 && tp.errs.length === 0, [...m.errs, ...tp.errs].slice(0, 3));
 
   console.log('BELTS, TEMPO, STRINGS, COMB, PROBABILITY, EUCLID, SHARE');
