@@ -716,6 +716,12 @@ function setPaused(p){
   if(p===clock.paused)return;
   clock.paused=p;if(!p)clock.off=nowSec()-clock.view;
 }
+// Each running train turns until its motor shows angle 0; its cogs move by their ratios, so meshes hold.
+function toStart(){
+  const by=new Map(W.cogs.filter(m=>m.motor&&m.w).map(m=>[m,-wrap(renderTh(m))/m.w]));
+  for(const c of W.cogs){const dt=by.get(c.driver);if(dt!==undefined)c.th=wrap(c.th+c.w*dt);c.turns=0}
+  changed();
+}
 
 
 /* ---------- persistence ---------- */

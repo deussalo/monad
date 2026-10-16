@@ -16,8 +16,10 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #dev input[type=range]{touch-action:none}
 #dev[hidden],#scrim[hidden]{display:none}
 #panel{max-width:440px;margin:0 auto;padding:6px}
-#edit-part{position:fixed;left:var(--space-3,12px);top:calc(env(safe-area-inset-top,0px) + var(--space-3,12px));min-height:44px;padding:var(--space-3,12px);border:1px solid var(--line)}
-#edit-part[hidden],#editor-head{display:none}
+#part-bar{position:fixed;left:var(--space-3,12px);top:calc(env(safe-area-inset-top,0px) + var(--space-3,12px));display:flex;gap:var(--space-2,8px)}
+#part-bar button,#to-start{min-height:44px;min-width:44px;padding:var(--space-3,12px);border:1px solid var(--line)}
+#to-start{position:fixed;right:62px;padding:0;display:grid;place-items:center;color:var(--fg)}
+#edit-part[hidden],#delete-part[hidden],#to-start[hidden],#editor-head{display:none}
 #dev[data-editor]:not([data-editor=""]){top:max(14vh,env(safe-area-inset-top,0px));border-radius:var(--space-3,12px) var(--space-3,12px) 0 0}
 #dev[data-editor]:not([data-editor=""]) #editor-head{display:flex;align-items:center;gap:var(--space-2,8px);padding:var(--space-2,8px);position:sticky;top:0;background:var(--bg);z-index:1}
 #editor-title{flex:1;color:var(--hot)}
@@ -39,7 +41,8 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 <div id="safe"></div>
 <output id="interaction" hidden aria-live="polite"></output>
 <div id="scrim" hidden></div>
-<button id="edit-part" hidden aria-label="Edit selected part"></button>
+<div id="part-bar"><button id="edit-part" hidden aria-label="Edit selected part"></button><button id="delete-part" hidden aria-label="Delete selected">✕ delete</button></div>
+<button id="to-start" hidden aria-label="Set to start"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="2.5" height="14"/><path d="M19 5v14L8.5 12z"/></svg></button>
 <div id="dev" hidden role="dialog" aria-label="Part controls">
   <div id="editor-head"><span id="editor-title"></span><button id="editor-undo" aria-label="Undo">↶</button><button id="editor-redo" aria-label="Redo">↷</button><button id="editor-close">close</button></div>
   <div id="panel"></div>

@@ -24,8 +24,9 @@ function placeRoll(c,f){
 const editorMode=()=>sel?.type==='cog'&&sel.o.track?'notes':sel?.o.voice?'patch':'';
 let editorOwner=null,editorOpenedAt=-Infinity;
 function syncEditor(){
-  const mode=editorMode(),button=$('#edit-part');
-  button.hidden=!mode||panelShown()||!!ui.carry;
+  const mode=editorMode(),button=$('#edit-part'),start=$('#to-start'),busy=panelShown()||!!ui.carry;
+  button.hidden=!mode||busy;$('#delete-part').hidden=!(sel||group.length)||busy;
+  start.hidden=busy;const top=shelfTop()-54+'px';if(start.style.top!==top)start.style.top=top;
   const label=mode==='notes'?'♫ notes':'♫ patch';if(button.textContent!==label)button.textContent=label;
   if(!panelShown()||!$('#dev').dataset.editor)return;
   if(!mode){togglePanel(false);return}
@@ -80,6 +81,7 @@ function mount(){
   $('#editor-undo').onclick=()=>edits.undo();$('#editor-redo').onclick=()=>edits.redo();
   const openEditor=()=>{const mode=editorMode();if(panelShown()||!mode)return;editorOwner=sel.o;editorOpenedAt=performance.now();togglePanel(true,mode);syncEditor()};
   $('#edit-part').onpointerup=$('#edit-part').onclick=openEditor;
+  $('#delete-part').onclick=()=>removeSel();$('#to-start').onclick=()=>{toStart();buzz(10)};
 }
 // The shelf never changes, so it is painted once per size and blitted.
 let shelfArt=null;
@@ -104,7 +106,7 @@ function paintShelf(h){
     cx.save();cx.setTransform(dpr*s,0,0,dpr*s,dpr*x,dpr*y);PX=1/s;drawPartIcon(kind);cx.restore();
   });
 }
-const glyphAt=()=>({x:CW-32,y:safeTop+32});
+const glyphAt=()=>({x:CW-32,y:shelfTop()-32});
 function drawGlyph(){
   const {x,y}=glyphAt(),bpm=S.bpm||Math.abs(W.cogs.map(motorRpm).find(Boolean)||0),a=clock.view*Math.PI*bpm/60;
   cx.save();cx.translate(x,y);cx.globalAlpha=clock.paused?.45:1;

@@ -36,8 +36,10 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #dev input[type=range]{touch-action:none}
 #dev[hidden],#scrim[hidden]{display:none}
 #panel{max-width:440px;margin:0 auto;padding:6px}
-#edit-part{position:fixed;left:var(--space-3,12px);top:calc(env(safe-area-inset-top,0px) + var(--space-3,12px));min-height:44px;padding:var(--space-3,12px);border:1px solid var(--line)}
-#edit-part[hidden],#editor-head{display:none}
+#part-bar{position:fixed;left:var(--space-3,12px);top:calc(env(safe-area-inset-top,0px) + var(--space-3,12px));display:flex;gap:var(--space-2,8px)}
+#part-bar button,#to-start{min-height:44px;min-width:44px;padding:var(--space-3,12px);border:1px solid var(--line)}
+#to-start{position:fixed;right:62px;padding:0;display:grid;place-items:center;color:var(--fg)}
+#edit-part[hidden],#delete-part[hidden],#to-start[hidden],#editor-head{display:none}
 #dev[data-editor]:not([data-editor=""]){top:max(14vh,env(safe-area-inset-top,0px));border-radius:var(--space-3,12px) var(--space-3,12px) 0 0}
 #dev[data-editor]:not([data-editor=""]) #editor-head{display:flex;align-items:center;gap:var(--space-2,8px);padding:var(--space-2,8px);position:sticky;top:0;background:var(--bg);z-index:1}
 #editor-title{flex:1;color:var(--hot)}
@@ -59,7 +61,8 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 <div id="safe"></div>
 <output id="interaction" hidden aria-live="polite"></output>
 <div id="scrim" hidden></div>
-<button id="edit-part" hidden aria-label="Edit selected part"></button>
+<div id="part-bar"><button id="edit-part" hidden aria-label="Edit selected part"></button><button id="delete-part" hidden aria-label="Delete selected">✕ delete</button></div>
+<button id="to-start" hidden aria-label="Set to start"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="2.5" height="14"/><path d="M19 5v14L8.5 12z"/></svg></button>
 <div id="dev" hidden role="dialog" aria-label="Part controls">
   <div id="editor-head"><span id="editor-title"></span><button id="editor-undo" aria-label="Undo">↶</button><button id="editor-redo" aria-label="Redo">↷</button><button id="editor-close">close</button></div>
   <div id="panel"></div>
@@ -721,6 +724,12 @@ function syncClock(){
 function setPaused(p){
   if(p===clock.paused)return;
   clock.paused=p;if(!p)clock.off=nowSec()-clock.view;
+}
+// Each running train turns until its motor shows angle 0; its cogs move by their ratios, so meshes hold.
+function toStart(){
+  const by=new Map(W.cogs.filter(m=>m.motor&&m.w).map(m=>[m,-wrap(renderTh(m))/m.w]));
+  for(const c of W.cogs){const dt=by.get(c.driver);if(dt!==undefined)c.th=wrap(c.th+c.w*dt);c.turns=0}
+  changed();
 }
 
 
@@ -1807,8 +1816,9 @@ function placeRoll(c,f){
 const editorMode=()=>sel?.type==='cog'&&sel.o.track?'notes':sel?.o.voice?'patch':'';
 let editorOwner=null,editorOpenedAt=-Infinity;
 function syncEditor(){
-  const mode=editorMode(),button=$('#edit-part');
-  button.hidden=!mode||panelShown()||!!ui.carry;
+  const mode=editorMode(),button=$('#edit-part'),start=$('#to-start'),busy=panelShown()||!!ui.carry;
+  button.hidden=!mode||busy;$('#delete-part').hidden=!(sel||group.length)||busy;
+  start.hidden=busy;const top=shelfTop()-54+'px';if(start.style.top!==top)start.style.top=top;
   const label=mode==='notes'?'♫ notes':'♫ patch';if(button.textContent!==label)button.textContent=label;
   if(!panelShown()||!$('#dev').dataset.editor)return;
   if(!mode){togglePanel(false);return}
@@ -1863,6 +1873,7 @@ function mount(){
   $('#editor-undo').onclick=()=>edits.undo();$('#editor-redo').onclick=()=>edits.redo();
   const openEditor=()=>{const mode=editorMode();if(panelShown()||!mode)return;editorOwner=sel.o;editorOpenedAt=performance.now();togglePanel(true,mode);syncEditor()};
   $('#edit-part').onpointerup=$('#edit-part').onclick=openEditor;
+  $('#delete-part').onclick=()=>removeSel();$('#to-start').onclick=()=>{toStart();buzz(10)};
 }
 // The shelf never changes, so it is painted once per size and blitted.
 let shelfArt=null;
@@ -1887,7 +1898,7 @@ function paintShelf(h){
     cx.save();cx.setTransform(dpr*s,0,0,dpr*s,dpr*x,dpr*y);PX=1/s;drawPartIcon(kind);cx.restore();
   });
 }
-const glyphAt=()=>({x:CW-32,y:safeTop+32});
+const glyphAt=()=>({x:CW-32,y:shelfTop()-32});
 function drawGlyph(){
   const {x,y}=glyphAt(),bpm=S.bpm||Math.abs(W.cogs.map(motorRpm).find(Boolean)||0),a=clock.view*Math.PI*bpm/60;
   cx.save();cx.translate(x,y);cx.globalAlpha=clock.paused?.45:1;

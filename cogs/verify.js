@@ -308,6 +308,22 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   is('the panel undo button brings it back', await tp.probe(id => __cogs.W.pads.some(p => p.id === id), pad.id), true);
   await tp.act('redo'); await tp.dev(false);
   is('and redo scraps it again', await tp.probe(id => __cogs.W.pads.some(p => p.id === id), pad.id), false);
+
+  console.log('DELETE AND START');
+  const centre = s => tp.probe(sel => { const r = document.querySelector(sel).getBoundingClientRect(); return r.width ? [r.x + r.width / 2, r.y + r.height / 2] : null; }, s);
+  is('the play glyph sits bottom right, just above the shelf', await tp.probe(() => { const g = __cogs.glyphAt(); return [innerWidth - g.x, __cogs.shelfTop() - g.y]; }), [32, 32]);
+  is('nothing selected: no delete button', await centre('#delete-part'), null);
+  const victim = await tp.probe(() => { const o = __cogs.W.pads[0], s = __cogs.toScreen(o); return { id: o.id, s: [s.x, s.y] }; });
+  await tp.tap(await tp.empty());
+  await tp.tap(victim.s);
+  await tp.tap(await centre('#delete-part'));
+  is('tap a pad, then delete: the pad is gone and nothing is selected', await tp.probe(id => [__cogs.W.pads.some(p => p.id === id), __cogs.sel], victim.id), [false, null]);
+  const motorAngle = () => tp.probe(() => { const m = __cogs.W.cogs.find(c => c.motor && c.w); return m && +((__cogs.renderTh(m) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI)).toFixed(4); });
+  const train = () => tp.probe(() => __cogs.W.cogs.filter(c => c.w).map(c => +((__cogs.renderTh(c) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI)).toFixed(4)));
+  await tp.tap(await centre('#to-start'), 0); const first = await train(), angle = await motorAngle();
+  check('set to start: the motor stands at angle 0', angle !== null && (angle < 1e-3 || angle > 2 * Math.PI - 1e-3), angle);
+  await wait(700); await tp.tap(await centre('#to-start'), 0);
+  is('pressed again later: every turning cog lands where it did the first time', await train(), first);
   check('page errors', m.errs.length === 0 && tp.errs.length === 0, [...m.errs, ...tp.errs].slice(0, 3));
 
   console.log('BELTS, TEMPO, STRINGS, COMB, PROBABILITY, EUCLID, SHARE');
