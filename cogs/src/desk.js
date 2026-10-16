@@ -10,8 +10,8 @@ const panelShown=()=>bar.classList.contains('open'),inspectorLive=()=>true;
 function togglePanel(open=!panelShown()){bar.classList.toggle('open',open);if(open)syncRows()}
 function placeRoll(c){
   const t=c.track;
-  dockTools.replaceChildren(el('h3',{textContent:`disc ${c.id} · ${t.rings} rings · ${t.div} steps`}));dockStrip.replaceChildren();
-  rollSection(c,{strip:dockStrip,tools:dockTools,row:clamp(Math.floor((innerHeight*.44-16)/t.rings),14,26),label:44});
+  dockTools.replaceChildren(el('h3',{textContent:`disc ${c.id} · ${trackRings(t)} rings · ${t.div} steps`}));dockStrip.replaceChildren();
+  rollSection(c,{strip:dockStrip,tools:dockTools,row:clamp(Math.floor((innerHeight*.44-16)/trackRings(t)),14,26),label:44});
 }
 function drawChrome(){if(ui.carry&&ui.carry.ghost)drawGhost(ui.carry.ghost);syncChrome()}
 const railButtons={};
@@ -41,8 +41,6 @@ function syncChrome(){
 }
 function mount(){
   buildPanel();
-  const legend=t=>[...panel.children].find(f=>f.firstChild.textContent===t);
-  panel.insertBefore(legend('stats'),legend('json'));
   railButton('panel','panel','?','show or hide the panel',()=>togglePanel()).classList.add('toggle');
   for(const kind of PARTS)railButton(kind,kind,KEY_OF[kind],'place a '+kind,()=>armPart(ui.armed===kind?null:kind),partIcon(kind));
   rail.append(el('hr'));
@@ -56,5 +54,5 @@ function mount(){
 const PROBE={stage,
   get open(){return bar.classList.contains('open')},
   get roll(){if(!roll||dock.hidden)return null;const g=rollGeom(),r=roll.cv.getBoundingClientRect();
-    return {x:r.left,y:r.top,label:roll.label,row:roll.row,cw:g.cw,rings:roll.c.track.rings,div:roll.c.track.div,id:roll.c.id,
-      pins:roll.c.track.dots.map(d=>[rollCol(roll.c,d),d.ring,rollSel.has(d)?1:0]).sort((a,b)=>a[0]-b[0]||a[1]-b[1])}}};
+    return {x:r.left,y:r.top,label:roll.label,row:roll.row,cw:g.cw,rings:trackRings(roll.c.track),div:roll.c.track.div,id:roll.c.id,
+      pins:roll.c.track.dots.map(d=>[rollCol(roll.c,d),d.ring,rollSel.has(d)?1:0,d.len]).sort((a,b)=>a[0]-b[0]||a[1]-b[1])}}};

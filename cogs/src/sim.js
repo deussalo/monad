@@ -31,18 +31,32 @@ const SPACE_DEFS=[['dry','dry',0,1,.001],['wet','wet',0,1.5,.001],['predelay','p
 
 const BODIES={harmonic:[1,2,3,4,5],bell:[1,1.183,1.506,2.0,2.514],plate:[1,1.594,2.136,2.653,3.156],
   bar:[1,2.756,5.404,8.933,13.34],bowl:[1,2.32,4.25,6.63,9.38]};
+// Partials past a body's measured modes continue at harmonic spacing from its last mode.
+const bodyRatio=(F,k)=>k<F.length?F[k]:F[F.length-1]+k+1-F.length;
+const PARTIALS_MAX=12;
 const SCALES={chromatic:[0,1,2,3,4,5,6,7,8,9,10,11],major:[0,2,4,5,7,9,11],minor:[0,2,3,5,7,8,10],
   dorian:[0,2,3,5,7,9,10],pentatonic:[0,2,4,7,9],minpent:[0,3,5,7,10],whole:[0,2,4,6,8,10]};
-const VOICES={modal:{note:60,octave:0,body:'bell',bend:1,bright:.6,hard:.6,decay:1.2,damp:.8},
-  kick:{tune:52,sweep:3,pdecay:.045,decay:.35},snare:{tune:190,tone:.35,cutoff:1800,decay:.16},hat:{cutoff:7500,decay:.045}};
+const VOICES={synth:{note:60,octave:0,semi:0,body:'bell',partials:8,bright:.6,even:1,bend:1,hard:.6,attack:0,decay:1.2,damp:.8},
+  kick:{tune:52,sweep:3,pdecay:.045,decay:.35},snare:{tune:190,tone:.35,cutoff:1800,decay:.16},hat:{cutoff:7500,decay:.045},
+  tom:{tune:110,sweep:1.6,pdecay:.08,tone:.15,decay:.4},clap:{cutoff:1300,spread:.011,decay:.25},rim:{tune:1700,decay:.06},
+  cowbell:{tune:560,decay:.3},wood:{tune:2200,decay:.04},cymbal:{cutoff:5500,tone:.4,decay:1.4}};
 const VOICE_DEFS={
-  modal:[['note','note',12,108,1],['octave','octave',-3,3,1],['body','body',Object.keys(BODIES)],['bend','bend',0,1,.01],['bright','bright',0,1,.01],
-    ['hard','hard',0,1,.01],['decay','decay s',.02,8,.01],['damp','damp',0,2,.01]],
+  synth:[['note','note',12,108,1],['octave','octave',-3,3,1],['semi','semitones',-12,12,1],['body','body',Object.keys(BODIES)],['partials','partials',1,PARTIALS_MAX,1],
+    ['bright','bright',0,1,.01],['even','even partials',0,1,.01],['bend','bend',0,1,.01],['hard','hard',0,1,.01],['attack','attack s',0,1,.005],['decay','decay s',.02,8,.01],['damp','damp',0,2,.01]],
   kick:[['tune','tune Hz',20,200,1],['sweep','sweep x',1,10,.1],['pdecay','p decay s',.005,.3,.001],['decay','decay s',.02,2,.01]],
   snare:[['tune','tune Hz',60,600,1],['tone','tone',0,1,.01],['cutoff','cutoff Hz',200,12000,10],['decay','decay s',.02,1,.005]],
-  hat:[['cutoff','cutoff Hz',1000,16000,10],['decay','decay s',.005,1,.005]]};
+  hat:[['cutoff','cutoff Hz',1000,16000,10],['decay','decay s',.005,1,.005]],
+  tom:[['tune','tune Hz',40,400,1],['sweep','sweep x',1,4,.1],['pdecay','p decay s',.005,.3,.001],['tone','tone',0,1,.01],['decay','decay s',.02,2,.01]],
+  clap:[['cutoff','cutoff Hz',300,6000,10],['spread','spread s',.003,.04,.001],['decay','decay s',.05,1,.005]],
+  rim:[['tune','tune Hz',400,4000,10],['decay','decay s',.01,.5,.005]],
+  cowbell:[['tune','tune Hz',200,1200,1],['decay','decay s',.02,2,.01]],
+  wood:[['tune','tune Hz',500,5000,10],['decay','decay s',.01,.5,.005]],
+  cymbal:[['cutoff','cutoff Hz',1000,12000,10],['tone','tone',0,1,.01],['decay','decay s',.1,4,.01]]};
 const COMMON_DEFS=[['level','level',0,1.5,.01],['velSense','vel sense',0,1,.01]];
+const DRUMS=Object.keys(VOICES).filter(k=>k!=='synth');
 const makeVoice=(kind,common={level:.7,velSense:.7})=>({...common,...VOICES[kind],kind});
+// The room's musical face; the rest of SPACE and S is engineering, kept behind the advanced drawer.
+const ROOM_SPACE=['wet','size','decay','highMult','shimmer','freeze'],ROOM_S=['master','bpm','beats'];
 const S_DEFAULT={...S},SPACE_DEFAULT={...SPACE};
 
 /* ---------- world ---------- */
@@ -54,13 +68,18 @@ const clock={off:0,shift:0,audio:false,view:0,paused:false};
 
 const stackOf=c=>W.cogs.filter(o=>Math.hypot(o.x-c.x,o.y-c.y)<=S.coaxTol);
 const renderTh=c=>c.th-c.w*(simT-clock.view);
-const ringR=(c,i)=>{const n=c.track.rings,r=radius(c);return n>1?r*(.25+.65*i/(n-1)):r*.6};
+// A disc spans whole octaves of its scale: one lane per scale degree, lowest lane innermost.
+const RANGES=[1,2,3],OCTAVES=[1,2,3,4,5,6,7];
+const trackRings=t=>t.range*SCALES[t.scale].length;
+const trackBase=t=>12*(t.octave+1)+t.root;
+const ringR=(c,i)=>{const n=trackRings(c.track),r=radius(c);return n>1?r*(.25+.65*i/(n-1)):r*.6};
 const scaleNote=(base,scale,i)=>{const sc=SCALES[scale];return base+sc[i%sc.length]+12*Math.floor(i/sc.length)};
-const ringNote=(t,i)=>scaleNote(t.base,t.scale,i);
+const ringNote=(t,i)=>scaleNote(trackBase(t),t.scale,i);
+const trimDots=t=>{const n=trackRings(t);t.dots=t.dots.filter(d=>d.ring<n)};
 const READER_MODES=['disc notes','comb'];
 const readerMode=r=>r.tines?'comb':'disc notes';
 function setReaderMode(r,mode){r.tines=mode==='comb'?(r.tines||12):0}
-const motorRpm=c=>S.bpm&&c.revs?c.revs*S.bpm/S.beats:c.motor;
+const motorRpm=c=>!c.motor?0:S.bpm&&c.motor.revs?c.motor.revs*S.bpm/S.beats:c.motor.rpm;
 function chance(...n){let h=(S.seed|0)^0x9e3779b9;for(const x of n){h=Math.imul(h^Math.round(x*4096),0x85ebca6b);h^=h>>>13;h=Math.imul(h,0xc2b2ae35);h^=h>>>16}return (h>>>0)/4294967296}
 
 // How two cogs touch: on one axle, teeth in mesh, overlapping (a jam), or apart.
@@ -87,9 +106,9 @@ function solve(){
     for(let q=0;q<comp.length;q++){const a=comp[q];for(const[b,ratio]of adj.get(a)){const k=a.k*ratio;
       if(b.k===null){b.k=k;comp.push(b)}else if(Math.abs(b.k-k)>1e-9*Math.abs(k))jam=true}}
     if(comp.some(c=>c.jam))jam=true;
-    const drivers=comp.filter(c=>motorRpm(c)),driver=drivers[0]||null;
+    const motors=comp.filter(c=>c.motor),driver=motors[0]||null;
+    if(motors.length>1)jam=true;
     const wRoot=driver?motorRpm(driver)*TAU/60/driver.k:0;
-    for(const d of drivers)if(Math.abs(d.k*wRoot-motorRpm(d)*TAU/60)>1e-9*Math.abs(wRoot))jam=true;
     for(const c of comp){c.jam=jam;c.w=jam?0:c.k*wRoot;c.driver=driver}
   }
 }
@@ -165,7 +184,7 @@ function armHit(p,t){
   const vn=Math.abs(c.w*s*(-Math.sin(edge)*nx+Math.cos(edge)*ny));
   pad.hits++;pad.lastV=vn;pad.flash=arm.flash=t;flex(arm,t,vn);
   const v=pad.voice,key=pad.id*128+(v.note|0);
-  fire(v,t,vn,pad.x,'arm'+arm.id+'>pad'+pad.id,1,(when,amp,pan,vx)=>v.kind==='modal'?modal(v,v.note,when,amp,pan,key,vx):drum(v,when,amp,pan));
+  fire(v,t,vn,pad.x,'arm'+arm.id+'>pad'+pad.id,1,(when,amp,pan,vx)=>v.kind==='synth'?synth(v,v.note,when,amp,pan,key,vx):drum(v,when,amp,pan));
 }
 
 function circleCross(c,R,a0,dt,seg){
@@ -183,9 +202,9 @@ function dotCross(c,dot,rd,dt){
   if(dot.p<1&&chance(c.id,dot.ring,dot.a,turn)>=dot.p)return;
   const midi=rd.tines?scaleNote(rd.combBase,rd.combScale,Math.min(rd.tines-1,Math.floor(hit.u*rd.tines))):ringNote(c.track,dot.ring);
   rd.hits++;rd.lastV=hit.vn;rd.lastMidi=voiceMidi(rd.voice,midi);dot.flash=rd.flash=t;
-  const v=rd.voice,key=rd.id*128+midi;
+  const v=rd.voice,key=rd.id*128+midi,hold=dot.len>1?dot.len*TAU/c.track.div/Math.abs(c.w):0;
   fire(v,t,hit.vn,hit.x,'cog'+c.id+'.ring'+dot.ring+'>reader'+rd.id,dot.v,
-    (when,amp,pan,vx)=>v.kind==='modal'?modal(v,midi,when,amp,pan,key,vx):drum(v,when,amp,pan));
+    (when,amp,pan,vx)=>v.kind==='synth'?synth(v,midi,when,amp,pan,key,vx,hold):drum(v,when,amp,pan));
 }
 const stringLen=s=>Math.hypot(s.x2-s.x1,s.y2-s.y1);
 function stringMidi(s){
@@ -201,7 +220,7 @@ function pluck(arm,s,dt){
 function pluckSound(s,midi,u,when,amp,pan,vx){
   const f0=hz(midi),ratios=s.kind==='bar'?BODIES.bar:BODIES.harmonic,f=[],g=[],tt=[];
   for(let k=0;k<ratios.length;k++){f.push(f0*ratios[k]);g.push(Math.abs(Math.sin((k+1)*Math.PI*u))/(k+1));tt.push(s.decay*Math.pow(ratios[k],-s.damp))}
-  strike(f,g,tt,when,amp,pan,s.id*128+Math.round(midi),contactTime(s.hard,vx));
+  strike(f,g,tt,when,amp,pan,s.id*128+Math.round(midi),contactTime(s.hard,vx),0);
 }
 function flex(arm,t,vn){arm.bendT=t;arm.bendA=Math.min(.6,vn/S.vRef*.5)*arm.flex*(arm.cog.w>0?-1:1)}
 
@@ -260,32 +279,40 @@ function initAudio(){
 }
 function flushStrikes(){const d=new Float64Array(strikes);strikes.length=0;engineNode.port.postMessage({type:'strikes',d},[d.buffer])}
 const contactTime=(hard,x)=>clamp((.0016-.0014*hard)*Math.pow(Math.max(.02,x),-.35),.00012,.004);
-function strike(f,g,t,when,amp,pan,key,contact){
+function strike(f,g,t,when,amp,pan,key,contact,attack){
   if(!strikes.length)queueMicrotask(flushStrikes);
-  strikes.push(when*ac.sampleRate,key,amp*.3,contact,0,pan,f.length,...f,...g,...t);
+  strikes.push(when*ac.sampleRate,key,amp*.3,contact,attack,pan,f.length,...f,...g,...t);
 }
-const voiceMidi=(v,midi)=>clamp(midi+(v.kind==='modal'?12*v.octave:0),0,127);
-function modal(v,midi,when,amp,pan,key,x){
-  const H=BODIES.harmonic,F=BODIES[v.body],f0=hz(voiceMidi(v,midi)),f=[],g=[],t=[];
-  for(let k=0;k<H.length;k++){const r=H[k]+(F[k]-H[k])*v.bend;f.push(f0*r);g.push(k?Math.pow(v.bright,k):1);t.push(v.decay*Math.pow(r,-v.damp))}
-  strike(f,g,t,when,amp,pan,key,contactTime(v.hard,x));
+// A held note rings for its length, then a damper takes it off over 60 ms.
+function damp(key,when){engineNode.port.postMessage({type:'damp',at:when*ac.sampleRate,key})}
+const voiceMidi=(v,midi)=>clamp(midi+(v.kind==='synth'?12*v.octave+v.semi:0),0,127);
+// Additive: `partials` ringing modes at the body's ratios, bent toward harmonic, each decaying by its ratio^-damp.
+function synth(v,midi,when,amp,pan,key,x,hold=0){
+  const F=BODIES[v.body],f0=hz(voiceMidi(v,midi)),f=[],g=[],t=[];let e=0;
+  for(let k=0;k<v.partials;k++){const r=k+1+(bodyRatio(F,k)-k-1)*v.bend,gk=Math.pow(v.bright,k)*(k%2?v.even:1);f.push(f0*r);g.push(gk);t.push(Math.max(hold*1.5,v.decay*Math.pow(r,-v.damp)));e+=gk*gk}
+  strike(f,g,t,when,amp*Math.min(1,1.3/Math.sqrt(e)),pan,key,contactTime(v.hard,x),v.attack);
+  if(hold)damp(key,when+hold);
 }
+// Drums are WebAudio graphs on the drum bus: tuned oscillators and filtered noise under one decaying gain.
 function drum(v,when,amp,pan){
-  const g=ac.createGain(),p=ac.createStereoPanner(),end=when+v.decay;
-  p.pan.value=pan;g.connect(p);p.connect(drumBus);
-  g.gain.setValueAtTime(amp,when);g.gain.exponentialRampToValueAtTime(1e-4,end);
-  const src=[];
-  if(v.kind==='kick'){
-    const o=ac.createOscillator();o.frequency.setValueAtTime(v.tune*v.sweep,when);
-    o.frequency.exponentialRampToValueAtTime(v.tune,when+v.pdecay);o.connect(g);src.push(o);
-  }else{
-    const n=ac.createBufferSource(),f=ac.createBiquadFilter(),ng=ac.createGain();
-    n.buffer=noise;n.loop=true;f.type=v.kind==='hat'?'highpass':'bandpass';f.frequency.value=v.cutoff;f.Q.value=.8;
-    ng.gain.value=v.kind==='snare'?1-v.tone:1;n.connect(f);f.connect(ng);ng.connect(g);src.push(n);
-    if(v.kind==='snare'){const o=ac.createOscillator(),tg=ac.createGain();o.type='triangle';o.frequency.value=v.tune;
-      tg.gain.value=v.tone;o.connect(tg);tg.connect(g);src.push(o)}
-  }
-  for(const s of src){s.start(when);s.stop(end+.02)}
+  const out=ac.createGain(),p=ac.createStereoPanner(),end=when+v.decay,src=[];
+  p.pan.value=pan;out.connect(p);p.connect(drumBus);
+  out.gain.setValueAtTime(amp,when);out.gain.exponentialRampToValueAtTime(1e-4,end);
+  const osc=(type,f0,gain,f1=f0,sweepT=0,at=when,to=end)=>{const o=ac.createOscillator(),og=ac.createGain();o.type=type;o.frequency.setValueAtTime(f0,at);
+    if(f1!==f0)o.frequency.exponentialRampToValueAtTime(f1,at+sweepT);og.gain.value=gain;o.connect(og);og.connect(out);src.push([o,at,to])};
+  const hiss=(type,cutoff,gain,at=when,to=end)=>{const n=ac.createBufferSource(),f=ac.createBiquadFilter(),ng=ac.createGain();n.buffer=noise;n.loop=true;n.loopStart=Math.random();
+    f.type=type;f.frequency.value=cutoff;f.Q.value=.8;ng.gain.setValueAtTime(gain,at);if(to<end)ng.gain.exponentialRampToValueAtTime(1e-4,to);n.connect(f);f.connect(ng);ng.connect(out);src.push([n,at,to])};
+  const k=v.kind;
+  if(k==='kick')osc('sine',v.tune*v.sweep,1,v.tune,v.pdecay);
+  else if(k==='snare'){hiss('bandpass',v.cutoff,1-v.tone);osc('triangle',v.tune,v.tone)}
+  else if(k==='hat')hiss('highpass',v.cutoff,1);
+  else if(k==='tom'){osc('sine',v.tune*v.sweep,1-v.tone,v.tune,v.pdecay);hiss('bandpass',v.tune*8,v.tone,when,when+.03)}
+  else if(k==='clap'){for(let i=0;i<3;i++)hiss('bandpass',v.cutoff,.8,when+i*v.spread,when+i*v.spread+v.spread*.9);hiss('bandpass',v.cutoff,.6,when+3*v.spread)}
+  else if(k==='rim'){osc('triangle',v.tune,.6);osc('square',v.tune*1.78,.3);hiss('highpass',v.tune*2,.5,when,when+.008)}
+  else if(k==='cowbell'){osc('square',v.tune,.5);osc('square',v.tune*1.48,.5)}
+  else if(k==='wood')osc('sine',v.tune,1,v.tune*.9,v.decay);
+  else if(k==='cymbal'){hiss('highpass',v.cutoff,1-v.tone);for(const r of [1,1.34,1.71,2.26])osc('square',v.cutoff*.11*r,v.tone*.18)}
+  for(const[s,at,to]of src){s.start(at);s.stop(to+.02)}
 }
 function fire(v,t,vn,x,src,gain,play){
   stats.events++;
@@ -354,8 +381,8 @@ addEventListener('pointerdown',()=>{edits.held=true},true);
 for(const type of ['pointerup','pointercancel'])addEventListener(type,()=>{edits.held=false;if(edits.pending)edits.commit()});
 function serialize(){
   return {S,SPACE,view,
-    cogs:W.cogs.map(c=>({id:c.id,x:c.x,y:c.y,n:c.n,motor:c.motor,revs:c.revs,layer:c.layer,th:wrap(c.th),
-      track:c.track&&{...c.track,dots:c.track.dots.map(d=>({ring:d.ring,a:d.a,p:d.p,v:d.v}))}})),
+    cogs:W.cogs.map(c=>({id:c.id,x:c.x,y:c.y,n:c.n,motor:c.motor&&{...c.motor},layer:c.layer,th:wrap(c.th),
+      track:c.track&&{...c.track,dots:c.track.dots.map(d=>({ring:d.ring,a:d.a,p:d.p,v:d.v,len:d.len}))}})),
     arms:W.arms.map(a=>({id:a.id,cog:a.cog.id,a:a.a,r0:a.r0,len:a.len,flex:a.flex})),
     pads:W.pads.map(p=>({id:p.id,x:p.x,y:p.y,r:p.r,voice:p.voice})),
     readers:W.readers.map(r=>({id:r.id,x1:r.x1,y1:r.y1,x2:r.x2,y2:r.y2,voice:r.voice,tines:r.tines,combBase:r.combBase,combScale:r.combScale})),
@@ -364,14 +391,16 @@ function serialize(){
 }
 // Every part is built and checked before any of the live world is replaced.
 function deserialize(j){
-  const cogs=j.cogs.map(c=>({revs:0,...c,w:0,turns:0}));
+  const cogs=j.cogs.map(c=>({...c,motor:c.motor?{rpm:+c.motor.rpm||0,revs:+c.motor.revs||0}:null,w:0,turns:0}));
   const byId=new Map(cogs.map(c=>[c.id,c]));
   const cog=(id,who)=>{const c=byId.get(id);if(!c)throw new Error(`${who}: no cog ${id}`);return c};
   const importedVoice=o=>{
     const v=o.voice;if(!VOICES[v.kind])throw new Error(`${o.id}: voice kind ${v.kind}`);
-    return v.kind==='modal'?{...v,octave:v.octave??0}:v;
+    return {...makeVoice(v.kind),...v};
   };
-  for(const c of cogs)if(c.track)c.track={...c.track,dots:c.track.dots.map(d=>({p:1,v:1,...d}))};
+  for(const c of cogs)if(c.track){const t=c.track;
+    if(!SCALES[t.scale]||!RANGES.includes(t.range)||!OCTAVES.includes(t.octave)||!(t.root>=0&&t.root<12))throw new Error(`cog ${c.id}: track scale ${t.scale}, range ${t.range}, octave ${t.octave}, root ${t.root}`);
+    c.track={...t,dots:t.dots.map(d=>({p:1,v:1,len:1,...d}))}}
   const next={cogs,
     arms:j.arms.map(a=>({flex:.5,...a,cog:cog(a.cog,'arm '+a.id)})),
     belts:j.belts.map(b=>({...b,a:cog(b.a,'belt '+b.id),b:cog(b.b,'belt '+b.id)})),

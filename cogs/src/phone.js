@@ -38,10 +38,10 @@ const GESTURE_READOUT={
   carry:kind=>`place part: ${kind}`,armed:kind=>`place part: ${kind}`,
   glyph:()=>panelShown()?'controls: open':`playback: ${clock.paused?'paused':'playing'}`,
   arm:a=>`arm length: ${Math.round(a.len)} px · angle: ${Math.round(wrap(a.a)*180/Math.PI)}°`,
-  pad:(o,s,rim)=>rim?`pad radius: ${settingText(o.r)} px`:`pad voice: ${o.voice.kind}${o.voice.kind==='modal'?' · '+noteName(voiceMidi(o.voice,o.voice.note)):''}`,
+  pad:(o,s,rim)=>rim?`pad radius: ${settingText(o.r)} px`:`pad voice: ${o.voice.kind}${o.voice.kind==='synth'?' · '+noteName(voiceMidi(o.voice,o.voice.note)):''}`,
   span:(type,o,s,end)=>o.f200?`${o.kind} note: ${noteName(Math.round(stringMidi(o)))} · ${Math.round(stringLen(o))} px`:`reader ${end?'length':'mode'}: ${end?Math.round(stringLen(o))+' px':readerMode(o)+' · '+o.voice.kind}`,
   belt:b=>`belt crossed: ${onOff(b.cross)}`,
-  cog:c=>`${c.track?'disc':'cog'} position: ${Math.round(c.x)}, ${Math.round(c.y)}`,
+  cog:c=>`${c.track?'disc':c.motor?'motor':'cog'} position: ${Math.round(c.x)}, ${Math.round(c.y)}`,
   notes:(c,s)=>{const cell=cellAt(c,screenToWorld(gesture?.last||s));return cell?`disc note: ${noteName(ringNote(c.track,cell.ring))}`:`disc notes: ${c.track.dots.length} pins`},
   pan:()=>`view: ${Math.round(S.zoom*100)}% · ${Math.round(view.x)}, ${Math.round(view.y)}`,
   group:()=>`move parts: ${group.length}`,marquee:()=>`select parts: ${group.length}`,
@@ -59,8 +59,8 @@ function controlReadout(target){
 }
 function rollReadout(e){
   if(!roll||(e.target!==roll.cv&&e.target!==roll.keys))return null;
-  const c=roll.c,cell=e.target===roll.keys?{ring:c.track.rings-1-Math.floor((e.clientY-roll.keys.getBoundingClientRect().top)/roll.row)}:rollCell(e);
-  if(!cell||cell.ring<0||cell.ring>=c.track.rings)return null;
+  const c=roll.c,cell=e.target===roll.keys?{ring:trackRings(c.track)-1-Math.floor((e.clientY-roll.keys.getBoundingClientRect().top)/roll.row)}:rollCell(e);
+  if(!cell||cell.ring<0||cell.ring>=trackRings(c.track))return null;
   const label=noteName(ringNote(c.track,cell.ring));
   return ()=>e.target===roll.keys?`audition note: ${label}`:`disc note: ${label} · ${onOff(dotAt(c.track,cell.ring,cell.a)>=0)}`;
 }
@@ -163,10 +163,14 @@ const ICON={
   air:'M3 9h12a3 3 0 1 0-3-3M3 15h15a3 3 0 1 1-3 3',shimmer:'M12 2l2 7 7 3-7 3-2 7-2-7-7-3 7-3z',freeze:'M12 2v20M3.3 7l17.4 10M3.3 17L20.7 7',
   tempo:'M8 21l3-18h2l3 18zM12 16l6-10',beats:'M5 12h.01M10 12h.01M15 12h.01M20 12h.01',comb:'M3 5h18M5 5v14M9 5v12M13 5v10M17 5v8M21 5v6',
   odds:'M12 3a9 9 0 1 0 .01 0M12 3v9h9',string:'M3 19L21 5M3 19h.01M21 5h.01',quant:'M4 20V14M9 20V9M14 20V12M19 20V4',
-  seal:'M12 3a9 9 0 1 0 .01 0M12 7l1.5 3.2 3.5.4-2.6 2.4.7 3.5-3.1-1.8-3.1 1.8.7-3.5L7 10.6l3.5-.4z'};
+  seal:'M12 3a9 9 0 1 0 .01 0M12 7l1.5 3.2 3.5.4-2.6 2.4.7 3.5-3.1-1.8-3.1 1.8.7-3.5L7 10.6l3.5-.4z',
+  semi:'M4 14h16M4 10h16M9 5v14M15 5v14',partials:'M3 20V8M7 20V5M11 20V9M15 20V11M19 20V13M23 20v-5',even:'M3 20V8M11 20V12M19 20V15',attack:'M3 20L10 5h11',
+  range:'M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4',octave:'M4 18V6M4 12h16M20 18V6',spread:'M4 20V9M8 20V6M12 20V9M16 20V12'};
 const icons=new Map();const iconPath=k=>{let p=icons.get(k);if(!p){p=new Path2D(ICON[k]);icons.set(k,p)}return p};
-const VOICE_ICON={note:'fork',octave:'scale',tune:'fork',body:'bell',bend:'bend',bright:'bright',hard:'hard',decay:'decay',pdecay:'pdecay',damp:'damp',
-  sweep:'sweep',tone:'tone',cutoff:'cutoff',level:'level',velSense:'vel'};
+const VOICE_ICON={note:'fork',octave:'octave',semi:'semi',tune:'fork',body:'bell',partials:'partials',bright:'bright',even:'even',bend:'bend',hard:'hard',attack:'attack',
+  decay:'decay',pdecay:'pdecay',damp:'damp',sweep:'sweep',tone:'tone',cutoff:'cutoff',spread:'spread',level:'level',velSense:'vel'};
+// The bezel is a ring of 44 px sectors, so it carries the first six of a voice's parameters; the patch sheet has them all.
+const BEZEL_PARAMS=6;
 const settingText=x=>typeof x==='number'?String(+x.toFixed(3)):String(x);
 const onOff=x=>x?'on':'off';
 const numSector=(icon,label,o,k,min,max,step,after)=>({icon,label,min,max,step,format:['note','base','combBase'].includes(k)?noteName:settingText,
@@ -175,10 +179,8 @@ const defSector=(icon,o,def,after)=>numSector(icon,def[1],o,def[0],def[2],def[3]
 const choiceSector=(icon,label,options,get,set,format=settingText)=>({icon,label,options,get,set,format,toggle:format===onOff});
 function voiceSectors(owner,withNote){
   const v=owner.voice,out=[choiceSector('kind','voice',Object.keys(VOICES),()=>owner.voice.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense})})];
-  for(const def of [...VOICE_DEFS[v.kind],...COMMON_DEFS]){
-    if(def[0]==='note'&&!withNote)continue;
+  for(const def of [...VOICE_DEFS[v.kind].filter(d=>withNote||d[0]!=='note').slice(0,BEZEL_PARAMS),COMMON_DEFS[0]])
     out.push(Array.isArray(def[2])?choiceSector(VOICE_ICON[def[0]],def[1],def[2],()=>v[def[0]],x=>{v[def[0]]=x}):defSector(VOICE_ICON[def[0]],v,def));
-  }
   return out;
 }
 function readerSectors(o){
@@ -192,13 +194,15 @@ const stringSectors=o=>[choiceSector('string','instrument',['string','bar'],()=>
   numSector('hard','hardness',o,'hard',0,1,.01),numSector('level','level',o,'level',0,1.5,.01),numSector('vel','velocity sense',o,'velSense',0,1,.01)];
 function trackSectors(c){
   const t=c.track;
-  return [choiceSector('scale','scale',Object.keys(SCALES),()=>t.scale,x=>{t.scale=x}),numSector('fork','root note',t,'base',12,108,1),
-    numSector('div','steps',t,'div',1,96,1),numSector('rings','rings',t,'rings',1,36,1,()=>{t.dots=t.dots.filter(d=>d.ring<t.rings)})];
+  const trim=()=>trimDots(t);
+  return [choiceSector('scale','scale',Object.keys(SCALES),()=>t.scale,x=>{t.scale=x;trim()}),choiceSector('fork','root',NOTE_NAMES.map((_,i)=>i),()=>t.root,x=>{t.root=x},i=>NOTE_NAMES[i]),
+    choiceSector('octave','octave',OCTAVES,()=>t.octave,x=>{t.octave=x}),choiceSector('range','range',RANGES,()=>t.range,x=>{t.range=x;trim()},r=>r+' oct'),
+    numSector('div','steps',t,'div',1,96,1)];
 }
-const dotSectors=d=>[numSector('odds','probability',d,'p',0,1,.01),numSector('level','velocity',d,'v',0,1,.01)];
-const ROOM=[['wet','wet'],['size','size'],['tail','decay'],['air','highMult'],['shimmer','shimmer']];
+const dotSectors=d=>[numSector('odds','probability',d,'p',0,1,.01),numSector('level','velocity',d,'v',0,1,.01),numSector('div','length steps',d,'len',1,ui.dotOf.track.div,1)];
+const ROOM_ICON={wet:'wet',size:'size',decay:'tail',highMult:'air',shimmer:'shimmer'};
 function roomSectors(){
-  const out=ROOM.map(([icon,k])=>defSector(icon,SPACE,SPACE_DEFS.find(d=>d[0]===k),roomEdited));
+  const out=ROOM_SPACE.filter(k=>k!=='freeze').map(k=>defSector(ROOM_ICON[k],SPACE,SPACE_DEFS.find(d=>d[0]===k),roomEdited));
   out.push(choiceSector('freeze','reverb freeze',[0,1],()=>SPACE.freeze,x=>{SPACE.freeze=x;roomEdited()},onOff));
   out.push(defSector('level',S,S_DEFS.find(d=>d[0]==='master'),roomEdited));
   out.push(numSector('tempo','tempo bpm',S,'bpm',0,300,1,()=>changed(true)),numSector('beats','beats/bar',S,'beats',1,16,1,()=>changed(true)));
@@ -223,8 +227,9 @@ function activeBezel(){
   else if(sel.type==='string')b=ring(mid(o),stringLen(o)*S.zoom/2,stringSectors(o));
   else if(sel.type==='dot')b=ring(ui.dotAt,0,dotSectors(o));
   else if(sel.type==='cog'&&o.track){
-    const R=Math.max(92,radius(o)*S.zoom+40);
-    if(R+BEZEL_W+8<=Math.min(CW,shelfTop()-safeTop)/2){const c=toScreen(o);b={cx:c.x,cy:c.y,R,sectors:trackSectors(o),owner:o}}
+    // A disc larger than the screen allows still gets its bezel, drawn over its face at the largest ring that fits.
+    const R=Math.min(Math.max(92,radius(o)*S.zoom+40),Math.min(CW,shelfTop()-safeTop)/2-BEZEL_W-8),c=toScreen(o);
+    b={cx:c.x,cy:c.y,R,sectors:trackSectors(o),owner:o};
   }
   if(!b){ui.bezelOwner=null;return null}
   if(ui.bezelOwner!==b.owner){ui.bezelOwner=b.owner;ui.bezelAt=performance.now()}

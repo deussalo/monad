@@ -1,11 +1,11 @@
 // Builds contraptions by touch on a 390x844 phone viewport and checks the mechanism and the audio it drives.
-const { chromium } = require('/srv/rig/monad/node_modules/playwright-core');
+const { chromium } = require(process.env.COGS_PW || '/srv/rig/rig/webapp/node_modules/.pnpm/playwright-core@1.64.0/node_modules/playwright-core');
 const path = require('path');
 const FILE = process.argv[2] || ('file://' + path.join(__dirname, 'cogs.html'));
 const SHOTS = process.env.COGS_SHOTS || '';
 const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: SHOTS ? 2 : 1 };
 (async () => {
-  const b = await chromium.launch({ executablePath: (process.env.MONAD_CHROME || '/srv/rig/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome'),
+  const b = await chromium.launch({ executablePath: (process.env.MONAD_CHROME || '/srv/rig/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome'),
     args: [] });
   let pass = true;
   const check = (label, ok, got) => { if (!ok) pass = false; console.log(('  ' + label).padEnd(58), JSON.stringify(got), ok ? '✓' : '✗'); };
@@ -50,7 +50,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
       async glyph() { await t.tap(await probe(() => { const g = __cogs.glyphAt(); return [g.x, g.y]; })); },
       async dev(open) {
         if (open === await probe(() => !document.querySelector('#dev').hidden)) return;
-        if (open) { const g = await probe(() => { const g = __cogs.glyphAt(); return [g.x, g.y]; }); await T('touchStart', [g]); await p.waitForFunction(() => !document.querySelector('#dev').hidden); await T('touchEnd', []); await wait(150); }
+        if (open) { const g = await probe(() => { const g = __cogs.glyphAt(); return [g.x, g.y]; }); await T('touchStart', [g]); await p.waitForFunction(() => !document.querySelector('#dev').hidden); await T('touchEnd', []); await wait(150); await probe(() => { document.querySelector('#panel details').open = true; }); }
         else await p.tap('button[data-act=close]');
       },
       async act(label) { await t.dev(true); await p.tap(`button[data-act="${label}"]`); },
@@ -123,11 +123,11 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   is('close in the sheet closes it', await probe(() => document.querySelector('#dev').hidden), true);
 
   console.log('GEARS');
-  await m.stroke([await m.shelf('cog'), await m.scr([30, 60]), await m.scr([0, 0])]);
+  await m.stroke([await m.shelf('motor'), await m.scr([30, 60]), await m.scr([0, 0])]);
   await m.drag([22.92, 0], [46, 0]);
   await m.stroke([await m.shelf('cog'), await m.scr([70, 0])], { mid: () => m.shot('02-carry-snap') });
   const gears = await probe(() => __cogs.W.cogs.map(c => ({ n: c.n, x: c.x, y: c.y, rpm: c.w * 60 / (2 * Math.PI), jam: c.jam })));
-  check('rim pulled out to 46: 24 teeth; a fresh cog: 12', gears[0].n === 24 && gears[1].n === 12, gears.map(g => g.n));
+  check('motor rim pulled out to 46: 24 teeth; a fresh cog: 12', gears[0].n === 24 && gears[1].n === 12, gears.map(g => g.n));
   check('second cog snapped to pitch distance 68.75', near(Math.hypot(gears[1].x - gears[0].x, gears[1].y - gears[0].y), 36 * 12 / (2 * Math.PI), 1e-9), gears[1].x - gears[0].x);
   const [c1, c2] = gears.map(g => [g.x, g.y]);
   await m.tap(await m.scr([c1[0] - 20, c1[1] - 15])); await m.field('rpm', 60); await m.dev(false);
@@ -140,9 +140,9 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
     await m.stroke([0, .25, .5, .75, 1].map(k => [cx + Math.cos(a0 + by * k) * r, cy + Math.sin(a0 + by * k) * r]), { steps: 4, frame: 12, mid: hold ? () => wait(hold) : null }); };
   const dial = rpm => Math.sign(rpm) * Math.log(Math.abs(rpm) / 2.5) / Math.log(120) * 1.7 * Math.PI, undial = a => Math.sign(a) * 2.5 * Math.pow(120, Math.abs(a) / (1.7 * Math.PI));
   await turn(0, .8, 400);
-  const crank = await probe(() => __cogs.W.cogs.map(c => ({ motor: c.motor, rpm: c.w * 60 / (2 * Math.PI) })));
-  check('turn the driven cog\'s rim clockwise and hold still before letting go: it takes over as the driver, .8 rad along the dial from -120', crank[0].motor === 0 && near(crank[1].motor, undial(dial(-120) + .8), 4), [crank.map(c => c.motor), undial(dial(-120) + .8)]);
-  check('the train follows the new driver', near(crank[0].rpm, -crank[1].motor / 2, 1e-9), crank.map(c => c.rpm));
+  const crank = await probe(() => __cogs.W.cogs.map(c => ({ motor: !!c.motor, rpm: c.w * 60 / (2 * Math.PI) })));
+  check('turn the driven cog\'s rim clockwise and hold still before letting go: the motor stays the motor and turns it .8 rad along the dial from -120', crank[0].motor && !crank[1].motor && near(crank[1].rpm, undial(dial(-120) + .8), 4), [crank.map(c => c.rpm), undial(dial(-120) + .8)]);
+  check('the motor turns at half that, the other way', near(crank[0].rpm, -crank[1].rpm / 2, 1e-9), crank.map(c => c.rpm));
   await turn(.8, -dial((await rpm())[1]));
   check('turn on clockwise to the middle of the dial: the train stops', JSON.stringify(await rpm()) === '[0,0]', await rpm());
   await turn(.8, 1.2);
@@ -183,14 +183,14 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   console.log('SPEED ON A DRIVEN COG');
   await m.tap(await m.empty());
   await m.tap(await m.scr([c2[0] - 12, c2[1]])); await m.field('rpm', 100); await m.dev(false); await wait(150);
-  is('give the driven cog a speed: it becomes the train\'s one motor, nothing jams', await probe(() => __cogs.W.cogs.map(c => [c.jam, c.motor, +(c.w * 60 / (2 * Math.PI)).toFixed(6)])), [[false, 0, -50], [false, 100, 100]]);
+  is('give the driven cog a speed: the motor takes it through the ratio, nothing jams', await probe(() => __cogs.W.cogs.map(c => [c.jam, !!c.motor, +(c.w * 60 / (2 * Math.PI)).toFixed(6)])), [[false, true, -50], [false, false, 100]]);
   await m.field('rpm', -120); await m.dev(false);
   is('and back', await rpm(), [60, -120]);
 
   console.log('PAD BEZEL');
   await m.tap(await m.scr([-60, -30]));
   const bz = await probe(() => { const b = __cogs.activeBezel(); return b && { cx: b.cx, cy: b.cy, R: b.R, n: b.sectors.length }; });
-  check('tap a pad: its bezel blooms, one sector per kick param', bz && bz.n === 7, bz);
+  check('tap a pad: its bezel blooms: kind, the four kick params, level', bz && bz.n === 6, bz);
   await m.shot('06-pad-bezel');
   const sector = (b, i, f) => { const a = -Math.PI / 2 + (i + f) * 2 * Math.PI / b.n; return [b.cx + Math.cos(a) * b.R, b.cy + Math.sin(a) * b.R]; };
   const tune0 = await probe(() => __cogs.W.pads[0].voice.tune);
@@ -208,7 +208,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const discXY = await probe(() => { const c = __cogs.W.cogs[2]; return [c.x, c.y, c.n]; });
   check('disc dropped clear of the train, 48 teeth', discXY[2] === 48 && near(discXY[1], 170, 1), discXY);
   await m.dbl(await m.scr([discXY[0] - 20, discXY[1] - 20]));
-  is('double tap the disc: flies in until its face is the score', await probe(() => { const c = __cogs.W.cogs[2]; return c.track.rings > 1 && __cogs.radius(c) * .65 / 11 * __cogs.S.zoom >= 12; }), true);
+  is('double tap the disc: flies in until its face is the score', await probe(() => { const c = __cogs.W.cogs[2]; return c.track.range === 1 && __cogs.radius(c) * .65 / 11 * __cogs.S.zoom >= 12; }), true);
   for (const [dx, dy] of [[40, 0], [0, -70], [-80, 0]]) await m.tap(await m.scr([discXY[0] + dx, discXY[1] + dy]));
   is('three taps set three pins', await probe(() => __cogs.W.cogs[2].track.dots.length), 3);
   await m.shot('07-disc-notes');
@@ -218,8 +218,9 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   check('reader dropped on the disc lies along its radius', rd0 && near(rd0[0], discXY[0], 1e-6) && near(rd0[2], discXY[0], 1e-6) && rd0[1] > rd0[3], rd0);
   await m.tap(await m.scr([discXY[0] - 60, discXY[1] + 20]));
   await m.shot('08-disc-bezel');
-  is('tap the disc: its tuning bezel (scale, root, divisions, rings)', await probe(() => __cogs.activeBezel()?.sectors.length), 4);
-  await m.field('rpm', 30); await m.dev(false);
+  is('tap the disc: its tuning bezel (scale, root, octave, range, steps)', await probe(() => [__cogs.activeBezel()?.sectors.length, __cogs.sel]), [5, { type: 'cog', id: 3 }]);
+  await m.fromShelf('motor', [discXY[0] + 60 * 12 / (2 * Math.PI), discXY[1]]);
+  await m.tap(await m.scr([discXY[0] - 60, discXY[1] + 20])); await m.field('rpm', 30); await m.dev(false);
   const disc = await probe(() => { const c = __cogs.W.cogs[2]; return { n: c.n, dots: c.track.dots.length, rpm: c.w * 60 / (2 * Math.PI), strikes: __cogs.engine().strikes }; });
   check('disc: 48 teeth, 3 dots, 30 rpm', disc.n === 48 && disc.dots === 3 && near(disc.rpm, 30, 1e-9), disc);
   const d0 = await m.reset(); await wait(4300);
@@ -227,7 +228,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   rd.hits = await m.count('>reader', d0, 4);
   check('reader: 3 dots x 2 revolutions', rd.hits === 6, rd.hits);
   check('three distinct rings sounded', rd.rings.length === 3, rd.rings);
-  check('engine consumed the modal strikes', rd.eng.strikes - disc.strikes >= rd.hits - 1 && rd.eng.drops === 0, { strikes: rd.eng.strikes - disc.strikes, drops: rd.eng.drops });
+  check('engine consumed the synth strikes', rd.eng.strikes - disc.strikes >= rd.hits - 1 && rd.eng.drops === 0, { strikes: rd.eng.strikes - disc.strikes, drops: rd.eng.drops });
   await m.dev(true); await wait(300);
   const peak = await probe(() => document.querySelector('#panel [data-k="peak dB"] b').textContent);
   check('output reaches the destination', parseFloat(peak) > -60, peak);
@@ -269,7 +270,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await m.glyph();
   await wait(600); await p.reload(); await wait(400);
   const world = await probe(() => __cogs.W.cogs.length + ' ' + __cogs.W.arms.length + ' ' + __cogs.W.pads.length + ' ' + __cogs.W.readers.length);
-  check('world restored after reload', world === '3 2 2 1', world);
+  check('world restored after reload', world === '4 2 2 1', world);
 
   console.log('PINCH AND SCRAP');
   const tp = await phone();
@@ -312,7 +313,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   console.log('BELTS, TEMPO, STRINGS, COMB, PROBABILITY, EUCLID, SHARE');
   await m.act('clear'); await m.world('zoom', 1.4); await m.dev(false);
   const rpms = () => probe(() => __cogs.W.cogs.map(c => +(c.w * 60 / (2 * Math.PI)).toFixed(6)));
-  await m.fromShelf('cog', [-100, 0]); await m.drag([-100 + 22.92, 0], [-54, 0]);
+  await m.fromShelf('motor', [-100, 0]); await m.drag([-100 + 22.92, 0], [-54, 0]);
   await m.tap(await m.scr([-110, 15])); await m.field('rpm', 60); await m.dev(false);
   await m.fromShelf('cog', [100, 0]);
   await m.fromShelf('belt', [-100, 20], [100, 5]);
@@ -348,7 +349,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   check('pluck point is where the tip circle cuts the string', st.us.some(u => near(st.u, u, 1e-3)), [st.u, st.us]);
   await wait(300);
   check('plucks reach the engine', ((await probe(() => __cogs.engine())).strikes || 0) > sk0, sk0);
-  await m.fromShelf('disc', [0, 150]);
+  await m.fromShelf('disc', [0, 150]); await m.fromShelf('motor', [60 * 12 / (2 * Math.PI), 150]);
   await m.tap(await m.scr([30, 190])); await m.pick('revs/bar', '1'); await m.dev(false);
   await m.glyph();
   await m.dbl(await m.scr([0, 180]));
@@ -361,7 +362,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const pin = eu[0], pinS = await probe(([ring, k]) => { const c = __cogs.W.cogs[2], R = __cogs.ringR(c, ring), a = k * 2 * Math.PI / c.track.div + c.th - c.w * (__cogs.simT - __cogs.clock.view); const s = __cogs.toScreen({ x: c.x + Math.cos(a) * R, y: c.y + Math.sin(a) * R }); return [s.x, s.y]; }, pin);
   await m.stroke([pinS, [pinS[0] + .5, pinS[1]]], { steps: 1, hold: 600 });
   const ob = await probe(() => { const b = __cogs.activeBezel(); return b && { cx: b.cx, cy: b.cy, R: b.R, n: b.sectors.length, sel: __cogs.sel && __cogs.sel.type }; });
-  check('hold a pin: its odds bezel', ob && ob.n === 2 && ob.sel === 'dot', ob);
+  check('hold a pin: its odds, velocity and length bezel', ob && ob.n === 3 && ob.sel === 'dot', ob);
   await m.shot('12-pin-odds');
   await up(sector(ob, 0, .5), -60);
   const odds = await probe(() => __cogs.W.cogs[2].track.dots.map(d => +d.p.toFixed(2)));
@@ -372,7 +373,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const rr = await probe(() => { const r = __cogs.W.readers[0]; return [r.x1, r.y1, r.x2, r.y2]; });
   await m.stroke([await m.scr([rr[0], rr[1]]), await m.scr([rr[0] + 10, 140]), await m.scr([0, 145])]);
   await m.stroke([await m.scr([rr[2], rr[3]]), await m.scr([rr[2] + 10, 70]), await m.scr([0, 60])]);
-  await m.tap(await m.scr([0, 100])); await m.field('comb tines', 4); await m.dev(false);
+  await m.tap(await m.scr([0, 100])); await m.pick('reader mode', 'comb'); await m.field('comb tines', 4); await m.dev(false);
   await m.tap(await m.empty()); await m.tap(await m.scr([30, 190]));
   await m.dev(true); await p.fill('#inspector [data-k="brush p"] input[type=number]', '1');
   await p.fill('#inspector [data-k="euclid ring"] input[type=number]', '2'); await p.fill('#inspector [data-k="euclid k"] input[type=number]', '3'); await p.tap('text=euclid fill');
@@ -412,7 +413,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
     for (const k of mods) await d.keyboard.up(k); await wait(150);
   };
   if (SHOTS) await d.screenshot({ path: path.join(SHOTS, '15-desktop-demo.png') });
-  await d.keyboard.press('?'); await d.click('button[data-act=clear]');
+  await d.keyboard.press('?'); await d.evaluate(() => { document.querySelector('#panel details').open = true; }); await d.click('button[data-act=clear]');
   await d.fill('#panel [data-k="zoom"] input[type=number]', '1'); await d.click('button[data-act=close]'); await wait(200);
   const keyed = [];
   for (const k of ['c', 'd', 'a', 'b', 'p', 't', 'r', 's', 'c', 'Escape']) { await d.keyboard.press(k); keyed.push(await d.evaluate(() => __cogs.armed)); }

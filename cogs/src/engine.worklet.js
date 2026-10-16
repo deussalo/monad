@@ -1,4 +1,4 @@
-const TAU=Math.PI*2,LN1000=6.907755278982137,MAXM=6,BLOCK=128;
+const TAU=Math.PI*2,LN1000=6.907755278982137,MAXM=12,BLOCK=128;
 const isPrime=n=>{for(let d=2;d*d<=n;d++)if(n%d===0)return false;return n>1};
 const primeAtLeast=n=>{n=Math.max(2,Math.round(n));while(!isPrime(n))n++;return n};
 const pow2AtLeast=n=>{let p=1;while(p<n)p<<=1;return p};
@@ -175,7 +175,8 @@ class CogsEngine extends AudioWorkletProcessor{
     this.dryL=new Float32Array(BLOCK);this.dryR=new Float32Array(BLOCK);
     this.maxStarts=4*V;this.maxWait=8*BLOCK;
     this.reset(o);this.warm(o);
-    this.port.onmessage=ev=>{const m=ev.data;if(m.type==='strikes')this.queue.push(m.d);else if(m.type==='space')this.space.set(m)};
+    this.damps=[];
+    this.port.onmessage=ev=>{const m=ev.data;if(m.type==='strikes')this.queue.push(m.d);else if(m.type==='damp')this.damps.push(m);else if(m.type==='space')this.space.set(m)};
   }
   // V8 interprets code until it has run enough; cold, the first strike's blocks
   // took 4-8 ms against a 2.7 ms deadline and dropped out as clicks, and the first
@@ -200,7 +201,7 @@ class CogsEngine extends AudioWorkletProcessor{
     for(const a of [this.on,this.key,this.nm,this.zr,this.zi,this.kr,this.ki,this.xg,this.cN,this.cLen,this.env,this.envStep,this.fade,this.fadeStep,
       this.pl,this.pr,this.plT,this.prT,this.e,this.exc,this.live,this.vb,this.dryL,this.dryR,this.pendAt,this.dl])a.fill(0);
     this.pend.fill(null);this.space.clear(o.space);
-    this.queue=[packStrikes((o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0)))];this.queueAt=0;this.queueOff=0;
+    this.queue=[packStrikes((o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0)))];this.queueAt=0;this.queueOff=0;this.damps=[];
     this.frame=0;this.quietBlocks=0;this.steals=0;this.drops=0;this.strikes=0;this.statAt=0;this.idle=false;this.muted=false;this.idleReported=false;this.waitFrom=-1;
   }
   post(m,transfer){if(!this.muted)this.port.postMessage(m,transfer)}
@@ -291,6 +292,9 @@ class CogsEngine extends AudioWorkletProcessor{
       this.waitFrom=-1;this.queueOff+=strikeSize(d,this.queueOff);
     }
     if(this.queueAt===q.length){q.length=0;this.queueAt=0}
+    if(this.damps.length){const keep=[];for(const m of this.damps){if(m.at>=end){keep.push(m);continue}
+      for(let v=0;v<this.V;v++)if(this.on[v]&&this.key[v]===m.key&&this.fade[v]===0){this.fade[v]=1;this.fadeStep[v]=1/(sampleRate*.06);this.pend[v]=null}}
+      this.damps=keep}
     const dL=this.dryL,dR=this.dryR;dL.fill(0);dR.fill(0);
     const inp=inputs[0];let inE=0;
     if(inp&&inp.length){const a=inp[0],b=inp[1]||a;for(let s=0;s<n;s++){dL[s]+=a[s];dR[s]+=b[s];inE+=a[s]*a[s]}}
