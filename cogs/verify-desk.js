@@ -74,7 +74,7 @@ const SHOTS = process.env.COGS_SHOTS || '';
   const c2 = await probe(() => { const s = __cogs.toScreen(__cogs.W.cogs[1]); return [s.x + 5, s.y + 5]; });
   await p.mouse.click(...c2); await settle();
   await p.fill('#inspector [data-k="rpm"] input[type=number]', '30'); await settle();
-  is('type 30 rpm on the cog it drives: that cog takes over, nothing jams', await probe(() => __cogs.W.cogs.slice(0, 2).map(c => [+(c.w * 60 / (2 * Math.PI)).toFixed(6), c.jam])), [[-30, false], [30, false]]);
+  is('type 30 rpm on the cog it drives: the motor takes it through the ratio, nothing jams', await probe(() => __cogs.W.cogs.slice(0, 2).map(c => [+(c.w * 60 / (2 * Math.PI)).toFixed(6), c.jam])), await probe(() => [[+(-30 * __cogs.W.cogs[1].n / __cogs.W.cogs[0].n).toFixed(6), false], [30, false]]));
 
   console.log('PARTS FROM THE TOOLBAR');
   await p.click('button[data-act=clear]');
