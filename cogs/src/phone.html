@@ -17,8 +17,8 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #dev[hidden],#scrim[hidden]{display:none}
 #panel{max-width:440px;margin:0 auto;padding:6px}
 #part-bar{position:fixed;left:var(--space-3,12px);top:calc(env(safe-area-inset-top,0px) + var(--space-3,12px));display:flex;gap:var(--space-2,8px)}
-#part-bar button,#to-start{min-height:44px;min-width:44px;padding:var(--space-3,12px);border:1px solid var(--line)}
-#to-start{position:fixed;right:62px;padding:0;display:grid;place-items:center;color:var(--fg)}
+#part-bar button,#to-start{min-height:44px;min-width:44px;padding:0;border:0;background:none;display:grid;place-items:center;color:var(--fg)}
+#to-start{position:fixed;right:62px}
 #edit-part[hidden],#delete-part[hidden],#to-start[hidden],#editor-head{display:none}
 #dev[data-editor]:not([data-editor=""]){top:max(14vh,env(safe-area-inset-top,0px));border-radius:var(--space-3,12px) var(--space-3,12px) 0 0}
 #dev[data-editor]:not([data-editor=""]) #editor-head{display:flex;align-items:center;gap:var(--space-2,8px);padding:var(--space-2,8px);position:sticky;top:0;background:var(--bg);z-index:1}
@@ -29,7 +29,7 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #dev[data-editor]:not([data-editor=""]) #inspector>:is([data-k="x"],[data-k="y"],[data-k="radius"]),
 #dev[data-editor="patch"] #inspector>:is([data-k="x1"],[data-k="y1"],[data-k="x2"],[data-k="y2"]),
 #dev[data-editor="notes"] #inspector>:is([data-k="teeth"],[data-k="rpm"],[data-k="revs/bar"],[data-k="layer"],[data-k="phase deg"],.ro){display:none}
-.roll-nav{display:flex;justify-content:space-between;gap:var(--space-1,4px)}
+.roll-hint{margin:0 0 var(--space-2,8px);color:var(--dim);font-size:11px;text-align:center}
 #interaction{position:fixed;left:0;right:0;bottom:0;z-index:30;padding:var(--space-2,8px) var(--space-3,12px) calc(env(safe-area-inset-bottom,0px) + var(--space-2,8px));background:var(--bg);border-top:1px solid var(--line);color:var(--hot);font-size:14px;text-align:center;pointer-events:none}
 #interaction[hidden]{display:none}
 #dev{padding-bottom:calc(env(safe-area-inset-bottom,0px) + var(--space-12,48px))}
@@ -41,7 +41,7 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 <div id="safe"></div>
 <output id="interaction" hidden aria-live="polite"></output>
 <div id="scrim" hidden></div>
-<div id="part-bar"><button id="edit-part" hidden aria-label="Edit selected part"></button><button id="delete-part" hidden aria-label="Delete selected">✕ delete</button></div>
+<div id="part-bar"><button id="edit-part" hidden aria-label="Edit selected part"></button><button id="delete-part" hidden aria-label="Delete selected"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
 <button id="to-start" hidden aria-label="Set to start"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="2.5" height="14"/><path d="M19 5v14L8.5 12z"/></svg></button>
 <div id="dev" hidden role="dialog" aria-label="Part controls">
   <div id="editor-head"><span id="editor-title"></span><button id="editor-undo" aria-label="Undo">↶</button><button id="editor-redo" aria-label="Redo">↷</button><button id="editor-close">close</button></div>

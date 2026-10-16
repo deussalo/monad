@@ -553,7 +553,7 @@ function setDot(t,cell,on){const i=dotAt(t,cell.ring,cell.a);if(on&&i<0)t.dots.p
 const NOTE_NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 const MIDI_NOTES=Array.from({length:97},(_,i)=>i+12);
 const noteName=m=>NOTE_NAMES[m%12]+(Math.floor(m/12)-1);
-let roll=null;
+let roll=null,rollZoom=1;
 const rollDir=c=>c.w<0?-1:1;
 const rollU=(c,a)=>wrap(-rollDir(c)*a)/TAU;
 function readerPlayheads(c){
@@ -566,7 +566,7 @@ function readerPlayheads(c){
   }
   return out;
 }
-function rollGeom(){const t=roll.c.track,L=roll.label,cw=Math.max(roll.minCell,Math.floor((roll.box.clientWidth-L)/t.div));return {cw,W:L+cw*t.div,H:roll.row*trackRings(t)}}
+function rollGeom(){const t=roll.c.track,L=roll.label,cw=Math.max(4,Math.round(Math.max(roll.minCell,Math.floor((roll.box.clientWidth-L)/t.div))*rollZoom));return {cw,W:L+cw*t.div,H:roll.row*trackRings(t)}}
 const colAngle=(c,col)=>wrap(-rollDir(c)*col*TAU/c.track.div);
 const rollCol=(c,d)=>Math.round(rollU(c,d.a)*c.track.div)%c.track.div;
 // The pointer in grid units: columns from the first step, rows from the top ring.
@@ -667,9 +667,9 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     keys.style.cssText='position:sticky;left:0;z-index:1;flex-shrink:0;touch-action:pan-y';
     cv2.style.marginLeft=-label+'px';cv2.style.flexShrink='0';
     box.replaceChildren(el('div',{style:'display:flex'},keys,cv2));
-    keys.onpointerdown=e=>{const ring=trackRings(t)-1-Math.floor((e.clientY-keys.getBoundingClientRect().top)/row);if(ring>=0&&ring<trackRings(t))sound(discReader(c),ringNote(t,ring),c.id*128+ring)};
+    keys.onpointerdown=e=>{const ring=trackRings(t)-1-Math.floor((e.clientY-keys.getBoundingClientRect().top)/roll.row);if(ring>=0&&ring<trackRings(t))sound(discReader(c),ringNote(t,ring),c.id*128+ring)};
   }
-  roll={cv:cv2,keys,box,c,row,label,minCell,marquee:null};
+  roll={cv:cv2,keys,box,c,row:Math.round(row*rollZoom),row0:row,label,minCell,marquee:null};
   if(rollSelOf!==c){rollSel.clear();rollAnchor=null;rollSelOf=c}
   // A press: ctrl/cmd draws a box (a click toggles one pin), a selected pin drags the set,
   // anything else clears a selection, or paints when there is none.
@@ -684,7 +684,7 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
   const moveSet=(set,cell)=>({from:set.map(d=>[d,d.a,d.ring]),col:cell.col,ring:cell.ring,moved:false});
   let press=null;
   cv2.oncontextmenu=e=>e.preventDefault();
-  cv2.onpointerdown=e=>{
+  const down=e=>{
     const at=rollAt(e),cell=rollCell(e),hit=cell&&noteAt(c,cell.col,cell.ring),ctrl=e.ctrlKey||e.metaKey;
     cv2.focus({preventScroll:true});cv2.setPointerCapture(e.pointerId);if(cell)rollAnchor=cell.col;
     if(e.button===2){press={erase:true};erase(cell);return}
@@ -704,7 +704,7 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     const d={...pin(cell),len:brush.len};t.dots.push(d);play(cell.ring);rollSel.clear();rollSel.add(d);
     press={...moveSet([d],cell),fresh:true};
   };
-  cv2.onpointermove=e=>{
+  const move=e=>{
     const at=rollAt(e),cell=rollCell(e);
     if(!press){const hit=cell&&noteAt(c,cell.col,cell.ring);cv2.style.cursor=hit?(edge(at,cell,hit)?'ew-resize':'move'):'crosshair';return}
     if(roll.marquee){Object.assign(roll.marquee,{x1:at.x,y1:at.y});return}
@@ -713,17 +713,59 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     if(press.stretch){const len=clamp(((Math.floor(at.x)-press.head)%n+n)%n+1,1,n),delta=len-press.set.find(([d])=>d===press.stretch)[1];
       for(const[d,len0]of press.set)d.len=clamp(len0+delta,1,n);brush.len=press.stretch.len;press.moved=true}
   };
-  cv2.onpointerup=cv2.onpointercancel=()=>{
+  const up=()=>{
     const p=press,m=roll.marquee;press=null;roll.marquee=null;if(!p)return;
     if(m){
       const g=rollGeom(),x0=Math.min(m.x0,m.x1),x1=Math.max(m.x0,m.x1),y0=Math.min(m.y0,m.y1),y1=Math.max(m.y0,m.y1);
-      if(Math.hypot((x1-x0)*g.cw,(y1-y0)*row)<4){if(p.hit&&!rollSel.delete(p.hit))rollSel.add(p.hit);return}
+      if(Math.hypot((x1-x0)*g.cw,(y1-y0)*roll.row)<4){if(p.hit&&!rollSel.delete(p.hit))rollSel.add(p.hit);return}
       if(!p.add)rollSel.clear();
       for(const d of t.dots){const px=rollU(c,d.a)*n+.5,py=trackRings(t)-d.ring-.5;if(px>=x0&&px<=x1+d.len-1&&py>=y0&&py<=y1)rollSel.add(d)}
       return;
     }
     if(p.from){if(p.moved||p.fresh){settleSel(t);if(p.fresh)rollSel.clear();changed()}return}
     if(p.stretch||p.erase){if(p.moved||p.erase)changed();return}
+  };
+  // Touch: one finger edits as the mouse does and a double tap deletes a note. A second finger undoes what the
+  // first began and takes over: pinch zooms the strip, drag scrolls it, and the sheet scrolls once the strip runs out.
+  const touches=new Map();let two=null,lastTap=null;
+  const undoPress=()=>{const p=press;press=null;roll.marquee=null;if(!p)return;
+    if(p.fresh){for(const[d]of p.from){t.dots.splice(t.dots.indexOf(d),1);rollSel.delete(d)}return}
+    if(p.from)for(const[d,a,ring]of p.from){d.a=a;d.ring=ring}
+    if(p.stretch)for(const[d,len]of p.set)d.len=len;
+  };
+  const sheet=()=>{for(let e=box.parentElement;e;e=e.parentElement)if(e.scrollHeight>e.clientHeight&&/auto|scroll/.test(getComputedStyle(e).overflowY))return e;return null};
+  const pair=()=>{const[a,b]=touches.values();return {d:Math.hypot(a.x-b.x,a.y-b.y)||1,x:(a.x+b.x)/2,y:(a.y+b.y)/2}};
+  const startTwo=()=>{
+    undoPress();const p=pair(),r=box.getBoundingClientRect(),g=rollGeom(),s=sheet();
+    two={...p,z:rollZoom,left:r.left,top:r.top,col:(box.scrollLeft+p.x-r.left-roll.label)/g.cw,row:(box.scrollTop+p.y-r.top)/roll.row,sheet:s,sheetTop:s?s.scrollTop:0};
+  };
+  const moveTwo=()=>{
+    const p=pair();rollZoom=clamp(two.z*p.d/two.d,.4,3);roll.row=Math.max(8,Math.round(roll.row0*rollZoom));drawRoll();
+    const g=rollGeom(),top=two.row*roll.row-(p.y-two.top);
+    box.scrollLeft=roll.label+two.col*g.cw-(p.x-two.left);box.scrollTop=top;
+    if(two.sheet)two.sheet.scrollTop=two.sheetTop+top-box.scrollTop;
+  };
+  cv2.onpointerdown=e=>{
+    if(e.pointerType!=='touch')return down(e);
+    touches.set(e.pointerId,{x:e.clientX,y:e.clientY});cv2.setPointerCapture(e.pointerId);
+    if(touches.size===2)return startTwo();
+    if(touches.size>2||two)return;
+    const cell=rollCell(e),hit=cell&&noteAt(c,cell.col,cell.ring);
+    if(hit&&lastTap?.d===hit&&performance.now()-lastTap.t<400){lastTap=null;t.dots.splice(t.dots.indexOf(hit),1);rollSel.delete(hit);buzz(12);rollEdit();return}
+    down(e);
+  };
+  cv2.onpointermove=e=>{
+    if(e.pointerType!=='touch')return move(e);
+    const f=touches.get(e.pointerId);if(!f)return;f.x=e.clientX;f.y=e.clientY;
+    if(two){if(touches.size>=2)moveTwo();return}
+    move(e);
+  };
+  cv2.onpointerup=cv2.onpointercancel=e=>{
+    if(e.pointerType!=='touch')return up();
+    if(!touches.delete(e.pointerId))return;
+    if(two){if(!touches.size)two=null;return}
+    const p=press;up();
+    lastTap=p&&p.from&&!p.moved?{d:p.from[0][0],t:performance.now()}:null;
   };
   cv2.onwheel=e=>{const cell=rollCell(e),hit=cell&&noteAt(c,cell.col,cell.ring);if(!hit)return;e.preventDefault();
     for(const d of rollSel.has(hit)?selPins(t):[hit])d.v=clamp(+(d.v-Math.sign(e.deltaY)*.05).toFixed(2),.05,1);changed()};

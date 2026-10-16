@@ -15,19 +15,18 @@ function placeRoll(c,f){
   const phone=$('#dev').dataset.editor==='notes';
   rollSection(c,{strip:f,tools:f,row:phone?32:11,label:phone?44:30,minCell:phone?28:6});
   if(!phone)return;
-  roll.box.style.maxHeight='36vh';roll.box.style.overflow='auto';
-  const nav=el('div',{className:'roll-nav'}),box=roll.box;
-  for(const [label,dx,dy]of [['← time',-1,0],['time →',1,0],['↑ pitch',0,-1],['pitch ↓',0,1]])
-    nav.append(el('button',{textContent:label,onclick:()=>box.scrollBy({left:dx*box.clientWidth*.75,top:dy*128,behavior:'smooth'})}));
-  f.prepend(box,nav);
+  roll.box.style.maxHeight='48vh';roll.box.style.overflow='auto';
+  f.prepend(roll.box,el('p',{className:'roll-hint',textContent:'tap: add · drag: move · edge: length · double tap: delete · two fingers: scroll, pinch: zoom'}));
 }
+const svgIcon=d=>`<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="${d}"/></svg>`;
+const PART_BAR_ICON={notes:'<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v16H3zM7.5 13v7M12 13v7M16.5 13v7" fill="none" stroke="currentColor" stroke-width="1.6"/>'+'<path d="M6 4h3v9H6zM10.5 4h3v9h-3zM15 4h3v9h-3z" fill="currentColor"/></svg>',patch:svgIcon('M5 3v18M12 3v18M19 3v18M3 8h4M10 15h4M17 10h4')};
 const editorMode=()=>sel?.type==='cog'&&sel.o.track?'notes':sel?.o.voice?'patch':'';
 let editorOwner=null,editorOpenedAt=-Infinity;
 function syncEditor(){
   const mode=editorMode(),button=$('#edit-part'),start=$('#to-start'),busy=panelShown()||!!ui.carry;
   button.hidden=!mode||busy;$('#delete-part').hidden=!(sel||group.length)||busy;
   start.hidden=busy;const top=shelfTop()-54+'px';if(start.style.top!==top)start.style.top=top;
-  const label=mode==='notes'?'♫ notes':'♫ patch';if(button.textContent!==label)button.textContent=label;
+  if(button.dataset.mode!==mode){button.dataset.mode=mode;button.ariaLabel=mode==='notes'?'Edit notes':'Edit patch';button.innerHTML=PART_BAR_ICON[mode]}
   if(!panelShown()||!$('#dev').dataset.editor)return;
   if(!mode){togglePanel(false);return}
   if(editorOwner!==sel.o){editorOwner=sel.o;togglePanel(true,mode)}
@@ -229,9 +228,10 @@ function activeBezel(){
   else if(sel.type==='string')b=ring(mid(o),stringLen(o)*S.zoom/2,stringSectors(o));
   else if(sel.type==='dot')b=ring(ui.dotAt,0,dotSectors(o));
   else if(sel.type==='cog'&&o.track){
-    // A disc larger than the screen allows still gets its bezel, drawn over its face at the largest ring that fits.
+    // A disc zoomed into a score takes taps on its face as pins; its tuning is then in the notes sheet.
+    // Otherwise a disc larger than the screen allows gets its bezel over its face at the largest ring that fits.
     const R=Math.min(Math.max(92,radius(o)*S.zoom+40),Math.min(CW,shelfTop()-safeTop)/2-BEZEL_W-8),c=toScreen(o);
-    b={cx:c.x,cy:c.y,R,sectors:trackSectors(o),owner:o};
+    if(!noteMode(o))b={cx:c.x,cy:c.y,R,sectors:trackSectors(o),owner:o};
   }
   if(!b){ui.bezelOwner=null;return null}
   if(ui.bezelOwner!==b.owner){ui.bezelOwner=b.owner;ui.bezelAt=performance.now()}
