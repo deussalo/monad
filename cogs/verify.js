@@ -366,6 +366,21 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await tp.tap(at(9.5, 2)); await tp.tap(at(9.5, 2));
   const fresh = (await trackOf(discAt.id)).map(d => d.len).sort();
   is('the next new note is one step, not the last length', fresh, [1, 4]);
+  is('no brush length control', await tp.probe(() => !document.querySelector('[data-k="brush len"]') && !document.querySelector('.roll-hint')), true);
+  await tp.stroke([at(0.5, 0), at(10.5, 2.4)], { steps: 8, hold: 550 });
+  is('hold empty grid, then drag: a box selects both notes, none added', [await tp.probe(() => __cogs.rollSel), (await trackOf(discAt.id)).length], [2, 2]);
+  const rbtn = name => tp.probe(n => { const b = document.querySelector(`.roll-sel [data-roll="${n}"]`), r = b.getBoundingClientRect(); return { at: [r.x + r.width / 2, r.y + r.height / 2], off: b.disabled }; }, name);
+  await tp.tap((await rbtn('duplicate')).at);
+  is('duplicate: four notes, the copies selected', [(await trackOf(discAt.id)).length, await tp.probe(() => __cogs.rollSel)], [4, 2]);
+  await tp.tap((await rbtn('delete notes')).at);
+  is('delete: back to two, nothing selected, the buttons rest', [(await trackOf(discAt.id)).length, await tp.probe(() => __cogs.rollSel), (await rbtn('delete notes')).off], [2, 0, true]);
+  const lane = await tp.probe(() => { const r = document.querySelector('#inspector .roll').querySelectorAll('canvas')[2].getBoundingClientRect(); return { x: r.left + 44, top: r.top, h: r.height }; });
+  const lx = lane.x + 9.5 * rg.cw;
+  await tp.p.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))); await tp.stroke([[lx, lane.top + 16], [lx, lane.top + lane.h - 4]], { steps: 6 });
+  const vels = (await tp.probe(id => __cogs.W.cogs.find(c => c.id === id).track.dots.map(d => [d.ring, d.v]), discAt.id)).sort();
+  check('drag down the velocity lane under a note: only that note goes soft', vels.length === 2 && vels.find(v => v[0] === 2)[1] < .2 && vels.find(v => v[0] === 4)[1] === 1, vels);
+  await tp.shot('08-notes-lane');
+  is('the chrome icons are Radix', await tp.probe(() => ['#delete-part', '#to-start', '#editor-undo', '#editor-close'].map(s => document.querySelector(s + ' svg')?.getAttribute('viewBox'))), ['0 0 15 15', '0 0 15 15', '0 0 15 15', '0 0 15 15']);
 
   const sheetRect = () => tp.probe(() => { const d = document.querySelector('#dev'), r = d.getBoundingClientRect(); return { top: Math.round(r.top), min: d.classList.contains('min'), hidden: d.hidden, scrim: document.querySelector('#scrim').hidden }; });
   const grab = await centre('#grab'), open0 = await sheetRect();

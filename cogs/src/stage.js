@@ -397,7 +397,7 @@ const G={
     const p0=screenToWorld(s0),k={...o};let note=o.f200?Math.round(stringMidi(o)):0;
     return {o,move(s){const q=screenToWorld(s),dx=q.x-p0.x,dy=q.y-p0.y;if(!end)trackScrap(s);
         if(end!==2){o.x1=k.x1+dx;o.y1=k.y1+dy}if(end!==1){o.x2=k.x2+dx;o.y2=k.y2+dy}
-        if(o.f200&&end){const m=Math.round(stringMidi(o));if(m!==note){note=m;buzz(3);audition(o,true)}}},
+        if(o.f200&&end){const m=Math.round(stringMidi(o));if(m!==note){note=m;buzz(3)}}},
       up(){if(end)changed();else endScrap(type,o)},tap(){choose(type,o,true)},dbl(s){focus(type,o,s)}};
   },
   belt(b){return {o:b,move:trackScrap,up(){endScrap('belt',b)},tap(){b.cross=b.cross?0:1;buzz(8);changed(true)}}},
@@ -544,12 +544,15 @@ document.addEventListener('keydown',e=>{
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&ac&&ac.state!=='running')ac.resume()});
 addEventListener('resize',resize);
 function armPart(kind){ui.armed=kind;cv.style.cursor=kind?'crosshair':''}
-const BRUSH_DEFAULT={p:1,v:1,len:1},EU_DEFAULT={ring:0,k:3,rot:0},brush={...BRUSH_DEFAULT},eu={...EU_DEFAULT};
+const BRUSH_DEFAULT={p:1,v:1},EU_DEFAULT={ring:0,k:3,rot:0},brush={...BRUSH_DEFAULT},eu={...EU_DEFAULT};
 
 const dotAt=(t,ring,a)=>t.dots.findIndex(o=>o.ring===ring&&Math.abs(wrap(o.a-a+Math.PI)-Math.PI)<1e-6);
 function setDot(t,cell,on){const i=dotAt(t,cell.ring,cell.a);if(on&&i<0)t.dots.push({len:1,...cell});else if(!on&&i>=0)t.dots.splice(i,1)}
 
 /* ---------- roll: the disc unwrapped into a strip, time left to right ---------- */
+// The roll's preview: one voice, cut by the next preview and damped when the press ends, after at least `min` s.
+let preview=null;
+function previewOff(min=.18){if(!preview||!ac)return;damp(preview.key,Math.max(ac.currentTime,preview.at+min));preview=null}
 const NOTE_NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 const MIDI_NOTES=Array.from({length:97},(_,i)=>i+12);
 const noteName=m=>NOTE_NAMES[m%12]+(Math.floor(m/12)-1);
@@ -576,7 +579,7 @@ function rollCell(e){
   if(col<0||col>=t.div||row<0||row>=trackRings(t))return null;
   return {col,ring:trackRings(t)-1-row,a:colAngle(roll.c,col)};
 }
-const pin=cell=>({ring:cell.ring,a:cell.a,p:brush.p,v:brush.v,len:brush.len});
+const pin=cell=>({ring:cell.ring,a:cell.a,p:brush.p,v:brush.v,len:1});
 // The note whose span, head column onward and wrapping round the disc, covers this cell.
 const noteAt=(c,col,ring)=>{const n=c.track.div;return c.track.dots.find(d=>d.ring===ring&&((col-rollCol(c,d))%n+n)%n<d.len)||null};
 const sameCell=(a,b)=>a.ring===b.ring&&Math.abs(wrap(a.a-b.a+Math.PI)-Math.PI)<1e-6;
@@ -605,6 +608,11 @@ function pasteClip(c){
   for(const q of rollClip){const d={ring:Math.min(q.ring,trackRings(t)-1),a:colAngle(c,(at+q.dc)%t.div),p:q.p,v:q.v,len:q.len};t.dots.push(d);rollSel.add(d)}
   settleSel(t);rollEdit();
 }
+// Duplicate, as FL's ctrl+B: a copy of the selection right after it, selected in its place.
+function dupSel(c){
+  const t=c.track,sel=selPins(t);if(!sel.length)return;const cols=sel.map(d=>rollCol(c,d)+d.len),span=Math.max(...cols)-Math.min(...sel.map(d=>rollCol(c,d)));
+  const copies=sel.map(d=>({...d,a:wrap(d.a-rollDir(c)*span*TAU/t.div)}));t.dots.push(...copies);rollSel.clear();for(const d of copies)rollSel.add(d);settleSel(t);rollEdit();
+}
 function brushSel(t,k){const sel=selPins(t);if(!sel.length)return;for(const d of sel)d[k]=brush[k];changed()}
 // Keys go to the roll while it has focus or a selection; part keys stay off the canvas then.
 function rollKey(e){
@@ -613,8 +621,7 @@ function rollKey(e){
   const k=e.key.toLowerCase();
   if(e.ctrlKey||e.metaKey){
     const op={c:()=>copySel(c),x:()=>{if(copySel(c))deleteSel(t)},v:()=>pasteClip(c),a:()=>{for(const d of t.dots)rollSel.add(d)},
-      b:()=>{const sel=selPins(t);if(!sel.length)return;const cols=sel.map(d=>rollCol(c,d)+d.len),span=Math.max(...cols)-Math.min(...sel.map(d=>rollCol(c,d)));
-        const copies=sel.map(d=>({...d,a:wrap(d.a-rollDir(c)*span*TAU/t.div)}));t.dots.push(...copies);rollSel.clear();for(const d of copies)rollSel.add(d);settleSel(t);rollEdit()}}[k];
+      b:()=>dupSel(c)}[k];
     if(!op||e.altKey)return false;e.preventDefault();op();return true;
   }
   const arrow={arrowleft:[-1,0],arrowright:[1,0],arrowup:[0,1],arrowdown:[0,-1]}[k];
@@ -657,6 +664,21 @@ function drawRoll(){
   for(const p of readerPlayheads(c)){x.strokeStyle=hot(p.rd.flash,READ,x);x.beginPath();x.moveTo(L+p.u*gw,0);x.lineTo(L+p.u*gw,g.H);x.stroke();x.globalAlpha=1}
   const m=roll.marquee;
   if(m){x.lineWidth=1;x.strokeStyle=SEL;x.setLineDash([5,4]);x.strokeRect(L+m.x0*g.cw+.5,m.y0*RH+.5,(m.x1-m.x0)*g.cw,(m.y1-m.y0)*RH);x.setLineDash([])}
+  if(roll.lane)drawLane(c,g);
+}
+const LANE_H=56;
+function drawLane(c,g){
+  const t=c.track,ln=roll.lane,L=roll.label,x=ln.getContext('2d');
+  ln.parentElement.style.width=g.W+'px';
+  if(ln.width!==g.W*dpr||ln.height!==LANE_H*dpr){ln.width=g.W*dpr;ln.height=LANE_H*dpr;ln.style.width=g.W+'px';ln.style.height=LANE_H+'px'}
+  x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle=BG;x.fillRect(0,0,g.W,LANE_H);
+  x.lineWidth=1;for(let k=0;k<=t.div;k++){x.strokeStyle=k%4?FAINT:DIM;x.beginPath();x.moveTo(L+k*g.cw+.5,0);x.lineTo(L+k*g.cw+.5,LANE_H);x.stroke()}
+  const bw=clamp(Math.round(g.cw*.3),3,10),some=rollSel.size>0;
+  for(const d of t.dots){
+    if(d.ring>=trackRings(t))continue;const on=rollSel.has(d),h=Math.max(2,d.v*(LANE_H-8)),bx=L+rollCol(c,d)*g.cw+(g.cw-bw)/2;
+    x.globalAlpha=some&&!on?.4:1;x.fillStyle=on?SEL:FG;x.fillRect(bx,LANE_H-4-h,bw,h);x.fillRect(bx-2,LANE_H-4-h,bw+4,2);
+  }
+  x.globalAlpha=1;
 }
 // A note's end in columns from the strip's left edge; a note that wraps past the last column ends where it wraps to.
 function rollEnd(c,d){const n=c.track.div,e=rollCol(c,d)+d.len;return e>n?e-n:e}
@@ -676,20 +698,31 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     keys.style.cssText='position:sticky;left:0;z-index:1;flex-shrink:0;touch-action:pan-y';
     cv2.style.marginLeft=-label+'px';cv2.style.flexShrink='0';
     box.replaceChildren(el('div',{style:'display:flex'},keys,cv2));
-    keys.onpointerdown=e=>{const ring=trackRings(t)-1-Math.floor((e.clientY-keys.getBoundingClientRect().top)/roll.row);if(ring>=0&&ring<trackRings(t))sound(discReader(c),ringNote(t,ring),c.id*128+ring)};
   }
-  roll={cv:cv2,keys,box,c,row:Math.round(row*rollZoom),row0:row,label,minCell,marquee:null,hover:null,grabbed:null,status:null};
+  // Touch builds get a velocity lane under the strip, as FL Mobile's: a bar per note at its start column. Drag on it
+  // to set the bars under the finger; with a selection, only selected notes there change.
+  const lane=keys?el('canvas'):null;
+  if(lane){
+    lane.style.cssText=`display:block;flex-shrink:0;touch-action:none;margin-left:${-label}px`;
+    const tag=el('div',{textContent:'vel',style:`position:sticky;left:0;z-index:1;flex-shrink:0;width:${label}px;display:grid;place-items:center;color:var(--dim);font-size:11px;background:var(--bg)`});
+    box.append(el('div',{style:'display:flex;position:sticky;bottom:0;z-index:2;background:var(--bg);border-top:1px solid var(--line)'},tag,lane));
+  }
+  roll={cv:cv2,keys,lane,box,c,row:Math.round(row*rollZoom),row0:row,label,minCell,marquee:null,hover:null,grabbed:null,status:null};
   cv2.onpointerleave=e=>{if(e.pointerType!=='touch'&&roll.hover){roll.hover=null;drawRoll()}};
   if(rollSelOf!==c){rollSel.clear();rollAnchor=null;rollSelOf=c}
   // A press: ctrl/cmd draws a box (a click toggles one pin), a selected pin drags the set,
   // anything else clears a selection, or paints when there is none.
   // FL Studio's draw tool: click adds a note and drags it into place; a note drags to move, its right edge
   // (cursor ↔) drags to resize, and resizing a selected note stretches the whole selection. Unlike FL, a new note
-  // takes the brush length, never the length of the last note touched. A finger has no hover, so on touch only a
+  // is always one step long, never the length of the last note touched. A finger has no hover, so on touch only a
   // selected note shows its grip and resizes: tap a note to select it, then drag the tab on its right end.
+  // On touch a press on empty grid waits: a tap adds a note, a drag adds one and slides it, and a hold (380 ms)
+  // draws a selection box instead. A note sounds while it is placed, moved to a new pitch or resized, and stops
+  // when the finger or button lifts; each new sound cuts the last.
   // Ctrl+click selects, ctrl+drag boxes, ctrl+shift adds or removes, ctrl+click on empty deselects, shift+drag
   // moves a copy, right-click erases, and the wheel over a note sets its velocity.
-  const n=t.div;
+  // A box takes every note it touches, as FL's marquee does: start column to end, one row tall.
+  const inBox=(d,x0,x1,y0,y1)=>{const col=rollU(c,d.a)*t.div,row=trackRings(t)-1-d.ring;return d.ring<trackRings(t)&&col<x1&&col+d.len>x0&&row<y1&&row+1>y0};
   // The grip nearest the pointer, if within reach: in px, a mouse takes the last 8 px of any note and 4 px past it;
   // a finger takes a selected note's last 14 px and 26 px past it, and half a row above or below.
   const grip=(at,touch)=>{
@@ -702,9 +735,13 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     }
     return best;
   };
-  const play=ring=>sound(discReader(c),ringNote(t,ring),c.id*128+ring);
+  const play=ring=>{previewOff(0);sound(discReader(c),ringNote(t,ring),c.id*128+127);preview={key:c.id*128+127,at:ac?ac.currentTime:0}};
+  if(keys){
+    keys.onpointerdown=e=>{const ring=trackRings(t)-1-Math.floor((e.clientY-keys.getBoundingClientRect().top)/roll.row);if(ring>=0&&ring<trackRings(t))play(ring)};
+    keys.onpointerup=keys.onpointercancel=()=>previewOff();
+  }
   const erase=cell=>{const d=cell&&noteAt(c,cell.col,cell.ring);if(d){t.dots.splice(t.dots.indexOf(d),1);rollSel.delete(d)}};
-  const moveSet=(set,cell)=>({from:set.map(d=>[d,d.a,d.ring]),col:cell.col,ring:cell.ring,moved:false});
+  const moveSet=(set,cell)=>({from:set.map(d=>[d,d.a,d.ring]),col:cell.col,ring:cell.ring,moved:false,heard:set[0]?.ring});
   let press=null;
   cv2.oncontextmenu=e=>e.preventDefault();
   const down=e=>{
@@ -719,13 +756,13 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     if(g0){const set=rollSel.has(g0)?selPins(t):[g0];press={stretch:g0,x0:at.x,set:set.map(d=>[d,d.len])};roll.grabbed=g0;buzz(4);return}
     if(hit){
       if(!rollSel.has(hit)){rollSel.clear();rollSel.add(hit)}
-      let set=selPins(t);
+      let set=selPins(t);play(hit.ring);
       if(e.shiftKey){set=set.map(d=>({...d}));t.dots.push(...set);rollSel.clear();for(const d of set)rollSel.add(d)}
       press=moveSet(set,cell);return;
     }
     if(rollSel.size){rollSel.clear();press=null;return}
     if(!cell){press=null;return}
-    const d={...pin(cell),len:brush.len};t.dots.push(d);play(cell.ring);rollSel.clear();rollSel.add(d);
+    const d=pin(cell);t.dots.push(d);play(cell.ring);rollSel.clear();rollSel.add(d);
     press={...moveSet([d],cell),fresh:true};
   };
   const move=e=>{
@@ -734,18 +771,19 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
       cv2.style.cursor=gp?'ew-resize':hit?'move':'crosshair';if(roll.hover!==gp){roll.hover=gp;drawRoll()}return}
     if(roll.marquee){Object.assign(roll.marquee,{x1:at.x,y1:at.y});return}
     if(press.erase){erase(cell);return}
-    if(press.from){const dc=Math.floor(at.x)-press.col,dr=trackRings(t)-1-Math.floor(at.y)-press.ring;if(dc||dr||press.moved){press.moved=true;moveSel(c,press.from,dc,dr)}return}
+    if(press.from){const dc=Math.floor(at.x)-press.col,dr=trackRings(t)-1-Math.floor(at.y)-press.ring;if(dc||dr||press.moved){press.moved=true;moveSel(c,press.from,dc,dr)}
+      const lead=press.from[0][0];if(lead.ring!==press.heard){press.heard=lead.ring;play(lead.ring)}return}
     if(press.stretch){const delta=Math.round(at.x-press.x0),was=press.stretch.len;
-      for(const[d,len0]of press.set)d.len=clamp(len0+delta,1,n);
-      if(press.stretch.len!==was){press.moved=true;buzz(3)}roll.status=`note length: ${press.stretch.len} step${press.stretch.len>1?'s':''}`}
+      for(const[d,len0]of press.set)d.len=clamp(len0+delta,1,t.div);
+      if(press.stretch.len!==was){press.moved=true;buzz(3);play(press.stretch.ring)}roll.status=`note length: ${press.stretch.len} step${press.stretch.len>1?'s':''}`}
   };
   const up=()=>{
-    const p=press,m=roll.marquee;press=null;roll.marquee=null;roll.grabbed=null;roll.status=null;if(!p)return;
+    const p=press,m=roll.marquee;press=null;roll.marquee=null;roll.grabbed=null;roll.status=null;previewOff();if(!p)return;
     if(m){
       const g=rollGeom(),x0=Math.min(m.x0,m.x1),x1=Math.max(m.x0,m.x1),y0=Math.min(m.y0,m.y1),y1=Math.max(m.y0,m.y1);
       if(Math.hypot((x1-x0)*g.cw,(y1-y0)*roll.row)<4){if(p.hit&&!rollSel.delete(p.hit))rollSel.add(p.hit);return}
       if(!p.add)rollSel.clear();
-      for(const d of t.dots){const px=rollU(c,d.a)*n+.5,py=trackRings(t)-d.ring-.5;if(px>=x0&&px<=x1+d.len-1&&py>=y0&&py<=y1)rollSel.add(d)}
+      for(const d of t.dots)if(inBox(d,x0,x1,y0,y1))rollSel.add(d)
       return;
     }
     if(p.from){if(p.moved||p.fresh){settleSel(t);if(p.fresh)rollSel.clear();changed()}return}
@@ -753,7 +791,10 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
   };
   // Touch: one finger edits as the mouse does and a double tap deletes a note. A second finger undoes what the
   // first began and takes over: pinch zooms the strip, drag scrolls it, and the sheet scrolls once the strip runs out.
-  const touches=new Map();let two=null,lastTap=null;
+  const touches=new Map();let two=null,lastTap=null,hold=null;
+  const dropHold=()=>{if(hold){clearTimeout(hold.timer);hold=null}};
+  // The press on empty grid becomes what it was waiting to be: a note (tap or drag) or, held, a selection box.
+  const settleHold=()=>{const h=hold;dropHold();down(h.e)};
   const undoPress=()=>{const p=press;press=null;roll.marquee=null;roll.grabbed=roll.status=null;if(!p)return;
     if(p.fresh){for(const[d]of p.from){t.dots.splice(t.dots.indexOf(d),1);rollSel.delete(d)}return}
     if(p.from)for(const[d,a,ring]of p.from){d.a=a;d.ring=ring}
@@ -762,7 +803,7 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
   const sheet=()=>{for(let e=box.parentElement;e;e=e.parentElement)if(e.scrollHeight>e.clientHeight&&/auto|scroll/.test(getComputedStyle(e).overflowY))return e;return null};
   const pair=()=>{const[a,b]=touches.values();return {d:Math.hypot(a.x-b.x,a.y-b.y)||1,x:(a.x+b.x)/2,y:(a.y+b.y)/2}};
   const startTwo=()=>{
-    undoPress();const p=pair(),r=box.getBoundingClientRect(),g=rollGeom(),s=sheet();
+    dropHold();undoPress();const p=pair(),r=box.getBoundingClientRect(),g=rollGeom(),s=sheet();
     two={...p,z:rollZoom,left:r.left,top:r.top,col:(box.scrollLeft+p.x-r.left-roll.label)/g.cw,row:(box.scrollTop+p.y-r.top)/roll.row,sheet:s,sheetTop:s?s.scrollTop:0};
   };
   const moveTwo=()=>{
@@ -778,29 +819,50 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     if(touches.size>2||two)return;
     const cell=rollCell(e),hit=cell&&noteAt(c,cell.col,cell.ring);
     if(hit&&lastTap?.d===hit&&performance.now()-lastTap.t<400&&!grip(rollAt(e),true)){lastTap=null;t.dots.splice(t.dots.indexOf(hit),1);rollSel.delete(hit);buzz(12);rollEdit();return}
+    if(cell&&!hit&&!grip(rollAt(e),true)){
+      const at=rollAt(e);dropHold();
+      hold={e,x:e.clientX,y:e.clientY,timer:setTimeout(()=>{hold=null;rollSel.clear();press={hit:null,add:false};
+        roll.marquee={x0:at.x,y0:at.y,x1:at.x,y1:at.y};roll.status='select notes: 0';buzz(10)},380)};
+      return;
+    }
     down(e);
   };
   cv2.onpointermove=e=>{
     if(e.pointerType!=='touch')return move(e);
     const f=touches.get(e.pointerId);if(!f)return;f.x=e.clientX;f.y=e.clientY;
     if(two){if(touches.size>=2)moveTwo();return}
+    if(hold){if(Math.hypot(e.clientX-hold.x,e.clientY-hold.y)<8)return;settleHold()}
     move(e);
+    if(roll.marquee&&press){const m=roll.marquee,x0=Math.min(m.x0,m.x1),x1=Math.max(m.x0,m.x1),y0=Math.min(m.y0,m.y1),y1=Math.max(m.y0,m.y1);
+      roll.status='select notes: '+t.dots.filter(d=>inBox(d,x0,x1,y0,y1)).length}
   };
   cv2.onpointerup=cv2.onpointercancel=e=>{
     if(e.pointerType!=='touch')return up();
     if(!touches.delete(e.pointerId))return;
     if(two){if(!touches.size)two=null;return}
+    if(hold){if(e.type==='pointercancel'){dropHold();return}settleHold()}
     const p=press;up();
     lastTap=p&&p.from&&!p.moved?{d:p.from[0][0],t:performance.now()}:null;
   };
   cv2.onwheel=e=>{const cell=rollCell(e),hit=cell&&noteAt(c,cell.col,cell.ring);if(!hit)return;e.preventDefault();
     for(const d of rollSel.has(hit)?selPins(t):[hit])d.v=clamp(+(d.v-Math.sign(e.deltaY)*.05).toFixed(2),.05,1);changed()};
+  if(lane){
+    let painting=false;
+    const setVel=e=>{
+      const r=lane.getBoundingClientRect(),g=rollGeom(),col=Math.floor((e.clientX-r.left-roll.label)/g.cw),v=clamp(+(1-(e.clientY-r.top-4)/(LANE_H-8)).toFixed(2),.05,1);
+      let at=t.dots.filter(d=>d.ring<trackRings(t)&&rollCol(c,d)===col);if(at.some(d=>rollSel.has(d)))at=at.filter(d=>rollSel.has(d));
+      roll.status=`velocity: ${Math.round(v*100)}%`;if(!at.length)return;
+      for(const d of at)d.v=v;painting=true;drawRoll();
+    };
+    lane.onpointerdown=e=>{lane.setPointerCapture(e.pointerId);painting=false;setVel(e)};
+    lane.onpointermove=e=>{if(e.buttons||e.pointerType==='touch'&&lane.hasPointerCapture(e.pointerId))setVel(e)};
+    lane.onpointerup=lane.onpointercancel=()=>{roll.status=null;if(painting)changed();painting=false};
+  }
   const shift=k=>()=>{const s=rollDir(c)*TAU/t.div;for(const d of t.dots)d.a=wrap(d.a-k*s);changed()};
   strip.append(box);
   tools.append(el('button',{textContent:'shift <',onclick:shift(-1)}),el('button',{textContent:'shift >',onclick:shift(1)}));
   numRow(tools,'brush p',0,1,.01,...bind(brush,'p',()=>brushSel(t,'p')),BRUSH_DEFAULT.p);
   numRow(tools,'brush vel',0,1,.01,...bind(brush,'v',()=>brushSel(t,'v')),BRUSH_DEFAULT.v);
-  numRow(tools,'brush len',1,96,1,...bind(brush,'len',()=>brushSel(t,'len')),BRUSH_DEFAULT.len);
   for(const[k,max]of [['ring',35],['k',96],['rot',95]])numRow(tools,'euclid '+k,0,max,1,...bind(eu,k),EU_DEFAULT[k]);
   tools.append(el('button',{textContent:'euclid fill',onclick:()=>{
     const n=t.div,ring=Math.min(eu.ring,trackRings(t)-1);t.dots=t.dots.filter(d=>d.ring!==ring);
@@ -897,7 +959,7 @@ function select(type,o){sel=type?{type,o}:null;group=[];if(inspectorLive())build
 const span=(a,b)=>Array.from({length:b-a+1},(_,i)=>String(a+i));
 const PITCH_KEYS=new Set(['note','octave','semi']);
 function voiceRows(f,owner,withNote){
-  const v=owner.voice,retune=()=>{audition(owner,true);changed()};
+  const v=owner.voice,retune=()=>changed();
   selRow(f,'kind',Object.keys(VOICES),()=>v.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense});buildInspector();changed()});
   for(const[k,l,a,b,s]of [...VOICE_DEFS[v.kind],...COMMON_DEFS]){
     if(k==='note'&&!withNote)continue;
@@ -924,7 +986,7 @@ function buildInspector(){
     roRow(f,'ratio',()=>o.driver?`${(o.w/o.driver.w||0).toFixed(4)} of c${o.driver.id}`:'-');
     roRow(f,'state',()=>o.jam?(W.cogs.filter(c=>c.driver===o.driver&&c.motor).length>1?'JAM: two motors':'JAM'):o.w?'turning':'idle');
     if(o.track){
-      const t=o.track,retune=()=>{trimDots(t);audition(o,true);changed()};
+      const t=o.track,retune=()=>{trimDots(t);changed()};
       selRow(f,'root',NOTE_NAMES.map((_,i)=>String(i)),()=>String(t.root),x=>{t.root=+x;retune()},i=>NOTE_NAMES[i]);
       selRow(f,'octave',OCTAVES.map(String),()=>String(t.octave),x=>{t.octave=+x;retune()});
       selRow(f,'range',RANGES.map(String),()=>String(t.range),x=>{t.range=+x;retune()},r=>`${r} octave${r>1?'s':''} · ${r*SCALES[t.scale].length} lanes`);
@@ -952,7 +1014,7 @@ function buildInspector(){
     selRow(f,'reader mode',READER_MODES,()=>readerMode(o),mode=>{setReaderMode(o,mode);buildInspector();changed()});
     if(o.tines){
       numRow(f,'comb tines',1,36,1,...bind(o,'tines',changed),12);
-      selRow(f,'comb note',MIDI_NOTES,()=>o.combBase,v=>{o.combBase=+v;audition(o,true);changed()},noteName);
+      selRow(f,'comb note',MIDI_NOTES,()=>o.combBase,v=>{o.combBase=+v;changed()},noteName);
       selRow(f,'comb scale',Object.keys(SCALES),()=>o.combScale,v=>{o.combScale=v;changed()});
     }
     roRow(f,'last note',()=>o.lastMidi==null?'-':noteName(o.lastMidi));

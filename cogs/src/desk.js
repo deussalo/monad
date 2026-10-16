@@ -17,7 +17,7 @@ function drawChrome(){if(ui.carry&&ui.carry.ghost)drawGhost(ui.carry.ghost);sync
 const railButtons={};
 function railButton(id,label,key,title,act,icon){
   const b=el('button',{title:`${title} (${key})`,onclick:act,onmousedown:e=>e.preventDefault()});
-  if(icon)b.append(icon);b.append(el('span',{textContent:label}),el('kbd',{textContent:key}));
+  if(typeof icon==='string')b.append(el('i',{className:'rx',innerHTML:icon}));else if(icon)b.append(icon);b.append(el('span',{textContent:label}),el('kbd',{textContent:key}));
   b.dataset.rail=id;rail.append(b);railButtons[id]=b;return b;
 }
 function partIcon(kind){
@@ -35,21 +35,21 @@ function syncChrome(){
   bar.classList.toggle('scrap',ui.scrap);
   for(const kind of PARTS)railButtons[kind].classList.toggle('on',ui.armed===kind);
   railButtons.select.classList.toggle('on',!ui.armed);
-  railButtons.panel.firstChild.textContent=open?'panel ›':'‹ panel';
-  railButtons.pause.firstChild.textContent=clock.paused?'play':'pause';railButtons.pause.classList.toggle('on',clock.paused);
+  railButtons.panel.querySelector('span').textContent=open?'panel ›':'‹ panel';
+  railButtons.pause.querySelector('span').textContent=clock.paused?'play':'pause';railButtons.pause.querySelector('.rx').innerHTML=rx(clock.paused?'Play':'Pause');railButtons.pause.classList.toggle('on',clock.paused);
   railButtons.undo.disabled=!edits.past.length;railButtons.redo.disabled=!edits.future.length;
 }
 function mount(){
   buildPanel();
-  railButton('panel','panel','?','show or hide the panel',()=>togglePanel()).classList.add('toggle');
+  railButton('panel','panel','?','show or hide the panel',()=>togglePanel(),rx('MixerHorizontal')).classList.add('toggle');
   for(const kind of PARTS)railButton(kind,kind,KEY_OF[kind],'place a '+kind,()=>armPart(ui.armed===kind?null:kind),partIcon(kind));
   rail.append(el('hr'));
-  railButton('select','select','s','select and move: disarm the part',()=>armPart(null));
-  railButton('undo','undo','ctrl z','undo',()=>edits.undo());
-  railButton('redo','redo','ctrl ⇧z','redo',()=>edits.redo());
-  railButton('pause','pause','space','pause or play',()=>setPaused(!clock.paused));
-  railButton('fit','fit','0','fit the machine in view',flyFit);
-  railButton('delete','delete','del','delete the selection',removeSel);
+  railButton('select','select','s','select and move: disarm the part',()=>armPart(null),rx('CursorArrow'));
+  railButton('undo','undo','ctrl z','undo',()=>edits.undo(),rx('Reset'));
+  railButton('redo','redo','ctrl ⇧z','redo',()=>edits.redo(),rx('Reset',18,true));
+  railButton('pause','pause','space','pause or play',()=>setPaused(!clock.paused),rx('Pause'));
+  railButton('fit','fit','0','fit the machine in view',flyFit,rx('EnterFullScreen'));
+  railButton('delete','delete','del','delete the selection',removeSel,rx('Trash'));
 }
 const PROBE={stage,
   get open(){return bar.classList.contains('open')},

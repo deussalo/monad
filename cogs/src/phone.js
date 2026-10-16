@@ -46,13 +46,20 @@ function placeRoll(c,f){
   rollSection(c,{strip:f,tools:f,row:phone?32:11,label:phone?44:30,minCell:phone?28:6});
   if(!phone)return;
   roll.box.style.maxHeight='48vh';roll.box.style.overflow='auto';
-  f.prepend(roll.box,el('p',{className:'roll-hint',textContent:'tap: add or select · drag: move · tap a note, then drag its tab: length · double tap: delete · two fingers: scroll, pinch: zoom'}));
+  // The selection's actions, always in place so the strip never jumps: duplicate, copy, paste, delete.
+  const c0=c,act=(icon,label,fn)=>{const b=el('button',{ariaLabel:label,innerHTML:rx(icon,20),onclick:()=>{fn();buzz(6)}});b.dataset.roll=label;return b};
+  const bar=el('div',{className:'roll-sel'},act('CardStackPlus','duplicate',()=>dupSel(c0)),act('Copy','copy',()=>copySel(c0)),
+    act('Clipboard','paste',()=>pasteClip(c0)),act('Trash','delete notes',()=>deleteSel(c0.track)));
+  f.prepend(bar,roll.box);syncRollBar();
 }
-const svgIcon=d=>`<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="${d}"/></svg>`;
-const PART_BAR_ICON={notes:'<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v16H3zM7.5 13v7M12 13v7M16.5 13v7" fill="none" stroke="currentColor" stroke-width="1.6"/>'+'<path d="M6 4h3v9H6zM10.5 4h3v9h-3zM15 4h3v9h-3z" fill="currentColor"/></svg>',patch:svgIcon('M5 3v18M12 3v18M19 3v18M3 8h4M10 15h4M17 10h4')};
+const PART_BAR_ICON={notes:rx('Keyboard',22),patch:rx('MixerVertical',22)};
 const editorMode=()=>sel?.type==='cog'&&sel.o.track?'notes':sel?.o.voice?'patch':'';
 let editorOwner=null,editorOpenedAt=-Infinity;
-function syncEditor(){
+function syncRollBar(){
+  const bar=document.querySelector('.roll-sel');if(!bar||!roll)return;const some=rollSel.size>0;
+  for(const b of bar.children){const off=b.dataset.roll==='paste'?!rollClip.length:!some;if(b.disabled!==off)b.disabled=off}
+}
+function syncEditor(){syncRollBar();
   const mode=editorMode(),button=$('#edit-part'),start=$('#to-start'),busy=(panelShown()&&!sheetMin())||!!ui.carry;
   button.hidden=!mode||busy;$('#delete-part').hidden=!(sel||group.length)||busy;
   start.hidden=busy;const top=shelfTop()-54+'px';if(start.style.top!==top)start.style.top=$('#part-bar').style.top=top;
@@ -88,6 +95,7 @@ function controlReadout(target){
   return ()=>`${label||'json'}: ${control.matches('select')?control.selectedOptions[0]?.textContent:control.role==='switch'?onOff(control.ariaChecked==='true'):control.matches('input')?control.value:control.matches('textarea')?'edit':'pressed'}`;
 }
 function rollReadout(e){
+  if(roll&&e.target===roll.lane)return ()=>roll.status||'velocity';
   if(!roll||(e.target!==roll.cv&&e.target!==roll.keys))return null;
   const c=roll.c,cell=e.target===roll.keys?{ring:trackRings(c.track)-1-Math.floor((e.clientY-roll.keys.getBoundingClientRect().top)/roll.row)}:rollCell(e);
   if(!cell||cell.ring<0||cell.ring>=trackRings(c.track))return null;
@@ -107,6 +115,8 @@ function mount(){
   // Chrome can retarget the opening tap's click to the newly exposed scrim.
   $('#scrim').onclick=()=>{if(performance.now()-editorOpenedAt>200)togglePanel(false)};
   $('#editor-close').onclick=()=>togglePanel(false);
+  $('#delete-part').innerHTML=rx('Trash',22);$('#to-start').innerHTML=rx('TrackPrevious',22);
+  $('#editor-undo').innerHTML=rx('Reset',20);$('#editor-redo').innerHTML=rx('Reset',20,true);$('#editor-close').innerHTML=rx('Cross2',20);
   $('#editor-undo').onclick=()=>edits.undo();$('#editor-redo').onclick=()=>edits.redo();
   sheetDrag();
   const openEditor=()=>{const mode=editorMode();if(panelShown()&&sheetMin()&&$('#dev').dataset.editor===mode){setSheetMin(false);return}if(panelShown()||!mode)return;editorOwner=sel.o;editorOpenedAt=performance.now();togglePanel(true,mode);syncEditor()};
@@ -175,9 +185,9 @@ Object.assign(G,{
         if(p.options)stepChoice(p,Math.round(dy/OPTION_PX),v0);
         else if(steps)p.set(clamp(v0+Math.round(dy/per)*p.step,p.min,p.max));
         else setNorm(p,n0+dy/DRAG_PX);
-        if(p.get()!==was){if(p.options||steps)buzz(3);audition(b.owner,!!(p.options||steps))}
+        if(p.get()!==was&&(p.options||steps))buzz(3);
       },
-      tap(){if(p.action)p.action();else{if(p.options){stepChoice(p,1);buzz(4)}audition(b.owner,true)}done()},
+      tap(){if(p.action)p.action();else if(p.options){stepChoice(p,1);buzz(4)}done()},
       up:done,cancel:done,
     };
   },
@@ -298,4 +308,4 @@ function bezelHit(b,s){
   return Math.floor(wrap(Math.atan2(s.y-b.cy,s.x-b.cx)+Math.PI/2)/(TAU/b.sectors.length));
 }
 
-const PROBE={shelfTop,SHELF:PARTS,glyphAt,activeBezel};
+const PROBE={shelfTop,SHELF:PARTS,glyphAt,activeBezel,get rollSel(){return rollSel.size}};

@@ -43,6 +43,7 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #rail button.toggle{color:var(--fg);background:var(--pad);margin-bottom:6px}
 #rail hr{width:48px;border:0;border-top:1px solid var(--line);margin:4px auto}
 #rail canvas{width:40px;height:30px}
+#rail .rx{display:grid;place-items:center;height:22px}
 #dock{position:fixed;left:0;bottom:0;max-height:44vh;display:grid;grid-template-columns:250px 1fr;background:var(--bg);border-top:1px solid var(--line)}
 #dock[hidden]{display:none}
 #dock-tools{padding:6px 8px;overflow-y:auto;border-right:1px solid var(--line)}
@@ -833,6 +834,25 @@ async function shareURL(){
   return location.href.split('#')[0]+'#w='+b64url.enc(packed);
 }
 async function loadShared(code){deserialize(JSON.parse(new TextDecoder().decode(await pipe(b64url.dec(code),new DecompressionStream('deflate-raw')))))}
+/* ---------- icons: Radix Icons (MIT, WorkOS), 15x15 filled paths ---------- */
+const RADIX={
+  Keyboard:["M13.5 4H1.5C1.22386 4 1 4.22386 1 4.5V10.5C1 10.7761 1.22386 11 1.5 11H13.5C13.7761 11 14 10.7761 14 10.5V4.5C14 4.22386 13.7761 4 13.5 4ZM1.5 3C0.671573 3 0 3.67157 0 4.5V10.5C0 11.3284 0.671573 12 1.5 12H13.5C14.3284 12 15 11.3284 15 10.5V4.5C15 3.67157 14.3284 3 13.5 3H1.5ZM2 5H3V6H2V5ZM5 5H4V6H5V5ZM6 5H7V6H6V5ZM9 5H8V6H9V5ZM10 5H11V6H10V5ZM13 5H12V6H13V5ZM11 7H12V8H11V7ZM13 9H12V10H13V9ZM9 7H10V8H9V7ZM8 7H7V8H8V7ZM5 7H6V8H5V7ZM4 7H3V8H4V7ZM2 9H3V10H2V9ZM11 9H4V10H11V9Z"],
+  MixerVertical:["M5 1.5C5 1.22386 4.77614 1 4.5 1C4.22386 1 4 1.22386 4 1.5L4 7C4 7.01671 4.00082 7.03323 4.00242 7.04952C2.86009 7.28022 2 8.28967 2 9.5C2 10.7103 2.86009 11.7198 4.00242 11.9505C4.00082 11.9668 4 11.9833 4 12V13.5C4 13.7761 4.22386 14 4.5 14C4.77614 14 5 13.7761 5 13.5V12C5 11.9833 4.99918 11.9668 4.99758 11.9505C6.1399 11.7198 7 10.7103 7 9.5C7 8.28967 6.1399 7.28022 4.99758 7.04952C4.99918 7.03323 5 7.01671 5 7L5 1.5ZM11 1.5C11 1.22386 10.7761 1 10.5 1C10.2239 1 10 1.22386 10 1.5V3C10 3.01671 10.0008 3.03323 10.0024 3.04952C8.8601 3.28022 8 4.28967 8 5.5C8 6.71033 8.8601 7.71978 10.0024 7.95048C10.0008 7.96677 10 7.98329 10 8V13.5C10 13.7761 10.2239 14 10.5 14C10.7761 14 11 13.7761 11 13.5V8C11 7.98329 10.9992 7.96677 10.9976 7.95048C12.1399 7.71978 13 6.71033 13 5.5C13 4.28967 12.1399 3.28022 10.9976 3.04952C10.9992 3.03323 11 3.01671 11 3V1.5ZM4.5 8C3.67157 8 3 8.67157 3 9.5C3 10.3284 3.67157 11 4.5 11C5.32843 11 6 10.3284 6 9.5C6 8.67157 5.32843 8 4.5 8ZM9 5.5C9 4.67157 9.67157 4 10.5 4C11.3284 4 12 4.67157 12 5.5C12 6.32843 11.3284 7 10.5 7C9.67157 7 9 6.32843 9 5.5Z"],
+  Trash:["M5.5 1C5.22386 1 5 1.22386 5 1.5C5 1.77614 5.22386 2 5.5 2H9.5C9.77614 2 10 1.77614 10 1.5C10 1.22386 9.77614 1 9.5 1H5.5ZM3 3.5C3 3.22386 3.22386 3 3.5 3H5H10H11.5C11.7761 3 12 3.22386 12 3.5C12 3.77614 11.7761 4 11.5 4H11V12C11 12.5523 10.5523 13 10 13H5C4.44772 13 4 12.5523 4 12V4L3.5 4C3.22386 4 3 3.77614 3 3.5ZM5 4H10V12H5V4Z"],
+  TrackPrevious:["M1.94976 2.74989C1.94976 2.44613 2.196 2.19989 2.49976 2.19989C2.80351 2.19989 3.04976 2.44613 3.04976 2.74989V7.2825C3.0954 7.18802 3.17046 7.10851 3.26662 7.05776L12.2666 2.30776C12.4216 2.22596 12.6081 2.23127 12.7582 2.32176C12.9083 2.41225 13 2.57471 13 2.74995V12.25C13 12.4252 12.9083 12.5877 12.7582 12.6781C12.6081 12.7686 12.4216 12.7739 12.2666 12.6921L3.26662 7.94214C3.17046 7.89139 3.0954 7.81188 3.04976 7.7174V12.2499C3.04976 12.5536 2.80351 12.7999 2.49976 12.7999C2.196 12.7999 1.94976 12.5536 1.94976 12.2499V2.74989ZM4.57122 7.49995L12 11.4207V3.5792L4.57122 7.49995Z"],
+  Reset:["M4.85355 2.14645C5.04882 2.34171 5.04882 2.65829 4.85355 2.85355L3.70711 4H9C11.4853 4 13.5 6.01472 13.5 8.5C13.5 10.9853 11.4853 13 9 13H5C4.72386 13 4.5 12.7761 4.5 12.5C4.5 12.2239 4.72386 12 5 12H9C10.933 12 12.5 10.433 12.5 8.5C12.5 6.567 10.933 5 9 5H3.70711L4.85355 6.14645C5.04882 6.34171 5.04882 6.65829 4.85355 6.85355C4.65829 7.04882 4.34171 7.04882 4.14645 6.85355L2.14645 4.85355C1.95118 4.65829 1.95118 4.34171 2.14645 4.14645L4.14645 2.14645C4.34171 1.95118 4.65829 1.95118 4.85355 2.14645Z"],
+  Cross2:["M11.7816 4.03157C12.0062 3.80702 12.0062 3.44295 11.7816 3.2184C11.5571 2.99385 11.193 2.99385 10.9685 3.2184L7.50005 6.68682L4.03164 3.2184C3.80708 2.99385 3.44301 2.99385 3.21846 3.2184C2.99391 3.44295 2.99391 3.80702 3.21846 4.03157L6.68688 7.49999L3.21846 10.9684C2.99391 11.193 2.99391 11.557 3.21846 11.7816C3.44301 12.0061 3.80708 12.0061 4.03164 11.7816L7.50005 8.31316L10.9685 11.7816C11.193 12.0061 11.5571 12.0061 11.7816 11.7816C12.0062 11.557 12.0062 11.193 11.7816 10.9684L8.31322 7.49999L11.7816 4.03157Z"],
+  Copy:["M1 9.50006C1 10.3285 1.67157 11.0001 2.5 11.0001H4L4 10.0001H2.5C2.22386 10.0001 2 9.7762 2 9.50006L2 2.50006C2 2.22392 2.22386 2.00006 2.5 2.00006L9.5 2.00006C9.77614 2.00006 10 2.22392 10 2.50006V4.00002H5.5C4.67158 4.00002 4 4.67159 4 5.50002V12.5C4 13.3284 4.67158 14 5.5 14H12.5C13.3284 14 14 13.3284 14 12.5V5.50002C14 4.67159 13.3284 4.00002 12.5 4.00002H11V2.50006C11 1.67163 10.3284 1.00006 9.5 1.00006H2.5C1.67157 1.00006 1 1.67163 1 2.50006V9.50006ZM5 5.50002C5 5.22388 5.22386 5.00002 5.5 5.00002H12.5C12.7761 5.00002 13 5.22388 13 5.50002V12.5C13 12.7762 12.7761 13 12.5 13H5.5C5.22386 13 5 12.7762 5 12.5V5.50002Z"],
+  Clipboard:["M5 2V1H10V2H5ZM4.75 0C4.33579 0 4 0.335786 4 0.75V1H3.5C2.67157 1 2 1.67157 2 2.5V12.5C2 13.3284 2.67157 14 3.5 14H11.5C12.3284 14 13 13.3284 13 12.5V2.5C13 1.67157 12.3284 1 11.5 1H11V0.75C11 0.335786 10.6642 0 10.25 0H4.75ZM11 2V2.25C11 2.66421 10.6642 3 10.25 3H4.75C4.33579 3 4 2.66421 4 2.25V2H3.5C3.22386 2 3 2.22386 3 2.5V12.5C3 12.7761 3.22386 13 3.5 13H11.5C11.7761 13 12 12.7761 12 12.5V2.5C12 2.22386 11.7761 2 11.5 2H11Z"],
+  CardStackPlus:["M2 3.5C2 3.22386 2.22386 3 2.5 3H12.5C12.7761 3 13 3.22386 13 3.5V9.5C13 9.77614 12.7761 10 12.5 10H2.5C2.22386 10 2 9.77614 2 9.5V3.5ZM2 10.9146C1.4174 10.7087 1 10.1531 1 9.5V3.5C1 2.67157 1.67157 2 2.5 2H12.5C13.3284 2 14 2.67157 14 3.5V9.5C14 10.1531 13.5826 10.7087 13 10.9146V11.5C13 12.3284 12.3284 13 11.5 13H3.5C2.67157 13 2 12.3284 2 11.5V10.9146ZM12 11V11.5C12 11.7761 11.7761 12 11.5 12H3.5C3.22386 12 3 11.7761 3 11.5V11H12ZM5 6.5C5 6.22386 5.22386 6 5.5 6H7V4.5C7 4.22386 7.22386 4 7.5 4C7.77614 4 8 4.22386 8 4.5V6H9.5C9.77614 6 10 6.22386 10 6.5C10 6.77614 9.77614 7 9.5 7H8V8.5C8 8.77614 7.77614 9 7.5 9C7.22386 9 7 8.77614 7 8.5V7H5.5C5.22386 7 5 6.77614 5 6.5Z"],
+  CursorArrow:["M3.29227 0.048984C3.47033 -0.032338 3.67946 -0.00228214 3.8274 0.125891L12.8587 7.95026C13.0134 8.08432 13.0708 8.29916 13.0035 8.49251C12.9362 8.68586 12.7578 8.81866 12.5533 8.82768L9.21887 8.97474L11.1504 13.2187C11.2648 13.47 11.1538 13.7664 10.9026 13.8808L8.75024 14.8613C8.499 14.9758 8.20255 14.8649 8.08802 14.6137L6.15339 10.3703L3.86279 12.7855C3.72196 12.934 3.50487 12.9817 3.31479 12.9059C3.1247 12.8301 3 12.6461 3 12.4414V0.503792C3 0.308048 3.11422 0.130306 3.29227 0.048984ZM4 1.59852V11.1877L5.93799 9.14425C6.05238 9.02363 6.21924 8.96776 6.38319 8.99516C6.54715 9.02256 6.68677 9.12965 6.75573 9.2809L8.79056 13.7441L10.0332 13.178L8.00195 8.71497C7.93313 8.56376 7.94391 8.38824 8.03072 8.24659C8.11753 8.10494 8.26903 8.01566 8.435 8.00834L11.2549 7.88397L4 1.59852Z"],
+  Play:["M3.24182 2.32181C3.3919 2.23132 3.5784 2.22601 3.73338 2.30781L12.7334 7.05781C12.8974 7.14436 13 7.31457 13 7.5C13 7.68543 12.8974 7.85564 12.7334 7.94219L3.73338 12.6922C3.5784 12.774 3.3919 12.7687 3.24182 12.6782C3.09175 12.5877 3 12.4252 3 12.25V2.75C3 2.57476 3.09175 2.4123 3.24182 2.32181ZM4 3.57925V11.4207L11.4288 7.5L4 3.57925Z"],
+  Pause:["M6.04995 2.74998C6.04995 2.44623 5.80371 2.19998 5.49995 2.19998C5.19619 2.19998 4.94995 2.44623 4.94995 2.74998V12.25C4.94995 12.5537 5.19619 12.8 5.49995 12.8C5.80371 12.8 6.04995 12.5537 6.04995 12.25V2.74998ZM10.05 2.74998C10.05 2.44623 9.80371 2.19998 9.49995 2.19998C9.19619 2.19998 8.94995 2.44623 8.94995 2.74998V12.25C8.94995 12.5537 9.19619 12.8 9.49995 12.8C9.80371 12.8 10.05 12.5537 10.05 12.25V2.74998Z"],
+  EnterFullScreen:["M2 2.5C2 2.22386 2.22386 2 2.5 2H5.5C5.77614 2 6 2.22386 6 2.5C6 2.77614 5.77614 3 5.5 3H3V5.5C3 5.77614 2.77614 6 2.5 6C2.22386 6 2 5.77614 2 5.5V2.5ZM9 2.5C9 2.22386 9.22386 2 9.5 2H12.5C12.7761 2 13 2.22386 13 2.5V5.5C13 5.77614 12.7761 6 12.5 6C12.2239 6 12 5.77614 12 5.5V3H9.5C9.22386 3 9 2.77614 9 2.5ZM2.5 9C2.77614 9 3 9.22386 3 9.5V12H5.5C5.77614 12 6 12.2239 6 12.5C6 12.7761 5.77614 13 5.5 13H2.5C2.22386 13 2 12.7761 2 12.5V9.5C2 9.22386 2.22386 9 2.5 9ZM12.5 9C12.7761 9 13 9.22386 13 9.5V12.5C13 12.7761 12.7761 13 12.5 13H9.5C9.22386 13 9 12.7761 9 12.5C9 12.2239 9.22386 12 9.5 12H12V9.5C12 9.22386 12.2239 9 12.5 9Z"],
+  MixerHorizontal:["M5.5 3C4.67157 3 4 3.67157 4 4.5C4 5.32843 4.67157 6 5.5 6C6.32843 6 7 5.32843 7 4.5C7 3.67157 6.32843 3 5.5 3ZM3 5C3.01671 5 3.03323 4.99918 3.04952 4.99758C3.28022 6.1399 4.28967 7 5.5 7C6.71033 7 7.71978 6.1399 7.95048 4.99758C7.96677 4.99918 7.98329 5 8 5H13.5C13.7761 5 14 4.77614 14 4.5C14 4.22386 13.7761 4 13.5 4H8C7.98329 4 7.96677 4.00082 7.95048 4.00242C7.71978 2.86009 6.71033 2 5.5 2C4.28967 2 3.28022 2.86009 3.04952 4.00242C3.03323 4.00082 3.01671 4 3 4H1.5C1.22386 4 1 4.22386 1 4.5C1 4.77614 1.22386 5 1.5 5H3ZM11.9505 10.9976C11.7198 12.1399 10.7103 13 9.5 13C8.28967 13 7.28022 12.1399 7.04952 10.9976C7.03323 10.9992 7.01671 11 7 11H1.5C1.22386 11 1 10.7761 1 10.5C1 10.2239 1.22386 10 1.5 10H7C7.01671 10 7.03323 10.0008 7.04952 10.0024C7.28022 8.8601 8.28967 8 9.5 8C10.7103 8 11.7198 8.8601 11.9505 10.0024C11.9668 10.0008 11.9833 10 12 10H13.5C13.7761 10 14 10.2239 14 10.5C14 10.7761 13.7761 11 13.5 11H12C11.9833 11 11.9668 10.9992 11.9505 10.9976ZM8 10.5C8 9.67157 8.67157 9 9.5 9C10.3284 9 11 9.67157 11 10.5C11 11.3284 10.3284 12 9.5 12C8.67157 12 8 11.3284 8 10.5Z"],
+};
+// An inline svg of one Radix icon, drawn at `size` px; `flip` mirrors it (redo is undo mirrored).
+const rx=(name,size=18,flip=false)=>`<svg width="${size}" height="${size}" viewBox="0 0 15 15" aria-hidden="true"${flip?' style="transform:scaleX(-1)"':''}>${RADIX[name].map(d=>`<path d="${d}" fill="currentColor" fill-rule="evenodd" clip-rule="evenodd"/>`).join('')}</svg>`;
 /* ---------- look ---------- */
 const css=k=>getComputedStyle(document.documentElement).getPropertyValue(k).trim();
 let BG,FG,DIM,FAINT,SEL,BAD,HOT,READ,PAD;
@@ -1232,7 +1252,7 @@ const G={
     const p0=screenToWorld(s0),k={...o};let note=o.f200?Math.round(stringMidi(o)):0;
     return {o,move(s){const q=screenToWorld(s),dx=q.x-p0.x,dy=q.y-p0.y;if(!end)trackScrap(s);
         if(end!==2){o.x1=k.x1+dx;o.y1=k.y1+dy}if(end!==1){o.x2=k.x2+dx;o.y2=k.y2+dy}
-        if(o.f200&&end){const m=Math.round(stringMidi(o));if(m!==note){note=m;buzz(3);audition(o,true)}}},
+        if(o.f200&&end){const m=Math.round(stringMidi(o));if(m!==note){note=m;buzz(3)}}},
       up(){if(end)changed();else endScrap(type,o)},tap(){choose(type,o,true)},dbl(s){focus(type,o,s)}};
   },
   belt(b){return {o:b,move:trackScrap,up(){endScrap('belt',b)},tap(){b.cross=b.cross?0:1;buzz(8);changed(true)}}},
@@ -1379,12 +1399,15 @@ document.addEventListener('keydown',e=>{
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&ac&&ac.state!=='running')ac.resume()});
 addEventListener('resize',resize);
 function armPart(kind){ui.armed=kind;cv.style.cursor=kind?'crosshair':''}
-const BRUSH_DEFAULT={p:1,v:1,len:1},EU_DEFAULT={ring:0,k:3,rot:0},brush={...BRUSH_DEFAULT},eu={...EU_DEFAULT};
+const BRUSH_DEFAULT={p:1,v:1},EU_DEFAULT={ring:0,k:3,rot:0},brush={...BRUSH_DEFAULT},eu={...EU_DEFAULT};
 
 const dotAt=(t,ring,a)=>t.dots.findIndex(o=>o.ring===ring&&Math.abs(wrap(o.a-a+Math.PI)-Math.PI)<1e-6);
 function setDot(t,cell,on){const i=dotAt(t,cell.ring,cell.a);if(on&&i<0)t.dots.push({len:1,...cell});else if(!on&&i>=0)t.dots.splice(i,1)}
 
 /* ---------- roll: the disc unwrapped into a strip, time left to right ---------- */
+// The roll's preview: one voice, cut by the next preview and damped when the press ends, after at least `min` s.
+let preview=null;
+function previewOff(min=.18){if(!preview||!ac)return;damp(preview.key,Math.max(ac.currentTime,preview.at+min));preview=null}
 const NOTE_NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 const MIDI_NOTES=Array.from({length:97},(_,i)=>i+12);
 const noteName=m=>NOTE_NAMES[m%12]+(Math.floor(m/12)-1);
@@ -1411,7 +1434,7 @@ function rollCell(e){
   if(col<0||col>=t.div||row<0||row>=trackRings(t))return null;
   return {col,ring:trackRings(t)-1-row,a:colAngle(roll.c,col)};
 }
-const pin=cell=>({ring:cell.ring,a:cell.a,p:brush.p,v:brush.v,len:brush.len});
+const pin=cell=>({ring:cell.ring,a:cell.a,p:brush.p,v:brush.v,len:1});
 // The note whose span, head column onward and wrapping round the disc, covers this cell.
 const noteAt=(c,col,ring)=>{const n=c.track.div;return c.track.dots.find(d=>d.ring===ring&&((col-rollCol(c,d))%n+n)%n<d.len)||null};
 const sameCell=(a,b)=>a.ring===b.ring&&Math.abs(wrap(a.a-b.a+Math.PI)-Math.PI)<1e-6;
@@ -1440,6 +1463,11 @@ function pasteClip(c){
   for(const q of rollClip){const d={ring:Math.min(q.ring,trackRings(t)-1),a:colAngle(c,(at+q.dc)%t.div),p:q.p,v:q.v,len:q.len};t.dots.push(d);rollSel.add(d)}
   settleSel(t);rollEdit();
 }
+// Duplicate, as FL's ctrl+B: a copy of the selection right after it, selected in its place.
+function dupSel(c){
+  const t=c.track,sel=selPins(t);if(!sel.length)return;const cols=sel.map(d=>rollCol(c,d)+d.len),span=Math.max(...cols)-Math.min(...sel.map(d=>rollCol(c,d)));
+  const copies=sel.map(d=>({...d,a:wrap(d.a-rollDir(c)*span*TAU/t.div)}));t.dots.push(...copies);rollSel.clear();for(const d of copies)rollSel.add(d);settleSel(t);rollEdit();
+}
 function brushSel(t,k){const sel=selPins(t);if(!sel.length)return;for(const d of sel)d[k]=brush[k];changed()}
 // Keys go to the roll while it has focus or a selection; part keys stay off the canvas then.
 function rollKey(e){
@@ -1448,8 +1476,7 @@ function rollKey(e){
   const k=e.key.toLowerCase();
   if(e.ctrlKey||e.metaKey){
     const op={c:()=>copySel(c),x:()=>{if(copySel(c))deleteSel(t)},v:()=>pasteClip(c),a:()=>{for(const d of t.dots)rollSel.add(d)},
-      b:()=>{const sel=selPins(t);if(!sel.length)return;const cols=sel.map(d=>rollCol(c,d)+d.len),span=Math.max(...cols)-Math.min(...sel.map(d=>rollCol(c,d)));
-        const copies=sel.map(d=>({...d,a:wrap(d.a-rollDir(c)*span*TAU/t.div)}));t.dots.push(...copies);rollSel.clear();for(const d of copies)rollSel.add(d);settleSel(t);rollEdit()}}[k];
+      b:()=>dupSel(c)}[k];
     if(!op||e.altKey)return false;e.preventDefault();op();return true;
   }
   const arrow={arrowleft:[-1,0],arrowright:[1,0],arrowup:[0,1],arrowdown:[0,-1]}[k];
@@ -1492,6 +1519,21 @@ function drawRoll(){
   for(const p of readerPlayheads(c)){x.strokeStyle=hot(p.rd.flash,READ,x);x.beginPath();x.moveTo(L+p.u*gw,0);x.lineTo(L+p.u*gw,g.H);x.stroke();x.globalAlpha=1}
   const m=roll.marquee;
   if(m){x.lineWidth=1;x.strokeStyle=SEL;x.setLineDash([5,4]);x.strokeRect(L+m.x0*g.cw+.5,m.y0*RH+.5,(m.x1-m.x0)*g.cw,(m.y1-m.y0)*RH);x.setLineDash([])}
+  if(roll.lane)drawLane(c,g);
+}
+const LANE_H=56;
+function drawLane(c,g){
+  const t=c.track,ln=roll.lane,L=roll.label,x=ln.getContext('2d');
+  ln.parentElement.style.width=g.W+'px';
+  if(ln.width!==g.W*dpr||ln.height!==LANE_H*dpr){ln.width=g.W*dpr;ln.height=LANE_H*dpr;ln.style.width=g.W+'px';ln.style.height=LANE_H+'px'}
+  x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle=BG;x.fillRect(0,0,g.W,LANE_H);
+  x.lineWidth=1;for(let k=0;k<=t.div;k++){x.strokeStyle=k%4?FAINT:DIM;x.beginPath();x.moveTo(L+k*g.cw+.5,0);x.lineTo(L+k*g.cw+.5,LANE_H);x.stroke()}
+  const bw=clamp(Math.round(g.cw*.3),3,10),some=rollSel.size>0;
+  for(const d of t.dots){
+    if(d.ring>=trackRings(t))continue;const on=rollSel.has(d),h=Math.max(2,d.v*(LANE_H-8)),bx=L+rollCol(c,d)*g.cw+(g.cw-bw)/2;
+    x.globalAlpha=some&&!on?.4:1;x.fillStyle=on?SEL:FG;x.fillRect(bx,LANE_H-4-h,bw,h);x.fillRect(bx-2,LANE_H-4-h,bw+4,2);
+  }
+  x.globalAlpha=1;
 }
 // A note's end in columns from the strip's left edge; a note that wraps past the last column ends where it wraps to.
 function rollEnd(c,d){const n=c.track.div,e=rollCol(c,d)+d.len;return e>n?e-n:e}
@@ -1511,20 +1553,31 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     keys.style.cssText='position:sticky;left:0;z-index:1;flex-shrink:0;touch-action:pan-y';
     cv2.style.marginLeft=-label+'px';cv2.style.flexShrink='0';
     box.replaceChildren(el('div',{style:'display:flex'},keys,cv2));
-    keys.onpointerdown=e=>{const ring=trackRings(t)-1-Math.floor((e.clientY-keys.getBoundingClientRect().top)/roll.row);if(ring>=0&&ring<trackRings(t))sound(discReader(c),ringNote(t,ring),c.id*128+ring)};
   }
-  roll={cv:cv2,keys,box,c,row:Math.round(row*rollZoom),row0:row,label,minCell,marquee:null,hover:null,grabbed:null,status:null};
+  // Touch builds get a velocity lane under the strip, as FL Mobile's: a bar per note at its start column. Drag on it
+  // to set the bars under the finger; with a selection, only selected notes there change.
+  const lane=keys?el('canvas'):null;
+  if(lane){
+    lane.style.cssText=`display:block;flex-shrink:0;touch-action:none;margin-left:${-label}px`;
+    const tag=el('div',{textContent:'vel',style:`position:sticky;left:0;z-index:1;flex-shrink:0;width:${label}px;display:grid;place-items:center;color:var(--dim);font-size:11px;background:var(--bg)`});
+    box.append(el('div',{style:'display:flex;position:sticky;bottom:0;z-index:2;background:var(--bg);border-top:1px solid var(--line)'},tag,lane));
+  }
+  roll={cv:cv2,keys,lane,box,c,row:Math.round(row*rollZoom),row0:row,label,minCell,marquee:null,hover:null,grabbed:null,status:null};
   cv2.onpointerleave=e=>{if(e.pointerType!=='touch'&&roll.hover){roll.hover=null;drawRoll()}};
   if(rollSelOf!==c){rollSel.clear();rollAnchor=null;rollSelOf=c}
   // A press: ctrl/cmd draws a box (a click toggles one pin), a selected pin drags the set,
   // anything else clears a selection, or paints when there is none.
   // FL Studio's draw tool: click adds a note and drags it into place; a note drags to move, its right edge
   // (cursor ↔) drags to resize, and resizing a selected note stretches the whole selection. Unlike FL, a new note
-  // takes the brush length, never the length of the last note touched. A finger has no hover, so on touch only a
+  // is always one step long, never the length of the last note touched. A finger has no hover, so on touch only a
   // selected note shows its grip and resizes: tap a note to select it, then drag the tab on its right end.
+  // On touch a press on empty grid waits: a tap adds a note, a drag adds one and slides it, and a hold (380 ms)
+  // draws a selection box instead. A note sounds while it is placed, moved to a new pitch or resized, and stops
+  // when the finger or button lifts; each new sound cuts the last.
   // Ctrl+click selects, ctrl+drag boxes, ctrl+shift adds or removes, ctrl+click on empty deselects, shift+drag
   // moves a copy, right-click erases, and the wheel over a note sets its velocity.
-  const n=t.div;
+  // A box takes every note it touches, as FL's marquee does: start column to end, one row tall.
+  const inBox=(d,x0,x1,y0,y1)=>{const col=rollU(c,d.a)*t.div,row=trackRings(t)-1-d.ring;return d.ring<trackRings(t)&&col<x1&&col+d.len>x0&&row<y1&&row+1>y0};
   // The grip nearest the pointer, if within reach: in px, a mouse takes the last 8 px of any note and 4 px past it;
   // a finger takes a selected note's last 14 px and 26 px past it, and half a row above or below.
   const grip=(at,touch)=>{
@@ -1537,9 +1590,13 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     }
     return best;
   };
-  const play=ring=>sound(discReader(c),ringNote(t,ring),c.id*128+ring);
+  const play=ring=>{previewOff(0);sound(discReader(c),ringNote(t,ring),c.id*128+127);preview={key:c.id*128+127,at:ac?ac.currentTime:0}};
+  if(keys){
+    keys.onpointerdown=e=>{const ring=trackRings(t)-1-Math.floor((e.clientY-keys.getBoundingClientRect().top)/roll.row);if(ring>=0&&ring<trackRings(t))play(ring)};
+    keys.onpointerup=keys.onpointercancel=()=>previewOff();
+  }
   const erase=cell=>{const d=cell&&noteAt(c,cell.col,cell.ring);if(d){t.dots.splice(t.dots.indexOf(d),1);rollSel.delete(d)}};
-  const moveSet=(set,cell)=>({from:set.map(d=>[d,d.a,d.ring]),col:cell.col,ring:cell.ring,moved:false});
+  const moveSet=(set,cell)=>({from:set.map(d=>[d,d.a,d.ring]),col:cell.col,ring:cell.ring,moved:false,heard:set[0]?.ring});
   let press=null;
   cv2.oncontextmenu=e=>e.preventDefault();
   const down=e=>{
@@ -1554,13 +1611,13 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     if(g0){const set=rollSel.has(g0)?selPins(t):[g0];press={stretch:g0,x0:at.x,set:set.map(d=>[d,d.len])};roll.grabbed=g0;buzz(4);return}
     if(hit){
       if(!rollSel.has(hit)){rollSel.clear();rollSel.add(hit)}
-      let set=selPins(t);
+      let set=selPins(t);play(hit.ring);
       if(e.shiftKey){set=set.map(d=>({...d}));t.dots.push(...set);rollSel.clear();for(const d of set)rollSel.add(d)}
       press=moveSet(set,cell);return;
     }
     if(rollSel.size){rollSel.clear();press=null;return}
     if(!cell){press=null;return}
-    const d={...pin(cell),len:brush.len};t.dots.push(d);play(cell.ring);rollSel.clear();rollSel.add(d);
+    const d=pin(cell);t.dots.push(d);play(cell.ring);rollSel.clear();rollSel.add(d);
     press={...moveSet([d],cell),fresh:true};
   };
   const move=e=>{
@@ -1569,18 +1626,19 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
       cv2.style.cursor=gp?'ew-resize':hit?'move':'crosshair';if(roll.hover!==gp){roll.hover=gp;drawRoll()}return}
     if(roll.marquee){Object.assign(roll.marquee,{x1:at.x,y1:at.y});return}
     if(press.erase){erase(cell);return}
-    if(press.from){const dc=Math.floor(at.x)-press.col,dr=trackRings(t)-1-Math.floor(at.y)-press.ring;if(dc||dr||press.moved){press.moved=true;moveSel(c,press.from,dc,dr)}return}
+    if(press.from){const dc=Math.floor(at.x)-press.col,dr=trackRings(t)-1-Math.floor(at.y)-press.ring;if(dc||dr||press.moved){press.moved=true;moveSel(c,press.from,dc,dr)}
+      const lead=press.from[0][0];if(lead.ring!==press.heard){press.heard=lead.ring;play(lead.ring)}return}
     if(press.stretch){const delta=Math.round(at.x-press.x0),was=press.stretch.len;
-      for(const[d,len0]of press.set)d.len=clamp(len0+delta,1,n);
-      if(press.stretch.len!==was){press.moved=true;buzz(3)}roll.status=`note length: ${press.stretch.len} step${press.stretch.len>1?'s':''}`}
+      for(const[d,len0]of press.set)d.len=clamp(len0+delta,1,t.div);
+      if(press.stretch.len!==was){press.moved=true;buzz(3);play(press.stretch.ring)}roll.status=`note length: ${press.stretch.len} step${press.stretch.len>1?'s':''}`}
   };
   const up=()=>{
-    const p=press,m=roll.marquee;press=null;roll.marquee=null;roll.grabbed=null;roll.status=null;if(!p)return;
+    const p=press,m=roll.marquee;press=null;roll.marquee=null;roll.grabbed=null;roll.status=null;previewOff();if(!p)return;
     if(m){
       const g=rollGeom(),x0=Math.min(m.x0,m.x1),x1=Math.max(m.x0,m.x1),y0=Math.min(m.y0,m.y1),y1=Math.max(m.y0,m.y1);
       if(Math.hypot((x1-x0)*g.cw,(y1-y0)*roll.row)<4){if(p.hit&&!rollSel.delete(p.hit))rollSel.add(p.hit);return}
       if(!p.add)rollSel.clear();
-      for(const d of t.dots){const px=rollU(c,d.a)*n+.5,py=trackRings(t)-d.ring-.5;if(px>=x0&&px<=x1+d.len-1&&py>=y0&&py<=y1)rollSel.add(d)}
+      for(const d of t.dots)if(inBox(d,x0,x1,y0,y1))rollSel.add(d)
       return;
     }
     if(p.from){if(p.moved||p.fresh){settleSel(t);if(p.fresh)rollSel.clear();changed()}return}
@@ -1588,7 +1646,10 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
   };
   // Touch: one finger edits as the mouse does and a double tap deletes a note. A second finger undoes what the
   // first began and takes over: pinch zooms the strip, drag scrolls it, and the sheet scrolls once the strip runs out.
-  const touches=new Map();let two=null,lastTap=null;
+  const touches=new Map();let two=null,lastTap=null,hold=null;
+  const dropHold=()=>{if(hold){clearTimeout(hold.timer);hold=null}};
+  // The press on empty grid becomes what it was waiting to be: a note (tap or drag) or, held, a selection box.
+  const settleHold=()=>{const h=hold;dropHold();down(h.e)};
   const undoPress=()=>{const p=press;press=null;roll.marquee=null;roll.grabbed=roll.status=null;if(!p)return;
     if(p.fresh){for(const[d]of p.from){t.dots.splice(t.dots.indexOf(d),1);rollSel.delete(d)}return}
     if(p.from)for(const[d,a,ring]of p.from){d.a=a;d.ring=ring}
@@ -1597,7 +1658,7 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
   const sheet=()=>{for(let e=box.parentElement;e;e=e.parentElement)if(e.scrollHeight>e.clientHeight&&/auto|scroll/.test(getComputedStyle(e).overflowY))return e;return null};
   const pair=()=>{const[a,b]=touches.values();return {d:Math.hypot(a.x-b.x,a.y-b.y)||1,x:(a.x+b.x)/2,y:(a.y+b.y)/2}};
   const startTwo=()=>{
-    undoPress();const p=pair(),r=box.getBoundingClientRect(),g=rollGeom(),s=sheet();
+    dropHold();undoPress();const p=pair(),r=box.getBoundingClientRect(),g=rollGeom(),s=sheet();
     two={...p,z:rollZoom,left:r.left,top:r.top,col:(box.scrollLeft+p.x-r.left-roll.label)/g.cw,row:(box.scrollTop+p.y-r.top)/roll.row,sheet:s,sheetTop:s?s.scrollTop:0};
   };
   const moveTwo=()=>{
@@ -1613,29 +1674,50 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     if(touches.size>2||two)return;
     const cell=rollCell(e),hit=cell&&noteAt(c,cell.col,cell.ring);
     if(hit&&lastTap?.d===hit&&performance.now()-lastTap.t<400&&!grip(rollAt(e),true)){lastTap=null;t.dots.splice(t.dots.indexOf(hit),1);rollSel.delete(hit);buzz(12);rollEdit();return}
+    if(cell&&!hit&&!grip(rollAt(e),true)){
+      const at=rollAt(e);dropHold();
+      hold={e,x:e.clientX,y:e.clientY,timer:setTimeout(()=>{hold=null;rollSel.clear();press={hit:null,add:false};
+        roll.marquee={x0:at.x,y0:at.y,x1:at.x,y1:at.y};roll.status='select notes: 0';buzz(10)},380)};
+      return;
+    }
     down(e);
   };
   cv2.onpointermove=e=>{
     if(e.pointerType!=='touch')return move(e);
     const f=touches.get(e.pointerId);if(!f)return;f.x=e.clientX;f.y=e.clientY;
     if(two){if(touches.size>=2)moveTwo();return}
+    if(hold){if(Math.hypot(e.clientX-hold.x,e.clientY-hold.y)<8)return;settleHold()}
     move(e);
+    if(roll.marquee&&press){const m=roll.marquee,x0=Math.min(m.x0,m.x1),x1=Math.max(m.x0,m.x1),y0=Math.min(m.y0,m.y1),y1=Math.max(m.y0,m.y1);
+      roll.status='select notes: '+t.dots.filter(d=>inBox(d,x0,x1,y0,y1)).length}
   };
   cv2.onpointerup=cv2.onpointercancel=e=>{
     if(e.pointerType!=='touch')return up();
     if(!touches.delete(e.pointerId))return;
     if(two){if(!touches.size)two=null;return}
+    if(hold){if(e.type==='pointercancel'){dropHold();return}settleHold()}
     const p=press;up();
     lastTap=p&&p.from&&!p.moved?{d:p.from[0][0],t:performance.now()}:null;
   };
   cv2.onwheel=e=>{const cell=rollCell(e),hit=cell&&noteAt(c,cell.col,cell.ring);if(!hit)return;e.preventDefault();
     for(const d of rollSel.has(hit)?selPins(t):[hit])d.v=clamp(+(d.v-Math.sign(e.deltaY)*.05).toFixed(2),.05,1);changed()};
+  if(lane){
+    let painting=false;
+    const setVel=e=>{
+      const r=lane.getBoundingClientRect(),g=rollGeom(),col=Math.floor((e.clientX-r.left-roll.label)/g.cw),v=clamp(+(1-(e.clientY-r.top-4)/(LANE_H-8)).toFixed(2),.05,1);
+      let at=t.dots.filter(d=>d.ring<trackRings(t)&&rollCol(c,d)===col);if(at.some(d=>rollSel.has(d)))at=at.filter(d=>rollSel.has(d));
+      roll.status=`velocity: ${Math.round(v*100)}%`;if(!at.length)return;
+      for(const d of at)d.v=v;painting=true;drawRoll();
+    };
+    lane.onpointerdown=e=>{lane.setPointerCapture(e.pointerId);painting=false;setVel(e)};
+    lane.onpointermove=e=>{if(e.buttons||e.pointerType==='touch'&&lane.hasPointerCapture(e.pointerId))setVel(e)};
+    lane.onpointerup=lane.onpointercancel=()=>{roll.status=null;if(painting)changed();painting=false};
+  }
   const shift=k=>()=>{const s=rollDir(c)*TAU/t.div;for(const d of t.dots)d.a=wrap(d.a-k*s);changed()};
   strip.append(box);
   tools.append(el('button',{textContent:'shift <',onclick:shift(-1)}),el('button',{textContent:'shift >',onclick:shift(1)}));
   numRow(tools,'brush p',0,1,.01,...bind(brush,'p',()=>brushSel(t,'p')),BRUSH_DEFAULT.p);
   numRow(tools,'brush vel',0,1,.01,...bind(brush,'v',()=>brushSel(t,'v')),BRUSH_DEFAULT.v);
-  numRow(tools,'brush len',1,96,1,...bind(brush,'len',()=>brushSel(t,'len')),BRUSH_DEFAULT.len);
   for(const[k,max]of [['ring',35],['k',96],['rot',95]])numRow(tools,'euclid '+k,0,max,1,...bind(eu,k),EU_DEFAULT[k]);
   tools.append(el('button',{textContent:'euclid fill',onclick:()=>{
     const n=t.div,ring=Math.min(eu.ring,trackRings(t)-1);t.dots=t.dots.filter(d=>d.ring!==ring);
@@ -1732,7 +1814,7 @@ function select(type,o){sel=type?{type,o}:null;group=[];if(inspectorLive())build
 const span=(a,b)=>Array.from({length:b-a+1},(_,i)=>String(a+i));
 const PITCH_KEYS=new Set(['note','octave','semi']);
 function voiceRows(f,owner,withNote){
-  const v=owner.voice,retune=()=>{audition(owner,true);changed()};
+  const v=owner.voice,retune=()=>changed();
   selRow(f,'kind',Object.keys(VOICES),()=>v.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense});buildInspector();changed()});
   for(const[k,l,a,b,s]of [...VOICE_DEFS[v.kind],...COMMON_DEFS]){
     if(k==='note'&&!withNote)continue;
@@ -1759,7 +1841,7 @@ function buildInspector(){
     roRow(f,'ratio',()=>o.driver?`${(o.w/o.driver.w||0).toFixed(4)} of c${o.driver.id}`:'-');
     roRow(f,'state',()=>o.jam?(W.cogs.filter(c=>c.driver===o.driver&&c.motor).length>1?'JAM: two motors':'JAM'):o.w?'turning':'idle');
     if(o.track){
-      const t=o.track,retune=()=>{trimDots(t);audition(o,true);changed()};
+      const t=o.track,retune=()=>{trimDots(t);changed()};
       selRow(f,'root',NOTE_NAMES.map((_,i)=>String(i)),()=>String(t.root),x=>{t.root=+x;retune()},i=>NOTE_NAMES[i]);
       selRow(f,'octave',OCTAVES.map(String),()=>String(t.octave),x=>{t.octave=+x;retune()});
       selRow(f,'range',RANGES.map(String),()=>String(t.range),x=>{t.range=+x;retune()},r=>`${r} octave${r>1?'s':''} · ${r*SCALES[t.scale].length} lanes`);
@@ -1787,7 +1869,7 @@ function buildInspector(){
     selRow(f,'reader mode',READER_MODES,()=>readerMode(o),mode=>{setReaderMode(o,mode);buildInspector();changed()});
     if(o.tines){
       numRow(f,'comb tines',1,36,1,...bind(o,'tines',changed),12);
-      selRow(f,'comb note',MIDI_NOTES,()=>o.combBase,v=>{o.combBase=+v;audition(o,true);changed()},noteName);
+      selRow(f,'comb note',MIDI_NOTES,()=>o.combBase,v=>{o.combBase=+v;changed()},noteName);
       selRow(f,'comb scale',Object.keys(SCALES),()=>o.combScale,v=>{o.combScale=v;changed()});
     }
     roRow(f,'last note',()=>o.lastMidi==null?'-':noteName(o.lastMidi));
@@ -1856,7 +1938,7 @@ function drawChrome(){if(ui.carry&&ui.carry.ghost)drawGhost(ui.carry.ghost);sync
 const railButtons={};
 function railButton(id,label,key,title,act,icon){
   const b=el('button',{title:`${title} (${key})`,onclick:act,onmousedown:e=>e.preventDefault()});
-  if(icon)b.append(icon);b.append(el('span',{textContent:label}),el('kbd',{textContent:key}));
+  if(typeof icon==='string')b.append(el('i',{className:'rx',innerHTML:icon}));else if(icon)b.append(icon);b.append(el('span',{textContent:label}),el('kbd',{textContent:key}));
   b.dataset.rail=id;rail.append(b);railButtons[id]=b;return b;
 }
 function partIcon(kind){
@@ -1874,21 +1956,21 @@ function syncChrome(){
   bar.classList.toggle('scrap',ui.scrap);
   for(const kind of PARTS)railButtons[kind].classList.toggle('on',ui.armed===kind);
   railButtons.select.classList.toggle('on',!ui.armed);
-  railButtons.panel.firstChild.textContent=open?'panel ›':'‹ panel';
-  railButtons.pause.firstChild.textContent=clock.paused?'play':'pause';railButtons.pause.classList.toggle('on',clock.paused);
+  railButtons.panel.querySelector('span').textContent=open?'panel ›':'‹ panel';
+  railButtons.pause.querySelector('span').textContent=clock.paused?'play':'pause';railButtons.pause.querySelector('.rx').innerHTML=rx(clock.paused?'Play':'Pause');railButtons.pause.classList.toggle('on',clock.paused);
   railButtons.undo.disabled=!edits.past.length;railButtons.redo.disabled=!edits.future.length;
 }
 function mount(){
   buildPanel();
-  railButton('panel','panel','?','show or hide the panel',()=>togglePanel()).classList.add('toggle');
+  railButton('panel','panel','?','show or hide the panel',()=>togglePanel(),rx('MixerHorizontal')).classList.add('toggle');
   for(const kind of PARTS)railButton(kind,kind,KEY_OF[kind],'place a '+kind,()=>armPart(ui.armed===kind?null:kind),partIcon(kind));
   rail.append(el('hr'));
-  railButton('select','select','s','select and move: disarm the part',()=>armPart(null));
-  railButton('undo','undo','ctrl z','undo',()=>edits.undo());
-  railButton('redo','redo','ctrl ⇧z','redo',()=>edits.redo());
-  railButton('pause','pause','space','pause or play',()=>setPaused(!clock.paused));
-  railButton('fit','fit','0','fit the machine in view',flyFit);
-  railButton('delete','delete','del','delete the selection',removeSel);
+  railButton('select','select','s','select and move: disarm the part',()=>armPart(null),rx('CursorArrow'));
+  railButton('undo','undo','ctrl z','undo',()=>edits.undo(),rx('Reset'));
+  railButton('redo','redo','ctrl ⇧z','redo',()=>edits.redo(),rx('Reset',18,true));
+  railButton('pause','pause','space','pause or play',()=>setPaused(!clock.paused),rx('Pause'));
+  railButton('fit','fit','0','fit the machine in view',flyFit,rx('EnterFullScreen'));
+  railButton('delete','delete','del','delete the selection',removeSel,rx('Trash'));
 }
 const PROBE={stage,
   get open(){return bar.classList.contains('open')},
