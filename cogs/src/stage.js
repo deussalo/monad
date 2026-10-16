@@ -651,11 +651,20 @@ function drawRoll(){
     x.fillStyle=hot(d.flash,on?SEL:FG,x);x.globalAlpha*=.3+.7*d.p;
     x.fillRect(px,top,Math.min(w,L+gw-px),hgt);if(px+w>L+gw)x.fillRect(L,top,px+w-L-gw,hgt);x.globalAlpha=1;
     if(on){x.strokeStyle=SEL;x.lineWidth=1;x.strokeRect(px+.5,(trackRings(t)-1-d.ring)*RH+1.5,Math.min(w,L+gw-px)-1,RH-2)}
+    if(on||d===roll.hover)drawGrip(x,L+rollEnd(c,d)*g.cw,(trackRings(t)-1-d.ring)*RH,RH,g.cw,d===roll.grabbed);
   }
   x.lineWidth=2;
   for(const p of readerPlayheads(c)){x.strokeStyle=hot(p.rd.flash,READ,x);x.beginPath();x.moveTo(L+p.u*gw,0);x.lineTo(L+p.u*gw,g.H);x.stroke();x.globalAlpha=1}
   const m=roll.marquee;
   if(m){x.lineWidth=1;x.strokeStyle=SEL;x.setLineDash([5,4]);x.strokeRect(L+m.x0*g.cw+.5,m.y0*RH+.5,(m.x1-m.x0)*g.cw,(m.y1-m.y0)*RH);x.setLineDash([])}
+}
+// A note's end in columns from the strip's left edge; a note that wraps past the last column ends where it wraps to.
+function rollEnd(c,d){const n=c.track.div,e=rollCol(c,d)+d.len;return e>n?e-n:e}
+// The length grip: a tab on the note's right end, drawn on selected notes and on the note under a mouse at its edge.
+function drawGrip(x,ex,top,RH,cw,held){
+  const tw=clamp(Math.round(cw*.35),4,12),th=Math.max(4,Math.round(RH*.72)),ty=top+(RH-th)/2,x0=Math.round(ex-tw*.4);
+  x.fillStyle=held?HOT:SEL;x.beginPath();x.roundRect?x.roundRect(x0,ty,tw,th,Math.min(3,tw/2)):x.rect(x0,ty,tw,th);x.fill();
+  if(tw>=8&&th>=12){x.fillStyle=BG;for(const k of [-1,1])x.fillRect(x0+tw/2+k*1.5-.5,ty+th*.3,1,th*.4)}
 }
 // The strip goes into `strip`, its controls into `tools`; row and label are in CSS px.
 function rollSection(c,{strip,tools,row,label,minCell=6}){
@@ -669,16 +678,30 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     box.replaceChildren(el('div',{style:'display:flex'},keys,cv2));
     keys.onpointerdown=e=>{const ring=trackRings(t)-1-Math.floor((e.clientY-keys.getBoundingClientRect().top)/roll.row);if(ring>=0&&ring<trackRings(t))sound(discReader(c),ringNote(t,ring),c.id*128+ring)};
   }
-  roll={cv:cv2,keys,box,c,row:Math.round(row*rollZoom),row0:row,label,minCell,marquee:null};
+  roll={cv:cv2,keys,box,c,row:Math.round(row*rollZoom),row0:row,label,minCell,marquee:null,hover:null,grabbed:null,status:null};
+  cv2.onpointerleave=e=>{if(e.pointerType!=='touch'&&roll.hover){roll.hover=null;drawRoll()}};
   if(rollSelOf!==c){rollSel.clear();rollAnchor=null;rollSelOf=c}
   // A press: ctrl/cmd draws a box (a click toggles one pin), a selected pin drags the set,
   // anything else clears a selection, or paints when there is none.
-  // FL Studio's draw tool: click adds a note of the last length and drags it into place; a note drags to move,
-  // its right edge (cursor ↔) drags to resize, and resizing a selected note stretches the whole selection.
+  // FL Studio's draw tool: click adds a note and drags it into place; a note drags to move, its right edge
+  // (cursor ↔) drags to resize, and resizing a selected note stretches the whole selection. Unlike FL, a new note
+  // takes the brush length, never the length of the last note touched. A finger has no hover, so on touch only a
+  // selected note shows its grip and resizes: tap a note to select it, then drag the tab on its right end.
   // Ctrl+click selects, ctrl+drag boxes, ctrl+shift adds or removes, ctrl+click on empty deselects, shift+drag
   // moves a copy, right-click erases, and the wheel over a note sets its velocity.
-  const lastCol=d=>(rollCol(c,d)+d.len-1)%t.div,n=t.div;
-  const edge=(at,cell,hit)=>!!hit&&cell.col===lastCol(hit)&&at.x%1>.6;
+  const n=t.div;
+  // The grip nearest the pointer, if within reach: in px, a mouse takes the last 8 px of any note and 4 px past it;
+  // a finger takes a selected note's last 14 px and 26 px past it, and half a row above or below.
+  const grip=(at,touch)=>{
+    const cw=rollGeom().cw,R=trackRings(t);let best=null,bd=Infinity;
+    for(const d of touch?selPins(t):t.dots){
+      if(d.ring>=R)continue;
+      const dx=(at.x-rollEnd(c,d))*cw,dy=Math.abs(at.y-(R-1-d.ring+.5))*roll.row,inner=Math.min(touch?14:8,d.len*cw*.45);
+      if(dx<-inner||dx>(touch?26:4)||dy>roll.row*(touch?1:.5))continue;
+      const score=Math.abs(dx)+dy;if(score<bd){bd=score;best=d}
+    }
+    return best;
+  };
   const play=ring=>sound(discReader(c),ringNote(t,ring),c.id*128+ring);
   const erase=cell=>{const d=cell&&noteAt(c,cell.col,cell.ring);if(d){t.dots.splice(t.dots.indexOf(d),1);rollSel.delete(d)}};
   const moveSet=(set,cell)=>({from:set.map(d=>[d,d.a,d.ring]),col:cell.col,ring:cell.ring,moved:false});
@@ -692,7 +715,8 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
       if(!hit&&!e.shiftKey)rollSel.clear();
       press={hit,add:e.shiftKey};roll.marquee={x0:at.x,y0:at.y,x1:at.x,y1:at.y};return;
     }
-    if(hit&&edge(at,cell,hit)){const set=rollSel.has(hit)?selPins(t):[hit];press={stretch:hit,head:rollCol(c,hit),set:set.map(d=>[d,d.len])};return}
+    const g0=grip(at,e.pointerType==='touch');
+    if(g0){const set=rollSel.has(g0)?selPins(t):[g0];press={stretch:g0,x0:at.x,set:set.map(d=>[d,d.len])};roll.grabbed=g0;buzz(4);return}
     if(hit){
       if(!rollSel.has(hit)){rollSel.clear();rollSel.add(hit)}
       let set=selPins(t);
@@ -706,15 +730,17 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
   };
   const move=e=>{
     const at=rollAt(e),cell=rollCell(e);
-    if(!press){const hit=cell&&noteAt(c,cell.col,cell.ring);cv2.style.cursor=hit?(edge(at,cell,hit)?'ew-resize':'move'):'crosshair';return}
+    if(!press){const hit=cell&&noteAt(c,cell.col,cell.ring),gp=e.pointerType==='touch'?null:grip(at,false);
+      cv2.style.cursor=gp?'ew-resize':hit?'move':'crosshair';if(roll.hover!==gp){roll.hover=gp;drawRoll()}return}
     if(roll.marquee){Object.assign(roll.marquee,{x1:at.x,y1:at.y});return}
     if(press.erase){erase(cell);return}
     if(press.from){const dc=Math.floor(at.x)-press.col,dr=trackRings(t)-1-Math.floor(at.y)-press.ring;if(dc||dr||press.moved){press.moved=true;moveSel(c,press.from,dc,dr)}return}
-    if(press.stretch){const len=clamp(((Math.floor(at.x)-press.head)%n+n)%n+1,1,n),delta=len-press.set.find(([d])=>d===press.stretch)[1];
-      for(const[d,len0]of press.set)d.len=clamp(len0+delta,1,n);brush.len=press.stretch.len;press.moved=true}
+    if(press.stretch){const delta=Math.round(at.x-press.x0),was=press.stretch.len;
+      for(const[d,len0]of press.set)d.len=clamp(len0+delta,1,n);
+      if(press.stretch.len!==was){press.moved=true;buzz(3)}roll.status=`note length: ${press.stretch.len} step${press.stretch.len>1?'s':''}`}
   };
   const up=()=>{
-    const p=press,m=roll.marquee;press=null;roll.marquee=null;if(!p)return;
+    const p=press,m=roll.marquee;press=null;roll.marquee=null;roll.grabbed=null;roll.status=null;if(!p)return;
     if(m){
       const g=rollGeom(),x0=Math.min(m.x0,m.x1),x1=Math.max(m.x0,m.x1),y0=Math.min(m.y0,m.y1),y1=Math.max(m.y0,m.y1);
       if(Math.hypot((x1-x0)*g.cw,(y1-y0)*roll.row)<4){if(p.hit&&!rollSel.delete(p.hit))rollSel.add(p.hit);return}
@@ -728,7 +754,7 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
   // Touch: one finger edits as the mouse does and a double tap deletes a note. A second finger undoes what the
   // first began and takes over: pinch zooms the strip, drag scrolls it, and the sheet scrolls once the strip runs out.
   const touches=new Map();let two=null,lastTap=null;
-  const undoPress=()=>{const p=press;press=null;roll.marquee=null;if(!p)return;
+  const undoPress=()=>{const p=press;press=null;roll.marquee=null;roll.grabbed=roll.status=null;if(!p)return;
     if(p.fresh){for(const[d]of p.from){t.dots.splice(t.dots.indexOf(d),1);rollSel.delete(d)}return}
     if(p.from)for(const[d,a,ring]of p.from){d.a=a;d.ring=ring}
     if(p.stretch)for(const[d,len]of p.set)d.len=len;
@@ -751,7 +777,7 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     if(touches.size===2)return startTwo();
     if(touches.size>2||two)return;
     const cell=rollCell(e),hit=cell&&noteAt(c,cell.col,cell.ring);
-    if(hit&&lastTap?.d===hit&&performance.now()-lastTap.t<400){lastTap=null;t.dots.splice(t.dots.indexOf(hit),1);rollSel.delete(hit);buzz(12);rollEdit();return}
+    if(hit&&lastTap?.d===hit&&performance.now()-lastTap.t<400&&!grip(rollAt(e),true)){lastTap=null;t.dots.splice(t.dots.indexOf(hit),1);rollSel.delete(hit);buzz(12);rollEdit();return}
     down(e);
   };
   cv2.onpointermove=e=>{

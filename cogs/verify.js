@@ -336,6 +336,57 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   check('set to start: the motor stands at angle 0', angle !== null && (angle < 1e-3 || angle > 2 * Math.PI - 1e-3), angle);
   await wait(700); await tp.tap(await centre('#to-start'), 0);
   is('pressed again later: every turning cog lands where it did the first time', await train(), first);
+
+  console.log('NOTES SHEET');
+  is('the part buttons sit bottom left, level with set-to-start', await tp.probe(() => { const r = document.querySelector('#part-bar').getBoundingClientRect(), s = document.querySelector('#to-start').getBoundingClientRect(); return [r.left < 20, Math.abs(r.top - s.top) < 1.5]; }), [true, true]);
+  const discAt = await tp.probe(() => { const c = __cogs.W.cogs.find(c => c.track), s = __cogs.toScreen(c), r = __cogs.radius(c) * __cogs.S.zoom; return { id: c.id, s: [s.x + r * .35, s.y - r * .35] }; });
+  await tp.tap(await tp.empty()); await tp.tap(discAt.s);
+  is('tap a disc: it is selected', await tp.probe(() => __cogs.sel && __cogs.sel.id), discAt.id);
+  const ed = await centre('#edit-part');
+  check('its notes button is in thumb reach, at the bottom of the screen', ed && ed[1] > 844 * .7 && ed[0] < 80, ed);
+  await tp.tap(ed);
+  is('tap it: the notes sheet opens', await tp.probe(() => [document.querySelector('#dev').hidden, document.querySelector('#dev').dataset.editor]), [false, 'notes']);
+  const trackOf = id => tp.probe(id => __cogs.W.cogs.find(c => c.id === id).track.dots.map(d => ({ ring: d.ring, len: d.len, a: +d.a.toFixed(5) })), id);
+  await tp.probe(id => { const c = __cogs.W.cogs.find(c => c.id === id); c.track.dots = []; c.track.div = 16; }, discAt.id); await wait(150);
+  const rg = await tp.probe(id => {
+    const box = document.querySelector('#inspector .roll'); box.scrollLeft = box.scrollTop = 0;
+    const cv = box.querySelectorAll('canvas')[1], r = cv.getBoundingClientRect();
+    return { x: r.left + 44, y: r.top, cw: (r.width - 44) / 16, row: 32, rows: Math.round(r.height / 32) };
+  }, discAt.id);
+  const at = (col, row) => [rg.x + col * rg.cw, rg.y + (row + .5) * rg.row];
+  await tp.tap(at(1.5, 0));
+  is('tap a cell: one note, one step long', (await trackOf(discAt.id)).map(d => d.len), [1]);
+  await tp.stroke([at(2 - 4 / rg.cw, 0), at(4 - 4 / rg.cw, 0)], { steps: 6 });
+  const slid = await trackOf(discAt.id);
+  check('drag the end of an unselected note: it moves, its length stays', slid.length === 1 && slid[0].len === 1, slid);
+  await tp.tap(at(3.5, 0), 460);
+  await tp.stroke([at(4, 0).map((v, i) => i ? v : v + 10), at(7, 0).map((v, i) => i ? v : v + 10)], { steps: 8 });
+  await tp.shot('06-notes-grip');
+  is('tap it to select, then drag its tab: three more steps', (await trackOf(discAt.id)).map(d => d.len), [4]);
+  await tp.tap(at(9.5, 2)); await tp.tap(at(9.5, 2));
+  const fresh = (await trackOf(discAt.id)).map(d => d.len).sort();
+  is('the next new note is one step, not the last length', fresh, [1, 4]);
+
+  const sheetRect = () => tp.probe(() => { const d = document.querySelector('#dev'), r = d.getBoundingClientRect(); return { top: Math.round(r.top), min: d.classList.contains('min'), hidden: d.hidden, scrim: document.querySelector('#scrim').hidden }; });
+  const grab = await centre('#grab'), open0 = await sheetRect();
+  await tp.stroke([grab, [grab[0], grab[1] + 320]], { steps: 10 }); await wait(400);
+  const tucked = await sheetRect();
+  check('drag the grab bar down: the sheet tucks to a strip, the machine is free', tucked.min && !tucked.hidden && tucked.scrim && tucked.top > 844 - 160, tucked);
+  await tp.shot('07-notes-tucked');
+  check('tucked: the notes button shows again', !!(await centre('#edit-part')), null);
+  const paused0 = await tp.probe(() => __cogs.clock.paused); await tp.glyph();
+  is('tucked: the play glyph still answers', await tp.probe(() => __cogs.clock.paused), !paused0);
+  await tp.glyph();
+  await tp.tap(await centre('#grab')); await wait(400);
+  const back = await sheetRect();
+  check('tap the grab bar: the sheet comes back up', !back.min && !back.hidden && Math.abs(back.top - open0.top) < 2, [open0, back]);
+  const grab2 = await centre('#grab');
+  await tp.stroke([grab2, [grab2[0], grab2[1] - 30]], { steps: 4 }); await wait(400);
+  is('a short drag up leaves it up', (await sheetRect()).min, false);
+  await tp.stroke([grab2, [grab2[0], grab2[1] + 320]], { steps: 10 }); await wait(400);
+  const grab3 = await centre('#grab');
+  await tp.stroke([grab3, [grab3[0], grab3[1] + 80]], { steps: 6 }); await wait(400);
+  is('drag down again from the strip: the sheet closes', (await sheetRect()).hidden, true);
   check('page errors', m.errs.length === 0 && tp.errs.length === 0, [...m.errs, ...tp.errs].slice(0, 3));
 
   console.log('BELTS, TEMPO, STRINGS, COMB, PROBABILITY, EUCLID, SHARE');

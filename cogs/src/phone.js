@@ -8,28 +8,58 @@ const offStage=s=>s.y>=shelfTop();
 function drawChrome(){const b=activeBezel();if(b)drawBezel(b);if(ui.carry&&ui.carry.ghost)drawGhost(ui.carry.ghost);drawShelf();drawGlyph();syncEditor();drawInteraction()}
 const panelShown=()=>!$('#dev').hidden,inspectorLive=panelShown;
 function togglePanel(open=$('#dev').hidden,mode=''){
-  $('#dev').dataset.editor=mode;$('#dev').hidden=$('#scrim').hidden=!open;
+  $('#dev').dataset.editor=mode;$('#dev').hidden=$('#scrim').hidden=!open;setSheetMin(false);
   if(open){syncRows();buildInspector()}
+}
+// Tucked, the sheet keeps only its top strip on screen: the machine above takes touches and keeps playing,
+// and selecting another disc or pad retitles the strip to that part.
+const sheetMin=()=>$('#dev').classList.contains('min');
+function setSheetMin(min){
+  const dev=$('#dev');dev.classList.toggle('min',min);document.body.classList.toggle('sheet-min',min&&!dev.hidden);
+  dev.style.transform='';if(min){dev.scrollTop=0;document.documentElement.style.setProperty('--peek',$('#sheet-top').offsetHeight+safeBot+'px')}
+  $('#scrim').hidden=dev.hidden||min;
+}
+function sheetDrag(){
+  const dev=$('#dev'),top=$('#sheet-top');let g=null;
+  top.onpointerdown=e=>{
+    if(e.target.closest('button'))return;
+    top.setPointerCapture(e.pointerId);const r=dev.getBoundingClientRect();
+    g={y0:e.clientY,t0:performance.now(),base:sheetMin()?r.height-top.offsetHeight-safeBot:0,h:r.height,dy:0,v:0,lt:performance.now(),ly:e.clientY};
+    dev.classList.add('dragging');
+  };
+  top.onpointermove=e=>{
+    if(!g)return;const now=performance.now();g.dy=e.clientY-g.y0;g.v=(e.clientY-g.ly)/Math.max(1,now-g.lt);g.ly=e.clientY;g.lt=now;
+    if(Math.abs(g.dy)>6)dev.style.transform=`translateY(${clamp(g.base+g.dy,0,g.h)}px)`;
+  };
+  top.onpointerup=top.onpointercancel=e=>{
+    if(!g)return;const {dy,v,base,h}=g,min=sheetMin();g=null;dev.classList.remove('dragging');
+    if(e.type==='pointercancel'){setSheetMin(min);return}
+    if(Math.abs(dy)<=6){setSheetMin(!min);buzz(6);return}
+    const fling=dy+v*180;
+    if(min){if(fling<-30)setSheetMin(false);else if(fling>40)togglePanel(false);else setSheetMin(true)}
+    else setSheetMin(base+fling>h*.3);
+    buzz(6);
+  };
 }
 function placeRoll(c,f){
   const phone=$('#dev').dataset.editor==='notes';
   rollSection(c,{strip:f,tools:f,row:phone?32:11,label:phone?44:30,minCell:phone?28:6});
   if(!phone)return;
   roll.box.style.maxHeight='48vh';roll.box.style.overflow='auto';
-  f.prepend(roll.box,el('p',{className:'roll-hint',textContent:'tap: add · drag: move · edge: length · double tap: delete · two fingers: scroll, pinch: zoom'}));
+  f.prepend(roll.box,el('p',{className:'roll-hint',textContent:'tap: add or select · drag: move · tap a note, then drag its tab: length · double tap: delete · two fingers: scroll, pinch: zoom'}));
 }
 const svgIcon=d=>`<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="${d}"/></svg>`;
 const PART_BAR_ICON={notes:'<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v16H3zM7.5 13v7M12 13v7M16.5 13v7" fill="none" stroke="currentColor" stroke-width="1.6"/>'+'<path d="M6 4h3v9H6zM10.5 4h3v9h-3zM15 4h3v9h-3z" fill="currentColor"/></svg>',patch:svgIcon('M5 3v18M12 3v18M19 3v18M3 8h4M10 15h4M17 10h4')};
 const editorMode=()=>sel?.type==='cog'&&sel.o.track?'notes':sel?.o.voice?'patch':'';
 let editorOwner=null,editorOpenedAt=-Infinity;
 function syncEditor(){
-  const mode=editorMode(),button=$('#edit-part'),start=$('#to-start'),busy=panelShown()||!!ui.carry;
+  const mode=editorMode(),button=$('#edit-part'),start=$('#to-start'),busy=(panelShown()&&!sheetMin())||!!ui.carry;
   button.hidden=!mode||busy;$('#delete-part').hidden=!(sel||group.length)||busy;
-  start.hidden=busy;const top=shelfTop()-54+'px';if(start.style.top!==top)start.style.top=top;
+  start.hidden=busy;const top=shelfTop()-54+'px';if(start.style.top!==top)start.style.top=$('#part-bar').style.top=top;
   if(button.dataset.mode!==mode){button.dataset.mode=mode;button.ariaLabel=mode==='notes'?'Edit notes':'Edit patch';button.innerHTML=PART_BAR_ICON[mode]}
   if(!panelShown()||!$('#dev').dataset.editor)return;
   if(!mode){togglePanel(false);return}
-  if(editorOwner!==sel.o){editorOwner=sel.o;togglePanel(true,mode)}
+  if(editorOwner!==sel.o){const tucked=sheetMin();editorOwner=sel.o;togglePanel(true,mode);if(tucked)setSheetMin(true)}
   const title=$('#editor-title'),labelled=`${sel.type==='cog'?'disc':sel.type} ${sel.o.id} · ${mode}`;
   if(title.textContent!==labelled)title.textContent=labelled;
 }
@@ -62,7 +92,7 @@ function rollReadout(e){
   const c=roll.c,cell=e.target===roll.keys?{ring:trackRings(c.track)-1-Math.floor((e.clientY-roll.keys.getBoundingClientRect().top)/roll.row)}:rollCell(e);
   if(!cell||cell.ring<0||cell.ring>=trackRings(c.track))return null;
   const label=noteName(ringNote(c.track,cell.ring));
-  return ()=>e.target===roll.keys?`audition note: ${label}`:`disc note: ${label} · ${onOff(dotAt(c.track,cell.ring,cell.a)>=0)}`;
+  return ()=>e.target===roll.keys?`audition note: ${label}`:roll?.status||`disc note: ${label} · ${onOff(dotAt(c.track,cell.ring,cell.a)>=0)}`;
 }
 function mount(){
   for(const[kind,describe]of Object.entries(GESTURE_READOUT)){
@@ -78,7 +108,8 @@ function mount(){
   $('#scrim').onclick=()=>{if(performance.now()-editorOpenedAt>200)togglePanel(false)};
   $('#editor-close').onclick=()=>togglePanel(false);
   $('#editor-undo').onclick=()=>edits.undo();$('#editor-redo').onclick=()=>edits.redo();
-  const openEditor=()=>{const mode=editorMode();if(panelShown()||!mode)return;editorOwner=sel.o;editorOpenedAt=performance.now();togglePanel(true,mode);syncEditor()};
+  sheetDrag();
+  const openEditor=()=>{const mode=editorMode();if(panelShown()&&sheetMin()&&$('#dev').dataset.editor===mode){setSheetMin(false);return}if(panelShown()||!mode)return;editorOwner=sel.o;editorOpenedAt=performance.now();togglePanel(true,mode);syncEditor()};
   $('#edit-part').onpointerup=$('#edit-part').onclick=openEditor;
   $('#delete-part').onclick=()=>removeSel();$('#to-start').onclick=()=>{toStart();buzz(10)};
 }

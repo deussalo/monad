@@ -31,17 +31,26 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
   overscroll-behavior:none;touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 #c{position:fixed;inset:0;width:100%;height:100%;touch-action:none;display:block}
 #safe{position:fixed;left:0;top:0;width:0;height:0;padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px);pointer-events:none}
-#dev{position:fixed;left:0;right:0;bottom:0;top:max(28vh,calc(env(safe-area-inset-top,0px) + 120px));z-index:10;overflow-y:auto;background:var(--bg);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px);touch-action:pan-y;-webkit-user-select:text;user-select:text}
+#dev{position:fixed;left:0;right:0;bottom:0;top:max(28vh,calc(env(safe-area-inset-top,0px) + 120px));z-index:10;overflow-y:auto;transition:transform .28s cubic-bezier(.16,1,.3,1);background:var(--bg);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px);touch-action:pan-y;-webkit-user-select:text;user-select:text}
 #scrim{position:fixed;inset:0;z-index:9;background:rgba(0,0,0,.35)}
 #dev input[type=range]{touch-action:none}
 #dev[hidden],#scrim[hidden]{display:none}
 #panel{max-width:440px;margin:0 auto;padding:6px}
-#part-bar{position:fixed;left:var(--space-3,12px);top:calc(env(safe-area-inset-top,0px) + var(--space-3,12px));display:flex;gap:var(--space-2,8px)}
+#part-bar{position:fixed;left:var(--space-2,8px);display:flex;gap:var(--space-2,8px)}
 #part-bar button,#to-start{min-height:44px;min-width:44px;padding:0;border:0;background:none;display:grid;place-items:center;color:var(--fg)}
 #to-start{position:fixed;right:62px}
 #edit-part[hidden],#delete-part[hidden],#to-start[hidden],#editor-head{display:none}
+/* The sheet's top: a grab bar and, for an editor, its head. Drag it down to tuck the sheet away to just this strip,
+   up or tap to bring it back; drag down again from the strip to close. */
+#sheet-top{position:sticky;top:0;z-index:1;background:var(--bg);touch-action:none;cursor:grab}
+#grab{height:28px;display:grid;place-items:center}
+#grab::before{content:"";width:40px;height:4px;border-radius:2px;background:var(--dim)}
+#dev.min{transform:translateY(calc(100% - var(--peek,80px)));overflow:hidden}
+#dev.min #grab::before{background:var(--hot)}
+#dev.dragging{transition:none}
+body.sheet-min #interaction{bottom:var(--peek,80px);border-bottom:1px solid var(--line)}
 #dev[data-editor]:not([data-editor=""]){top:max(14vh,env(safe-area-inset-top,0px));border-radius:var(--space-3,12px) var(--space-3,12px) 0 0}
-#dev[data-editor]:not([data-editor=""]) #editor-head{display:flex;align-items:center;gap:var(--space-2,8px);padding:var(--space-2,8px);position:sticky;top:0;background:var(--bg);z-index:1}
+#dev[data-editor]:not([data-editor=""]) #editor-head{display:flex;align-items:center;gap:var(--space-2,8px);padding:0 var(--space-2,8px) var(--space-2,8px)}
 #editor-title{flex:1;color:var(--hot)}
 #dev[data-editor]:not([data-editor=""]) #panel{max-width:none;padding:var(--space-2,8px)}
 #dev[data-editor]:not([data-editor=""]) button,#dev[data-editor]:not([data-editor=""]) .row,#dev[data-editor]:not([data-editor=""]) input[type=number],#dev[data-editor]:not([data-editor=""]) select{min-height:44px}
@@ -64,7 +73,8 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 <div id="part-bar"><button id="edit-part" hidden aria-label="Edit selected part"></button><button id="delete-part" hidden aria-label="Delete selected"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
 <button id="to-start" hidden aria-label="Set to start"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="2.5" height="14"/><path d="M19 5v14L8.5 12z"/></svg></button>
 <div id="dev" hidden role="dialog" aria-label="Part controls">
-  <div id="editor-head"><span id="editor-title"></span><button id="editor-undo" aria-label="Undo">↶</button><button id="editor-redo" aria-label="Redo">↷</button><button id="editor-close">close</button></div>
+  <div id="sheet-top"><div id="grab" role="button" aria-label="Tuck away or bring back the sheet"></div>
+  <div id="editor-head"><span id="editor-title"></span><button id="editor-undo" aria-label="Undo">↶</button><button id="editor-redo" aria-label="Redo">↷</button><button id="editor-close">close</button></div></div>
   <div id="panel"></div>
 </div>
 <script type="text/x-cogs-worklet" id="engine">
@@ -1495,11 +1505,20 @@ function drawRoll(){
     x.fillStyle=hot(d.flash,on?SEL:FG,x);x.globalAlpha*=.3+.7*d.p;
     x.fillRect(px,top,Math.min(w,L+gw-px),hgt);if(px+w>L+gw)x.fillRect(L,top,px+w-L-gw,hgt);x.globalAlpha=1;
     if(on){x.strokeStyle=SEL;x.lineWidth=1;x.strokeRect(px+.5,(trackRings(t)-1-d.ring)*RH+1.5,Math.min(w,L+gw-px)-1,RH-2)}
+    if(on||d===roll.hover)drawGrip(x,L+rollEnd(c,d)*g.cw,(trackRings(t)-1-d.ring)*RH,RH,g.cw,d===roll.grabbed);
   }
   x.lineWidth=2;
   for(const p of readerPlayheads(c)){x.strokeStyle=hot(p.rd.flash,READ,x);x.beginPath();x.moveTo(L+p.u*gw,0);x.lineTo(L+p.u*gw,g.H);x.stroke();x.globalAlpha=1}
   const m=roll.marquee;
   if(m){x.lineWidth=1;x.strokeStyle=SEL;x.setLineDash([5,4]);x.strokeRect(L+m.x0*g.cw+.5,m.y0*RH+.5,(m.x1-m.x0)*g.cw,(m.y1-m.y0)*RH);x.setLineDash([])}
+}
+// A note's end in columns from the strip's left edge; a note that wraps past the last column ends where it wraps to.
+function rollEnd(c,d){const n=c.track.div,e=rollCol(c,d)+d.len;return e>n?e-n:e}
+// The length grip: a tab on the note's right end, drawn on selected notes and on the note under a mouse at its edge.
+function drawGrip(x,ex,top,RH,cw,held){
+  const tw=clamp(Math.round(cw*.35),4,12),th=Math.max(4,Math.round(RH*.72)),ty=top+(RH-th)/2,x0=Math.round(ex-tw*.4);
+  x.fillStyle=held?HOT:SEL;x.beginPath();x.roundRect?x.roundRect(x0,ty,tw,th,Math.min(3,tw/2)):x.rect(x0,ty,tw,th);x.fill();
+  if(tw>=8&&th>=12){x.fillStyle=BG;for(const k of [-1,1])x.fillRect(x0+tw/2+k*1.5-.5,ty+th*.3,1,th*.4)}
 }
 // The strip goes into `strip`, its controls into `tools`; row and label are in CSS px.
 function rollSection(c,{strip,tools,row,label,minCell=6}){
@@ -1513,16 +1532,30 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     box.replaceChildren(el('div',{style:'display:flex'},keys,cv2));
     keys.onpointerdown=e=>{const ring=trackRings(t)-1-Math.floor((e.clientY-keys.getBoundingClientRect().top)/roll.row);if(ring>=0&&ring<trackRings(t))sound(discReader(c),ringNote(t,ring),c.id*128+ring)};
   }
-  roll={cv:cv2,keys,box,c,row:Math.round(row*rollZoom),row0:row,label,minCell,marquee:null};
+  roll={cv:cv2,keys,box,c,row:Math.round(row*rollZoom),row0:row,label,minCell,marquee:null,hover:null,grabbed:null,status:null};
+  cv2.onpointerleave=e=>{if(e.pointerType!=='touch'&&roll.hover){roll.hover=null;drawRoll()}};
   if(rollSelOf!==c){rollSel.clear();rollAnchor=null;rollSelOf=c}
   // A press: ctrl/cmd draws a box (a click toggles one pin), a selected pin drags the set,
   // anything else clears a selection, or paints when there is none.
-  // FL Studio's draw tool: click adds a note of the last length and drags it into place; a note drags to move,
-  // its right edge (cursor ↔) drags to resize, and resizing a selected note stretches the whole selection.
+  // FL Studio's draw tool: click adds a note and drags it into place; a note drags to move, its right edge
+  // (cursor ↔) drags to resize, and resizing a selected note stretches the whole selection. Unlike FL, a new note
+  // takes the brush length, never the length of the last note touched. A finger has no hover, so on touch only a
+  // selected note shows its grip and resizes: tap a note to select it, then drag the tab on its right end.
   // Ctrl+click selects, ctrl+drag boxes, ctrl+shift adds or removes, ctrl+click on empty deselects, shift+drag
   // moves a copy, right-click erases, and the wheel over a note sets its velocity.
-  const lastCol=d=>(rollCol(c,d)+d.len-1)%t.div,n=t.div;
-  const edge=(at,cell,hit)=>!!hit&&cell.col===lastCol(hit)&&at.x%1>.6;
+  const n=t.div;
+  // The grip nearest the pointer, if within reach: in px, a mouse takes the last 8 px of any note and 4 px past it;
+  // a finger takes a selected note's last 14 px and 26 px past it, and half a row above or below.
+  const grip=(at,touch)=>{
+    const cw=rollGeom().cw,R=trackRings(t);let best=null,bd=Infinity;
+    for(const d of touch?selPins(t):t.dots){
+      if(d.ring>=R)continue;
+      const dx=(at.x-rollEnd(c,d))*cw,dy=Math.abs(at.y-(R-1-d.ring+.5))*roll.row,inner=Math.min(touch?14:8,d.len*cw*.45);
+      if(dx<-inner||dx>(touch?26:4)||dy>roll.row*(touch?1:.5))continue;
+      const score=Math.abs(dx)+dy;if(score<bd){bd=score;best=d}
+    }
+    return best;
+  };
   const play=ring=>sound(discReader(c),ringNote(t,ring),c.id*128+ring);
   const erase=cell=>{const d=cell&&noteAt(c,cell.col,cell.ring);if(d){t.dots.splice(t.dots.indexOf(d),1);rollSel.delete(d)}};
   const moveSet=(set,cell)=>({from:set.map(d=>[d,d.a,d.ring]),col:cell.col,ring:cell.ring,moved:false});
@@ -1536,7 +1569,8 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
       if(!hit&&!e.shiftKey)rollSel.clear();
       press={hit,add:e.shiftKey};roll.marquee={x0:at.x,y0:at.y,x1:at.x,y1:at.y};return;
     }
-    if(hit&&edge(at,cell,hit)){const set=rollSel.has(hit)?selPins(t):[hit];press={stretch:hit,head:rollCol(c,hit),set:set.map(d=>[d,d.len])};return}
+    const g0=grip(at,e.pointerType==='touch');
+    if(g0){const set=rollSel.has(g0)?selPins(t):[g0];press={stretch:g0,x0:at.x,set:set.map(d=>[d,d.len])};roll.grabbed=g0;buzz(4);return}
     if(hit){
       if(!rollSel.has(hit)){rollSel.clear();rollSel.add(hit)}
       let set=selPins(t);
@@ -1550,15 +1584,17 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
   };
   const move=e=>{
     const at=rollAt(e),cell=rollCell(e);
-    if(!press){const hit=cell&&noteAt(c,cell.col,cell.ring);cv2.style.cursor=hit?(edge(at,cell,hit)?'ew-resize':'move'):'crosshair';return}
+    if(!press){const hit=cell&&noteAt(c,cell.col,cell.ring),gp=e.pointerType==='touch'?null:grip(at,false);
+      cv2.style.cursor=gp?'ew-resize':hit?'move':'crosshair';if(roll.hover!==gp){roll.hover=gp;drawRoll()}return}
     if(roll.marquee){Object.assign(roll.marquee,{x1:at.x,y1:at.y});return}
     if(press.erase){erase(cell);return}
     if(press.from){const dc=Math.floor(at.x)-press.col,dr=trackRings(t)-1-Math.floor(at.y)-press.ring;if(dc||dr||press.moved){press.moved=true;moveSel(c,press.from,dc,dr)}return}
-    if(press.stretch){const len=clamp(((Math.floor(at.x)-press.head)%n+n)%n+1,1,n),delta=len-press.set.find(([d])=>d===press.stretch)[1];
-      for(const[d,len0]of press.set)d.len=clamp(len0+delta,1,n);brush.len=press.stretch.len;press.moved=true}
+    if(press.stretch){const delta=Math.round(at.x-press.x0),was=press.stretch.len;
+      for(const[d,len0]of press.set)d.len=clamp(len0+delta,1,n);
+      if(press.stretch.len!==was){press.moved=true;buzz(3)}roll.status=`note length: ${press.stretch.len} step${press.stretch.len>1?'s':''}`}
   };
   const up=()=>{
-    const p=press,m=roll.marquee;press=null;roll.marquee=null;if(!p)return;
+    const p=press,m=roll.marquee;press=null;roll.marquee=null;roll.grabbed=null;roll.status=null;if(!p)return;
     if(m){
       const g=rollGeom(),x0=Math.min(m.x0,m.x1),x1=Math.max(m.x0,m.x1),y0=Math.min(m.y0,m.y1),y1=Math.max(m.y0,m.y1);
       if(Math.hypot((x1-x0)*g.cw,(y1-y0)*roll.row)<4){if(p.hit&&!rollSel.delete(p.hit))rollSel.add(p.hit);return}
@@ -1572,7 +1608,7 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
   // Touch: one finger edits as the mouse does and a double tap deletes a note. A second finger undoes what the
   // first began and takes over: pinch zooms the strip, drag scrolls it, and the sheet scrolls once the strip runs out.
   const touches=new Map();let two=null,lastTap=null;
-  const undoPress=()=>{const p=press;press=null;roll.marquee=null;if(!p)return;
+  const undoPress=()=>{const p=press;press=null;roll.marquee=null;roll.grabbed=roll.status=null;if(!p)return;
     if(p.fresh){for(const[d]of p.from){t.dots.splice(t.dots.indexOf(d),1);rollSel.delete(d)}return}
     if(p.from)for(const[d,a,ring]of p.from){d.a=a;d.ring=ring}
     if(p.stretch)for(const[d,len]of p.set)d.len=len;
@@ -1595,7 +1631,7 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     if(touches.size===2)return startTwo();
     if(touches.size>2||two)return;
     const cell=rollCell(e),hit=cell&&noteAt(c,cell.col,cell.ring);
-    if(hit&&lastTap?.d===hit&&performance.now()-lastTap.t<400){lastTap=null;t.dots.splice(t.dots.indexOf(hit),1);rollSel.delete(hit);buzz(12);rollEdit();return}
+    if(hit&&lastTap?.d===hit&&performance.now()-lastTap.t<400&&!grip(rollAt(e),true)){lastTap=null;t.dots.splice(t.dots.indexOf(hit),1);rollSel.delete(hit);buzz(12);rollEdit();return}
     down(e);
   };
   cv2.onpointermove=e=>{
@@ -1830,28 +1866,58 @@ const offStage=s=>s.y>=shelfTop();
 function drawChrome(){const b=activeBezel();if(b)drawBezel(b);if(ui.carry&&ui.carry.ghost)drawGhost(ui.carry.ghost);drawShelf();drawGlyph();syncEditor();drawInteraction()}
 const panelShown=()=>!$('#dev').hidden,inspectorLive=panelShown;
 function togglePanel(open=$('#dev').hidden,mode=''){
-  $('#dev').dataset.editor=mode;$('#dev').hidden=$('#scrim').hidden=!open;
+  $('#dev').dataset.editor=mode;$('#dev').hidden=$('#scrim').hidden=!open;setSheetMin(false);
   if(open){syncRows();buildInspector()}
+}
+// Tucked, the sheet keeps only its top strip on screen: the machine above takes touches and keeps playing,
+// and selecting another disc or pad retitles the strip to that part.
+const sheetMin=()=>$('#dev').classList.contains('min');
+function setSheetMin(min){
+  const dev=$('#dev');dev.classList.toggle('min',min);document.body.classList.toggle('sheet-min',min&&!dev.hidden);
+  dev.style.transform='';if(min){dev.scrollTop=0;document.documentElement.style.setProperty('--peek',$('#sheet-top').offsetHeight+safeBot+'px')}
+  $('#scrim').hidden=dev.hidden||min;
+}
+function sheetDrag(){
+  const dev=$('#dev'),top=$('#sheet-top');let g=null;
+  top.onpointerdown=e=>{
+    if(e.target.closest('button'))return;
+    top.setPointerCapture(e.pointerId);const r=dev.getBoundingClientRect();
+    g={y0:e.clientY,t0:performance.now(),base:sheetMin()?r.height-top.offsetHeight-safeBot:0,h:r.height,dy:0,v:0,lt:performance.now(),ly:e.clientY};
+    dev.classList.add('dragging');
+  };
+  top.onpointermove=e=>{
+    if(!g)return;const now=performance.now();g.dy=e.clientY-g.y0;g.v=(e.clientY-g.ly)/Math.max(1,now-g.lt);g.ly=e.clientY;g.lt=now;
+    if(Math.abs(g.dy)>6)dev.style.transform=`translateY(${clamp(g.base+g.dy,0,g.h)}px)`;
+  };
+  top.onpointerup=top.onpointercancel=e=>{
+    if(!g)return;const {dy,v,base,h}=g,min=sheetMin();g=null;dev.classList.remove('dragging');
+    if(e.type==='pointercancel'){setSheetMin(min);return}
+    if(Math.abs(dy)<=6){setSheetMin(!min);buzz(6);return}
+    const fling=dy+v*180;
+    if(min){if(fling<-30)setSheetMin(false);else if(fling>40)togglePanel(false);else setSheetMin(true)}
+    else setSheetMin(base+fling>h*.3);
+    buzz(6);
+  };
 }
 function placeRoll(c,f){
   const phone=$('#dev').dataset.editor==='notes';
   rollSection(c,{strip:f,tools:f,row:phone?32:11,label:phone?44:30,minCell:phone?28:6});
   if(!phone)return;
   roll.box.style.maxHeight='48vh';roll.box.style.overflow='auto';
-  f.prepend(roll.box,el('p',{className:'roll-hint',textContent:'tap: add · drag: move · edge: length · double tap: delete · two fingers: scroll, pinch: zoom'}));
+  f.prepend(roll.box,el('p',{className:'roll-hint',textContent:'tap: add or select · drag: move · tap a note, then drag its tab: length · double tap: delete · two fingers: scroll, pinch: zoom'}));
 }
 const svgIcon=d=>`<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="${d}"/></svg>`;
 const PART_BAR_ICON={notes:'<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v16H3zM7.5 13v7M12 13v7M16.5 13v7" fill="none" stroke="currentColor" stroke-width="1.6"/>'+'<path d="M6 4h3v9H6zM10.5 4h3v9h-3zM15 4h3v9h-3z" fill="currentColor"/></svg>',patch:svgIcon('M5 3v18M12 3v18M19 3v18M3 8h4M10 15h4M17 10h4')};
 const editorMode=()=>sel?.type==='cog'&&sel.o.track?'notes':sel?.o.voice?'patch':'';
 let editorOwner=null,editorOpenedAt=-Infinity;
 function syncEditor(){
-  const mode=editorMode(),button=$('#edit-part'),start=$('#to-start'),busy=panelShown()||!!ui.carry;
+  const mode=editorMode(),button=$('#edit-part'),start=$('#to-start'),busy=(panelShown()&&!sheetMin())||!!ui.carry;
   button.hidden=!mode||busy;$('#delete-part').hidden=!(sel||group.length)||busy;
-  start.hidden=busy;const top=shelfTop()-54+'px';if(start.style.top!==top)start.style.top=top;
+  start.hidden=busy;const top=shelfTop()-54+'px';if(start.style.top!==top)start.style.top=$('#part-bar').style.top=top;
   if(button.dataset.mode!==mode){button.dataset.mode=mode;button.ariaLabel=mode==='notes'?'Edit notes':'Edit patch';button.innerHTML=PART_BAR_ICON[mode]}
   if(!panelShown()||!$('#dev').dataset.editor)return;
   if(!mode){togglePanel(false);return}
-  if(editorOwner!==sel.o){editorOwner=sel.o;togglePanel(true,mode)}
+  if(editorOwner!==sel.o){const tucked=sheetMin();editorOwner=sel.o;togglePanel(true,mode);if(tucked)setSheetMin(true)}
   const title=$('#editor-title'),labelled=`${sel.type==='cog'?'disc':sel.type} ${sel.o.id} · ${mode}`;
   if(title.textContent!==labelled)title.textContent=labelled;
 }
@@ -1884,7 +1950,7 @@ function rollReadout(e){
   const c=roll.c,cell=e.target===roll.keys?{ring:trackRings(c.track)-1-Math.floor((e.clientY-roll.keys.getBoundingClientRect().top)/roll.row)}:rollCell(e);
   if(!cell||cell.ring<0||cell.ring>=trackRings(c.track))return null;
   const label=noteName(ringNote(c.track,cell.ring));
-  return ()=>e.target===roll.keys?`audition note: ${label}`:`disc note: ${label} · ${onOff(dotAt(c.track,cell.ring,cell.a)>=0)}`;
+  return ()=>e.target===roll.keys?`audition note: ${label}`:roll?.status||`disc note: ${label} · ${onOff(dotAt(c.track,cell.ring,cell.a)>=0)}`;
 }
 function mount(){
   for(const[kind,describe]of Object.entries(GESTURE_READOUT)){
@@ -1900,7 +1966,8 @@ function mount(){
   $('#scrim').onclick=()=>{if(performance.now()-editorOpenedAt>200)togglePanel(false)};
   $('#editor-close').onclick=()=>togglePanel(false);
   $('#editor-undo').onclick=()=>edits.undo();$('#editor-redo').onclick=()=>edits.redo();
-  const openEditor=()=>{const mode=editorMode();if(panelShown()||!mode)return;editorOwner=sel.o;editorOpenedAt=performance.now();togglePanel(true,mode);syncEditor()};
+  sheetDrag();
+  const openEditor=()=>{const mode=editorMode();if(panelShown()&&sheetMin()&&$('#dev').dataset.editor===mode){setSheetMin(false);return}if(panelShown()||!mode)return;editorOwner=sel.o;editorOpenedAt=performance.now();togglePanel(true,mode);syncEditor()};
   $('#edit-part').onpointerup=$('#edit-part').onclick=openEditor;
   $('#delete-part').onclick=()=>removeSel();$('#to-start').onclick=()=>{toStart();buzz(10)};
 }
