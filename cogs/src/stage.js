@@ -277,7 +277,7 @@ function boxSelect(a,b){
 function drawGroup(){
   if(!group.length&&!marquee)return;
   cx.setTransform(dpr,0,0,dpr,0,0);cx.strokeStyle=SEL;cx.lineWidth=1;cx.setLineDash([5,4]);
-  if(marquee){const a=toScreen(marquee.a),b=toScreen(marquee.b);cx.strokeRect(a.x,a.y,b.x-a.x,b.y-a.y)}
+  if(marquee){const a=toScreen(marquee.a),b=toScreen(marquee.b);cx.globalAlpha=.08;cx.fillStyle=SEL;cx.fillRect(a.x,a.y,b.x-a.x,b.y-a.y);cx.globalAlpha=1;cx.strokeRect(a.x,a.y,b.x-a.x,b.y-a.y)}
   cx.setLineDash([]);
   for(const{type,o}of group){
     if(type==='cog'||type==='pad'){const s=toScreen(o);circle(s.x,s.y,(type==='cog'?radius(o):o.r)*S.zoom+5)}
@@ -450,9 +450,15 @@ const G={
       tap(){clearTimeout(hold);put(cell0);if(!isSel(c))select('cog',c);changed()},
       dbl(s){if(cell0)setDot(t,{...cell0,...brush},dotAt(t,cell0.ring,cell0.a)<0);focus('cog',c,s)}};
   },
+  // Empty ground, as the roll's empty grid: a slide pans, a hold (380 ms) then a drag boxes parts. The box
+  // selects live as it grows, so the parts it takes are ringed before the finger lifts.
   pan(s0){
-    const vx=view.x,vy=view.y;
-    return {o:null,move(s){view.x=vx-(s.x-s0.x)/S.zoom;view.y=vy-(s.y-s0.y)/S.zoom},up(){changed()},tap(){ui.room=!sel&&!ui.room;select(null)},dbl(){flyFit()}};
+    const vx=view.x,vy=view.y,a=screenToWorld(s0);let boxing=false;
+    const hold=setTimeout(()=>{boxing=true;marquee={a,b:a};sel=null;group=[];buzz(10)},380);
+    return {o:null,
+      move(s){if(boxing){marquee.b=screenToWorld(s);group=boxSelect(a,marquee.b);return}clearTimeout(hold);view.x=vx-(s.x-s0.x)/S.zoom;view.y=vy-(s.y-s0.y)/S.zoom},
+      up(){clearTimeout(hold);if(boxing){marquee=null;return}changed()},cancel(){clearTimeout(hold);marquee=null},
+      tap(){clearTimeout(hold);ui.room=!sel&&!ui.room;select(null)},dbl(){clearTimeout(hold);flyFit()}};
   },
 };
 function begin(s){

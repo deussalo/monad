@@ -52,7 +52,7 @@ function placeRoll(c,f){
     act('Clipboard','paste',()=>pasteClip(c0)),act('Trash','delete notes',()=>deleteSel(c0.track)));
   f.prepend(bar,roll.box);syncRollBar();
 }
-const PART_BAR_ICON={notes:rx('Keyboard',22),patch:rx('MixerVertical',22)};
+const PART_BAR_ICON={notes:rx('Piano',22),patch:rx('MixerVertical',22)};
 const editorMode=()=>sel?.type==='cog'&&sel.o.track?'notes':sel?.o.voice?'patch':'';
 let editorOwner=null,editorOpenedAt=-Infinity;
 function syncRollBar(){
@@ -83,7 +83,7 @@ const GESTURE_READOUT={
   belt:b=>`belt crossed: ${onOff(b.cross)}`,
   cog:c=>`${c.track?'disc':c.motor?'motor':'cog'} position: ${Math.round(c.x)}, ${Math.round(c.y)}`,
   notes:(c,s)=>{const cell=cellAt(c,screenToWorld(gesture?.last||s));return cell?`disc note: ${noteName(ringNote(c.track,cell.ring))}`:`disc notes: ${c.track.dots.length} pins`},
-  pan:()=>`view: ${Math.round(S.zoom*100)}% · ${Math.round(view.x)}, ${Math.round(view.y)}`,
+  pan:()=>marquee?`select parts: ${group.length}`:`view: ${Math.round(S.zoom*100)}% · ${Math.round(view.x)}, ${Math.round(view.y)}`,
   group:()=>`move parts: ${group.length}`,marquee:()=>`select parts: ${group.length}`,
 };
 let interactionRead=null,interactionUntil=0;

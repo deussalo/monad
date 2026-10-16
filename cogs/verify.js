@@ -337,6 +337,17 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await wait(700); await tp.tap(await centre('#to-start'), 0);
   is('pressed again later: every turning cog lands where it did the first time', await train(), first);
 
+  console.log('BOX SELECT ON THE CANVAS');
+  await tp.dbl(await tp.empty()); await wait(500); await tp.tap(await tp.empty());
+  const e0 = await tp.empty();
+  const box2 = await tp.probe(e => { const c = __cogs.W.cogs.find(c => c.track), s = __cogs.toScreen(c); return [e, [s.x + Math.sign(s.x - e[0]) * 20, s.y + Math.sign(s.y - e[1]) * 20]]; }, e0);
+  const v0b = await tp.probe(() => JSON.stringify(__cogs.serialize().view));
+  await tp.stroke(box2, { steps: 8, hold: 550 });
+  const boxed = await tp.probe(() => __cogs.group);
+  check('hold empty ground, then drag: a box takes the parts in it, the view stays', boxed.includes('cog') && await tp.probe(() => JSON.stringify(__cogs.serialize().view)) === v0b, boxed);
+  await tp.tap(await tp.empty());
+  await tp.stroke([box2[0], [box2[0][0] + 60, box2[0][1] + 40]], { steps: 6 });
+  check('a slide on empty ground still pans', await tp.probe(() => JSON.stringify(__cogs.serialize().view)) !== v0b && (await tp.probe(() => __cogs.group)).length === 0, null);
   console.log('NOTES SHEET');
   const hist = await tp.probe(() => ['#undo-all', '#redo-all'].map(s => { const b = document.querySelector(s), r = b.getBoundingClientRect(); return { at: [r.x + r.width / 2, r.y + r.height / 2], off: b.disabled, shown: r.width > 0 }; }));
   check('undo and redo sit in the thumb row, always shown', hist.every(h => h.shown && h.at[1] > 844 * .7), hist);
@@ -350,6 +361,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await tp.tap(await tp.empty()); await tp.tap(discAt.s);
   is('tap a disc: it is selected', await tp.probe(() => __cogs.sel && __cogs.sel.id), discAt.id);
   const ed = await centre('#edit-part');
+  is('the notes button is a piano', await tp.probe(() => document.querySelector('#edit-part path').getAttribute('d').startsWith('M1 2.5')), true);
   check('its notes button is in thumb reach, at the bottom of the screen', ed && ed[1] > 844 * .7 && ed[0] < 80, ed);
   await tp.tap(ed);
   is('tap it: the notes sheet opens', await tp.probe(() => [document.querySelector('#dev').hidden, document.querySelector('#dev').dataset.editor]), [false, 'notes']);
