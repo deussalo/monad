@@ -14,11 +14,11 @@ const wrap=a=>((a%TAU)+TAU)%TAU;
 const hz=m=>440*Math.pow(2,(m-69)/12);
 const radius=c=>c.n*TOOTH/TAU;
 
-const S={bpm:0,beats:4,seed:1,meshTol:4,coaxTol:6,snapTol:16,vRef:500,velCurve:.72,master:.7,lookahead:.06,maxStep:.05,zoom:1,windows:0,ids:0};
+const S={bpm:0,beats:4,seed:1,meshTol:4,coaxTol:6,snapTol:16,vRef:500,velCurve:.72,master:.7,lookahead:.2,maxStep:.05,zoom:1,windows:0,ids:0,ratios:0};
 const S_DEFS=[['bpm','bpm lock',0,300,1],['beats','beats/bar',1,16,1],['seed','seed',0,9999,1],['meshTol','mesh tol',0,20,.5],['coaxTol','coax tol',0,20,.5],['snapTol','snap tol',0,60,1],
   ['vRef','v ref px/s',20,3000,1],['velCurve','vel curve',.1,3,.01],['master','master',0,1.5,.01],
-  ['lookahead','lookahead s',.01,.3,.005],['maxStep','step rad',.005,.3,.005],['zoom','zoom',.1,8,.01],
-  ['windows','windows',0,1,1],['ids','ids',0,1,1]];
+  ['lookahead','lookahead s',.12,.5,.005],['maxStep','step rad',.005,.3,.005],['zoom','zoom',.1,8,.01],
+  ['windows','windows',0,1,1],['ids','ids',0,1,1],['ratios','ratio snap',0,1,1]];
 const SPACE={dry:1,wet:.35,predelay:12,size:1,decay:2.5,lowMult:1.1,highMult:.55,lowCross:200,highCross:4500,
   diffusion:.78,density:.55,modRate:.3,modDepth:.5,shimmer:0,shimmerPitch:12,freeze:0,width:1.1,duck:.3,lowCut:110,highCut:15000};
 const SPACE_DEFS=[['dry','dry',0,1,.001],['wet','wet',0,1.5,.001],['predelay','predelay ms',0,500,1],
@@ -57,6 +57,7 @@ const DRUMS=Object.keys(VOICES).filter(k=>k!=='synth');
 const makeVoice=(kind,common={level:.7,velSense:.7})=>({...common,...VOICES[kind],kind});
 // The room's musical face; the rest of SPACE and S is engineering, kept behind the advanced drawer.
 const ROOM_SPACE=['wet','size','decay','highMult','shimmer','freeze'],ROOM_S=['master','bpm','beats'];
+const LOOKAHEAD_MIN=.12;
 const S_DEFAULT={...S},SPACE_DEFAULT={...SPACE};
 
 /* ---------- world ---------- */
@@ -90,7 +91,22 @@ function contact(a,b){
   const gap=d-radius(a)-radius(b);
   return Math.abs(gap)<=S.meshTol?'mesh':gap<0?'jam':null;
 }
+// A reader seated on a disc lies along one of its radii: `seat` holds that radius's world angle and the reader's
+// ends as fractions of the disc's radius, so it follows the disc when it moves and scales when it is resized.
+function seatOf(r,c){
+  const a=Math.atan2((r.y1+r.y2)/2-c.y,(r.x1+r.x2)/2-c.x),R=radius(c),d1=Math.hypot(r.x1-c.x,r.y1-c.y),d2=Math.hypot(r.x2-c.x,r.y2-c.y);
+  return {ang:a,f0:d1/R,f1:d2/R};
+}
+function seatReader(r,c){
+  r.on=c;r.seat=seatOf(r,c);
+}
+function placeSeated(r){
+  const c=r.on,q=r.seat,R=radius(c),ux=Math.cos(q.ang),uy=Math.sin(q.ang);
+  const x1=c.x+ux*q.f0*R,y1=c.y+uy*q.f0*R,x2=c.x+ux*q.f1*R,y2=c.y+uy*q.f1*R;
+  if(Math.abs(x1-r.x1)+Math.abs(y1-r.y1)+Math.abs(x2-r.x2)+Math.abs(y2-r.y2)>1e-7)Object.assign(r,{x1,y1,x2,y2});
+}
 function solve(){
+  for(const r of W.readers)if(r.on){if(!W.cogs.includes(r.on)||!r.on.track)r.on=null;else placeSeated(r)}
   const cs=W.cogs,adj=new Map(cs.map(c=>[c,[]]));
   for(const c of cs){c.jam=false;c.k=null;c.w=0}
   for(let i=0;i<cs.length;i++)for(let j=i+1;j<cs.length;j++){
@@ -184,7 +200,7 @@ function armHit(p,t){
   const vn=Math.abs(c.w*s*(-Math.sin(edge)*nx+Math.cos(edge)*ny));
   pad.hits++;pad.lastV=vn;pad.flash=arm.flash=t;flex(arm,t,vn);
   const v=pad.voice,key=pad.id*128+(v.note|0);
-  fire(v,t,vn,pad.x,'arm'+arm.id+'>pad'+pad.id,1,(when,amp,pan,vx)=>v.kind==='synth'?synth(v,v.note,when,amp,pan,key,vx):drum(v,when,amp,pan));
+  fire(v,t,vn,pad,'arm'+arm.id+'>pad'+pad.id,1,(when,amp,pan,vx,dark)=>v.kind==='synth'?synth(v,v.note,when,amp,pan,key,vx,0,dark):drum(v,when,amp,pan,dark));
 }
 
 function circleCross(c,R,a0,dt,seg){
@@ -194,7 +210,7 @@ function circleCross(c,R,a0,dt,seg){
   const f=s0/(s0-s1),qx=x0+(x1-x0)*f,qy=y0+(y1-y0)*f,L2=ex*ex+ey*ey,u=((qx-seg.x1)*ex+(qy-seg.y1)*ey)/L2;
   if(u<0||u>1)return null;
   const am=a0+c.w*dt*f;
-  return {f,u,x:qx,am,vn:Math.abs(c.w*R*(Math.sin(am)*ey+Math.cos(am)*ex))/Math.sqrt(L2)};
+  return {f,u,x:qx,y:qy,am,vn:Math.abs(c.w*R*(Math.sin(am)*ey+Math.cos(am)*ex))/Math.sqrt(L2)};
 }
 function dotCross(c,dot,rd,dt){
   const hit=circleCross(c,ringR(c,dot.ring),c.th+dot.a,dt,rd);if(!hit)return;
@@ -203,8 +219,8 @@ function dotCross(c,dot,rd,dt){
   const midi=rd.tines?scaleNote(rd.combBase,rd.combScale,Math.min(rd.tines-1,Math.floor(hit.u*rd.tines))):ringNote(c.track,dot.ring);
   rd.hits++;rd.lastV=hit.vn;rd.lastMidi=voiceMidi(rd.voice,midi);dot.flash=rd.flash=t;
   const v=rd.voice,key=rd.id*128+midi,hold=dot.len>1?dot.len*TAU/c.track.div/Math.abs(c.w):0;
-  fire(v,t,hit.vn,hit.x,'cog'+c.id+'.ring'+dot.ring+'>reader'+rd.id,dot.v,
-    (when,amp,pan,vx)=>v.kind==='synth'?synth(v,midi,when,amp,pan,key,vx,hold):drum(v,when,amp,pan));
+  fire(v,t,hit.vn,hit,'cog'+c.id+'.ring'+dot.ring+'>reader'+rd.id,dot.v,
+    (when,amp,pan,vx,dark)=>v.kind==='synth'?synth(v,midi,when,amp,pan,key,vx,hold,dark):drum(v,when,amp,pan,dark));
 }
 const stringLen=s=>Math.hypot(s.x2-s.x1,s.y2-s.y1);
 function stringMidi(s){
@@ -215,11 +231,11 @@ function pluck(arm,s,dt){
   const c=arm.cog,hit=circleCross(c,arm.r0+arm.len,c.th+arm.a,dt,s);if(!hit)return;
   const t=simT+dt*hit.f,midi=stringMidi(s);
   s.hits++;s.lastV=hit.vn;s.lastU=hit.u;s.flash=t;flex(arm,t,hit.vn*.5);
-  fire(s,t,hit.vn,hit.x,'arm'+arm.id+'>string'+s.id,1,(when,amp,pan,vx)=>pluckSound(s,midi,hit.u,when,amp,pan,vx));
+  fire(s,t,hit.vn,hit,'arm'+arm.id+'>string'+s.id,1,(when,amp,pan,vx,dark)=>pluckSound(s,midi,hit.u,when,amp,pan,vx,dark));
 }
-function pluckSound(s,midi,u,when,amp,pan,vx){
+function pluckSound(s,midi,u,when,amp,pan,vx,dark=0){
   const f0=hz(midi),ratios=s.kind==='bar'?BODIES.bar:BODIES.harmonic,f=[],g=[],tt=[];
-  for(let k=0;k<ratios.length;k++){f.push(f0*ratios[k]);g.push(Math.abs(Math.sin((k+1)*Math.PI*u))/(k+1));tt.push(s.decay*Math.pow(ratios[k],-s.damp))}
+  for(let k=0;k<ratios.length;k++){f.push(f0*ratios[k]);g.push(Math.abs(Math.sin((k+1)*Math.PI*u))/(k+1)*Math.exp(-dark*k));tt.push(s.decay*Math.pow(ratios[k],-s.damp))}
   strike(f,g,tt,when,amp,pan,s.id*128+Math.round(midi),contactTime(s.hard,vx),0);
 }
 function flex(arm,t,vn){arm.bendT=t;arm.bendA=Math.min(.6,vn/S.vRef*.5)*arm.flex*(arm.cog.w>0?-1:1)}
@@ -252,16 +268,19 @@ function advance(tEnd){
 }
 
 /* ---------- audio ---------- */
-let ac=null,engineNode=null,engineState='off',engineStats={},master=null,meter=null,drumBus=null,noise=null,peak=0;
+let ac=null,engineNode=null,engineState='off',engineStats={},master=null,distant=null,meter=null,drumBus=null,noise=null,peak=0;
 const strikes=[];
 function initAudio(){
   if(ac){if(ac.state!=='running')ac.resume();return}
-  ac=new (window.AudioContext||window.webkitAudioContext)({latencyHint:'interactive'});
+  // A touch device gets the larger 'playback' buffer: the smallest one underran on phones and the beat hiccuped.
+  // Sound is scheduled S.lookahead ahead and drawing reads the output latency, so nothing shown lags.
+  ac=new (window.AudioContext||window.webkitAudioContext)({latencyHint:matchMedia('(pointer:coarse)').matches?'playback':'interactive'});
   master=ac.createGain();master.gain.value=S.master;
+  distant=ac.createBiquadFilter();distant.type='lowpass';distant.frequency.value=20000;distant.Q.value=.5;
   const lim=ac.createDynamicsCompressor();
   lim.threshold.value=-10;lim.knee.value=8;lim.ratio.value=3.5;lim.attack.value=.015;lim.release.value=.3;
   meter=ac.createAnalyser();meter.fftSize=2048;
-  master.connect(lim);lim.connect(ac.destination);lim.connect(meter);
+  master.connect(distant);distant.connect(lim);lim.connect(ac.destination);lim.connect(meter);
   noise=ac.createBuffer(1,ac.sampleRate,ac.sampleRate);
   const nd=noise.getChannelData(0);for(let i=0;i<nd.length;i++)nd[i]=Math.random()*2-1;
   engineState='loading';
@@ -287,16 +306,17 @@ function strike(f,g,t,when,amp,pan,key,contact,attack){
 function damp(key,when){engineNode.port.postMessage({type:'damp',at:when*ac.sampleRate,key})}
 const voiceMidi=(v,midi)=>clamp(midi+(v.kind==='synth'?12*v.octave+v.semi:0),0,127);
 // Additive: `partials` ringing modes at the body's ratios, bent toward harmonic, each decaying by its ratio^-damp.
-function synth(v,midi,when,amp,pan,key,x,hold=0){
+function synth(v,midi,when,amp,pan,key,x,hold=0,dark=0){
   const F=BODIES[v.body],f0=hz(voiceMidi(v,midi)),f=[],g=[],t=[];let e=0;
-  for(let k=0;k<v.partials;k++){const r=k+1+(bodyRatio(F,k)-k-1)*v.bend,gk=Math.pow(v.bright,k)*(k%2?v.even:1);f.push(f0*r);g.push(gk);t.push(Math.max(hold*1.5,v.decay*Math.pow(r,-v.damp)));e+=gk*gk}
+  for(let k=0;k<v.partials;k++){const r=k+1+(bodyRatio(F,k)-k-1)*v.bend,gk=Math.pow(v.bright,k)*(k%2?v.even:1)*Math.exp(-dark*k);f.push(f0*r);g.push(gk);t.push(Math.max(hold*1.5,v.decay*Math.pow(r,-v.damp)));e+=gk*gk}
   strike(f,g,t,when,amp*Math.min(1,1.3/Math.sqrt(e)),pan,key,contactTime(v.hard,x),v.attack);
   if(hold)damp(key,when+hold);
 }
 // Drums are WebAudio graphs on the drum bus: tuned oscillators and filtered noise under one decaying gain.
-function drum(v,when,amp,pan){
+function drum(v,when,amp,pan,dark=0){
   const out=ac.createGain(),p=ac.createStereoPanner(),end=when+v.decay,src=[];
-  p.pan.value=pan;out.connect(p);p.connect(drumBus);
+  p.pan.value=pan;p.connect(drumBus);
+  if(dark>.02){const lp=ac.createBiquadFilter();lp.type='lowpass';lp.frequency.value=16000*Math.exp(-dark*3.2);out.connect(lp);lp.connect(p)}else out.connect(p);
   out.gain.setValueAtTime(amp,when);out.gain.exponentialRampToValueAtTime(1e-4,end);
   const osc=(type,f0,gain,f1=f0,sweepT=0,at=when,to=end)=>{const o=ac.createOscillator(),og=ac.createGain();o.type=type;o.frequency.setValueAtTime(f0,at);
     if(f1!==f0)o.frequency.exponentialRampToValueAtTime(f1,at+sweepT);og.gain.value=gain;o.connect(og);og.connect(out);src.push([o,at,to])};
@@ -314,7 +334,7 @@ function drum(v,when,amp,pan){
   else if(k==='cymbal'){hiss('highpass',v.cutoff,1-v.tone);for(const r of [1,1.34,1.71,2.26])osc('square',v.cutoff*.11*r,v.tone*.18)}
   for(const[s,at,to]of src){s.start(at);s.stop(to+.02)}
 }
-function fire(v,t,vn,x,src,gain,play){
+function fire(v,t,vn,at,src,gain,play){
   stats.events++;
   stats.log.push({t,src,vn});if(stats.log.length>256)stats.log.shift();
   if(!clock.audio||engineState!=='ready')return;
@@ -322,7 +342,8 @@ function fire(v,t,vn,x,src,gain,play){
   if(amp<=0)return;
   let when=t+clock.off-clock.shift;
   if(when<ac.currentTime){stats.late++;when=ac.currentTime}
-  play(when,amp,clamp((x-view.x)/300,-.9,.9),vx);
+  const p=heard(at);
+  play(when,amp*p.gain,p.pan,vx,p.dark);
 }
 
 /* ---------- clock ---------- */
@@ -391,7 +412,7 @@ function serialize(){
       track:c.track&&{...c.track,dots:c.track.dots.map(d=>({ring:d.ring,a:d.a,p:d.p,v:d.v,len:d.len}))}})),
     arms:W.arms.map(a=>({id:a.id,cog:a.cog.id,a:a.a,r0:a.r0,len:a.len,flex:a.flex})),
     pads:W.pads.map(p=>({id:p.id,x:p.x,y:p.y,r:p.r,voice:p.voice})),
-    readers:W.readers.map(r=>({id:r.id,x1:r.x1,y1:r.y1,x2:r.x2,y2:r.y2,voice:r.voice,tines:r.tines,combBase:r.combBase,combScale:r.combScale})),
+    readers:W.readers.map(r=>({id:r.id,on:r.on?r.on.id:null,x1:r.x1,y1:r.y1,x2:r.x2,y2:r.y2,voice:r.voice,tines:r.tines,combBase:r.combBase,combScale:r.combScale})),
     belts:W.belts.map(b=>({id:b.id,a:b.a.id,b:b.b.id,cross:b.cross})),
     strings:W.strings.map(({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})=>({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense}))};
 }
@@ -412,10 +433,18 @@ function deserialize(j){
     belts:j.belts.map(b=>({...b,a:cog(b.a,'belt '+b.id),b:cog(b.b,'belt '+b.id)})),
     strings:j.strings.map(s=>({...s,hits:0,lastV:0})),
     pads:j.pads.map(p=>({...p,voice:importedVoice(p),hits:0,lastV:0})),
-    readers:j.readers.map(r=>({tines:0,combBase:60,combScale:'major',...r,voice:importedVoice(r),hits:0,lastV:0}))};
+    readers:j.readers.map(r=>({tines:0,combBase:60,combScale:'major',...r,on:null,voice:importedVoice(r),hits:0,lastV:0}))};
+  // A save from before seats: a reader lying wholly on a disc is seated on it.
+  for(const[i,r]of next.readers.entries()){
+    const on=j.readers[i].on,c=on!==undefined?(on===null?null:cog(on,'reader '+r.id)):
+      cogs.filter(c=>c.track&&Math.hypot(r.x1-c.x,r.y1-c.y)<=radius(c)&&Math.hypot(r.x2-c.x,r.y2-c.y)<=radius(c)).sort((a,b)=>b.layer-a.layer)[0];
+    if(c&&c.track)seatReader(r,c);
+  }
   Object.assign(W,next);
   W.next=1+Math.max(0,...Object.values(next).flat().map(o=>o.id));
   Object.assign(S,j.S);Object.assign(SPACE,j.SPACE);Object.assign(view,j.view);
+  // Older saves schedule 60 ms ahead, too close for a phone's main thread: notes landed late and the groove dragged.
+  S.lookahead=Math.max(S.lookahead,LOOKAHEAD_MIN);
   select(null);solve();applyAudioSettings();syncRows();changed();
 }
 // Rebuild the world from j with every surviving cog keeping its revolution count.

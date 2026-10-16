@@ -22,6 +22,11 @@ One idea carries the design: **you hold the machine in your hand, and the closer
 
 ## Gestures
 
+- **Selection:** on empty ground a slide pans and keeps the selection; hold (0.4 s) then drag to box parts, ringed live; a tap clears. With a selection, copy and paste buttons sit above the part bar (paste lands mid-stage, selected); undo and redo sit mid-row in thumb reach.
+- **Seated readers:** a reader on a disc is seated: it moves with the disc and scales when it is resized. Drag its body to slide it around the disc, an end to change its span along the radius; pull it 36 px past the rim to free it. A free reader dragged onto a disc seats there.
+- **Ratio snap:** a room-bezel toggle; resized cogs then take only tooth counts in a simple ratio (¼ to 4) to the cog they mesh with.
+- **The listener is the camera:** a sound pans across the open stage and fades and darkens off it; zoomed out past the whole machine the mix eases (smoothstep, 80 ms glides) to quieter, low-passed and wetter, full again at the fit.
+
 - One finger on empty space pans; a tap there deselects.
 - Two fingers pinch-zoom and pan anywhere, and override any gesture in progress.
 - A double tap on a part flies to its working zoom: a pad to its bezel, a disc to note size (anchored where you tapped), a cog to fill the view. A double tap at working zoom, or on empty space, flies back out to fit the machine.

@@ -236,7 +236,7 @@ function removeSel(){
   const items=group.length?group:sel?[sel]:[];group=[];
   for(const{type,o}of items)if(type!=='belt'||W.belts.includes(o))removeObj(type,o);
 }
-const PART_LISTS=['cog','arm','pad','reader','string','belt'];
+const PART_LISTS=['cog','arm','pad','reader','string','belt'],UNSEAT_PX=36;
 // A copied cog takes its arms; a belt comes when both its cogs do.
 let partClip=null;
 function copyParts(){
@@ -255,6 +255,7 @@ function pasteParts(){
   if(pts.length&&ui.hover){const xs=pts.map(p=>p.x),ys=pts.map(p=>p.y),at=screenToWorld(ui.hover);dx=at.x-(Math.min(...xs)+Math.max(...xs))/2;dy=at.y-(Math.min(...ys)+Math.max(...ys))/2}
   for(const o of [...c.cogs,...c.pads]){o.id=fresh(o);o.x+=dx;o.y+=dy}
   for(const o of [...c.readers,...c.strings]){o.id=fresh(o);o.x1+=dx;o.y1+=dy;o.x2+=dx;o.y2+=dy}
+  for(const o of c.readers)o.on=id.has(o.on)?id.get(o.on):null;
   c.arms=c.arms.filter(a=>id.has(a.cog)||j.cogs.some(o=>o.id===a.cog));
   for(const a of c.arms){if(id.has(a.cog))a.cog=id.get(a.cog);else a.a+=.4;a.id=fresh(a)}
   for(const b of c.belts){b.a=id.get(b.a);b.b=id.get(b.b);b.id=fresh(b)}
@@ -301,6 +302,14 @@ function placeCog(c,p){
   if(!axle)snap(c);solve();
 }
 const rpmOf=c=>c.w*60/TAU;
+// Ratio snap (S.ratios): a resized cog takes only tooth counts in a simple ratio to the cog it meshes with,
+// so the train turns in musical proportions; the nearest such count to the pull wins.
+const SNAP_RATIOS=[1/4,1/3,1/2,2/3,3/4,1,4/3,3/2,2,3,4];
+function ratioSnap(c,anchor,n,min){
+  if(!S.ratios||!anchor)return n;
+  const ok=SNAP_RATIOS.map(r=>anchor.n*r).filter(m=>Number.isInteger(m)&&m>=min&&m<=240);
+  return ok.length?ok.reduce((b,m)=>Math.abs(Math.log(m/n))<Math.abs(Math.log(b/n))?m:b):n;
+}
 // A speed given to any cog goes to its train's motor, scaled by the gear ratio between them; a train
 // without a motor cannot be driven. The motor holds rpm, and revolutions per bar for the tempo lock.
 const motorOf=c=>c.motor?c:c.driver;
@@ -335,8 +344,8 @@ function placePart(type,o,p){
   else if(type==='string')Object.assign(o,{x1:p.x-60,y1:p.y,x2:p.x+60,y2:p.y});
   else if(type==='reader'){const d=pickCog(p,c=>c.track);
     if(d){const a=Math.atan2(p.y-d.y,p.x-d.x),r0=ringR(d,0)-6,r1=ringR(d,trackRings(d.track)-1)+6;
-      Object.assign(o,{x1:d.x+Math.cos(a)*r0,y1:d.y+Math.sin(a)*r0,x2:d.x+Math.cos(a)*r1,y2:d.y+Math.sin(a)*r1})}
-    else Object.assign(o,{x1:p.x-30,y1:p.y,x2:p.x+30,y2:p.y})}
+      Object.assign(o,{x1:d.x+Math.cos(a)*r0,y1:d.y+Math.sin(a)*r0,x2:d.x+Math.cos(a)*r1,y2:d.y+Math.sin(a)*r1});seatReader(o,d)}
+    else{Object.assign(o,{x1:p.x-30,y1:p.y,x2:p.x+30,y2:p.y});o.on=null}}
   else{const c=pickCog(p);o.cog=c;if(c){o.a=wrap(Math.atan2(p.y-c.y,p.x-c.x)-renderTh(c));o.len=Math.max(4,Math.hypot(p.x-c.x,p.y-c.y))}}
 }
 
@@ -351,6 +360,7 @@ const G={
         sel=null;group=rest.length<current.length?rest:[...current,{type,o}]}};
   },
   group(s0){
+    for(const{type,o}of group)if(type==='reader'&&o.on&&!group.some(x=>x.o===o.on))o.on=null;
     const p0=screenToWorld(s0),start=group.map(({o})=>({o,s:{x:o.x,y:o.y,x1:o.x1,y1:o.y1,x2:o.x2,y2:o.y2}}));
     return {o:null,move(s){trackScrap(s);const q=screenToWorld(s),dx=q.x-p0.x,dy=q.y-p0.y;
         for(const{o,s:k}of start){if('x'in o){o.x=k.x+dx;o.y=k.y+dy}if('x1'in o){o.x1=k.x1+dx;o.y1=k.y1+dy;o.x2=k.x2+dx;o.y2=k.y2+dy}}solve()},
@@ -393,10 +403,25 @@ const G={
       up(){if(rim)changed();else endScrap('pad',o)},tap(){choose('pad',o,true)},dbl(s){focus('pad',o,s)}};
   },
   // Readers and strings: an end stretches, the body moves. A string sings its new pitch as it stretches.
+  // A seated reader's body slides around its disc, and its ends slide along the radius; pulled more than
+  // UNSEAT_PX past the rim it comes free. A free reader dragged onto a disc seats there, keeping its span.
   span(type,o,s0,end){
-    const p0=screenToWorld(s0),k={...o};let note=o.f200?Math.round(stringMidi(o)):0;
+    const p0=screenToWorld(s0),k={...o};let note=o.f200?Math.round(stringMidi(o)):0,turn=0;
+    const seated=()=>type==='reader'&&o.on;
+    if(seated())turn=o.seat.ang-Math.atan2(p0.y-o.on.y,p0.x-o.on.x);
     return {o,move(s){const q=screenToWorld(s),dx=q.x-p0.x,dy=q.y-p0.y;if(!end)trackScrap(s);
+        if(seated()){
+          const c=o.on,R=radius(c),d=Math.hypot(q.x-c.x,q.y-c.y);
+          if(d<=R+UNSEAT_PX/S.zoom&&!ui.scrap){
+            if(end){const f=clamp(d/R,0,1);if(end===1)o.seat.f0=f;else o.seat.f1=f}
+            else o.seat.ang=Math.atan2(q.y-c.y,q.x-c.x)+turn;
+            placeSeated(o);return}
+          o.on=null;buzz(10);Object.assign(k,{x1:o.x1-dx,y1:o.y1-dy,x2:o.x2-dx,y2:o.y2-dy});
+        }
         if(end!==2){o.x1=k.x1+dx;o.y1=k.y1+dy}if(end!==1){o.x2=k.x2+dx;o.y2=k.y2+dy}
+        if(type==='reader'&&!end&&!ui.scrap){const d=pickCog(q,c=>c.track);
+          if(d){const keep=o.seat||{f0:(ringR(d,0)-6)/radius(d),f1:(ringR(d,trackRings(d.track)-1)+6)/radius(d)};
+            o.on=d;o.seat={ang:Math.atan2(q.y-d.y,q.x-d.x),f0:keep.f0,f1:keep.f1};turn=0;placeSeated(o);buzz(8)}}
         if(o.f200&&end){const m=Math.round(stringMidi(o));if(m!==note){note=m;buzz(3)}}},
       up(){if(end)changed();else endScrap(type,o)},tap(){choose(type,o,true)},dbl(s){focus(type,o,s)}};
   },
@@ -418,7 +443,7 @@ const G={
         if(!mode){const sc=toScreen(c),rx=s0.x-sc.x,ry=s0.y-sc.y,mx=s.x-s0.x,my=s.y-s0.y;
           mode=Math.abs(mx*rx+my*ry)>Math.abs(mx*ry-my*rx)?'teeth':motorOf(c)?'crank':'idle';
           if(mode==='crank'){ui.crank={c};dial=gaugeAngle(rpmOf(c));at=ang(s0)}}
-        if(mode==='teeth'){grow??=resizer(c);const n=clamp(Math.round(grow.radiusThrough(screenToWorld(s))*TAU/TOOTH),min,240);if(n!==c.n){grow.set(n);buzz(3)}return}
+        if(mode==='teeth'){grow??=resizer(c);const n=ratioSnap(c,grow.anchor,clamp(Math.round(grow.radiusThrough(screenToWorld(s))*TAU/TOOTH),min,240),min);if(n!==c.n){grow.set(n);buzz(3)}return}
         if(mode==='idle')return;
         const a=ang(s);dial=clamp(dial+wrapPi(a-at),-GAUGE_SWEEP,GAUGE_SWEEP);at=a;drive(c,gaugeRpm(dial));
       },
@@ -458,7 +483,7 @@ const G={
     return {o:null,
       move(s){if(boxing){marquee.b=screenToWorld(s);group=boxSelect(a,marquee.b);return}clearTimeout(hold);view.x=vx-(s.x-s0.x)/S.zoom;view.y=vy-(s.y-s0.y)/S.zoom},
       up(){clearTimeout(hold);if(boxing){marquee=null;return}changed()},cancel(){clearTimeout(hold);marquee=null},
-      tap(){clearTimeout(hold);ui.room=!sel&&!ui.room;select(null)},dbl(){clearTimeout(hold);flyFit()}};
+      tap(){clearTimeout(hold);ui.room=!sel&&!group.length&&!ui.room;select(null)},dbl(){clearTimeout(hold);flyFit()}};
   },
 };
 function begin(s){
@@ -486,7 +511,8 @@ function pointerGesture(e,s){
   if(ui.armed&&!offStage(s))return G.armed(ui.armed,s);
   const g=begin(s);
   if(group.length>1&&g.o&&group.some(x=>x.o===g.o)){g.cancel?.();return G.group(s)}
-  if(group.length&&!g.o?.track)group=[];
+  // A slide on empty ground pans and keeps the selection; only a tap there clears it.
+  if(group.length&&g.o&&!g.o.track)group=[];
   return g;
 }
 cv.addEventListener('contextmenu',e=>e.preventDefault());
@@ -855,7 +881,7 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     // A finger that slides off empty grid before the hold pans the strip, as in FL Studio; the sheet takes the
     // vertical rest once the strip runs out.
     if(hold){if(Math.hypot(e.clientX-hold.x,e.clientY-hold.y)<8)return;
-      const s=sheet();pan={x:hold.x,y:hold.y,left:box.scrollLeft,top:box.scrollTop,sheet:s,sheetTop:s?s.scrollTop:0};dropHold();if(rollSel.size)rollSel.clear()}
+      const s=sheet();pan={x:hold.x,y:hold.y,left:box.scrollLeft,top:box.scrollTop,sheet:s,sheetTop:s?s.scrollTop:0};dropHold()}
     if(pan){const want=pan.top-(e.clientY-pan.y);box.scrollLeft=pan.left-(e.clientX-pan.x);box.scrollTop=want;
       if(pan.sheet)pan.sheet.scrollTop=pan.sheetTop+(want-box.scrollTop);return}
     move(e);
@@ -977,9 +1003,29 @@ function buildPanel(lead){
       try{await navigator.clipboard.writeText(ta.value);msg.textContent='url copied'}catch(e){msg.textContent='url in box; clipboard: '+e.name}}}),msg);
   panelRows=rows.length;panelReadouts=readouts.length;
 }
-function applyAudioSettings(){
-  if(master)master.gain.value=S.master;
-  if(engineNode)engineNode.port.postMessage({type:'space',...SPACE});
+function applyAudioSettings(){listen(true)}
+/* ---------- the listener is the camera ---------- */
+// A sound's place for the listener: across the open stage it pans; off it, it fades and darkens with distance
+// in screens, so zooming in on one corner brings that corner forward and lets the rest recede.
+function heard(p){
+  const st=stage(),sp=toScreen(p),w=st.r-st.l,h=st.b-st.t;
+  const pan=clamp((sp.x-(st.l+st.r)/2)/(w*.6),-.85,.85);
+  const out=Math.max(st.l-sp.x,sp.x-st.r,st.t-sp.y,sp.y-st.b,0)/Math.max(w,h,1),dark=1-Math.exp(-out*1.6);
+  return {pan,gain:1-.6*dark,dark};
+}
+// Zoomed out past the whole machine, the room takes over: quieter, wetter and low-passed, eased in over
+// a quarter of the way to 4x smaller. At the fit or closer the mix is full. Parameters glide, so a pinch
+// or a camera flight is heard as a smooth move, never a step.
+let listened=null;
+const listener=()=>({gain:master?.gain.value,cutoff:distant?.frequency.value,mix:listened});
+function listen(force=false){
+  if(!ac)return;
+  const f=fitTarget(),k=f?clamp(Math.log(f.fit/S.zoom)/Math.log(4),0,1):0,e=k*k*(3-2*k);
+  if(!force&&listened!==null&&Math.abs(e-listened)<.004)return;listened=e;
+  const t=ac.currentTime,glide=.08;
+  master.gain.setTargetAtTime(S.master*(1-.5*e),t,glide);
+  distant.frequency.setTargetAtTime(20000*Math.pow(700/20000,e),t,glide);
+  if(engineNode)engineNode.port.postMessage({type:'space',...SPACE,wet:SPACE.wet+(Math.min(1,SPACE.wet*2+.35)-SPACE.wet)*e,dry:SPACE.dry*(1-.55*e)});
 }
 let inspector=null,panelRows=0,panelReadouts=0;
 const REVS=['-2','-1','-1/2','-1/3','-1/4','0','1/8','1/6','1/4','1/3','1/2','2/3','3/4','1','4/3','3/2','2','3','4','6','8'];
@@ -1087,7 +1133,7 @@ function frame(ts){
   syncClock();
   if(!clock.paused)clock.view=Math.max(clock.view,heardAt(ts/1000));
   if(meter){meter.getFloatTimeDomainData(meterBuf);let m=0;for(const x of meterBuf)m=Math.max(m,Math.abs(x));peak=Math.max(m,peak*.95)}
-  stepCamera();draw();drawGroup();
+  stepCamera();draw();drawGroup();listen();
   const now=performance.now();
   if(roll&&roll.cv.offsetParent)drawRoll();
   if(panelShown()&&now-roAt>250){roAt=now;readPalette();for(const[b,fn]of readouts)b.textContent=fn()}

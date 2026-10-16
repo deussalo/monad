@@ -264,13 +264,13 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   console.log('ROOM');
   await m.dev(false); await m.room();
   const room = await probe(() => { const b = __cogs.activeBezel(); return b && { cx: b.cx, cy: b.cy, R: b.R, n: b.sectors.length }; });
-  check('tap empty ground with nothing selected: the room bezel, at any zoom', room && room.n === 10, room);
+  check('tap empty ground with nothing selected: the room bezel, at any zoom', room && room.n === 11, room);
   await m.shot('09-room');
   const wet0 = await probe(() => __cogs.SPACE.wet);
   await up(sector(room, 0, .5), -60);
   const wet1 = await probe(() => __cogs.SPACE.wet);
   check('drag down from the wet sector: drier room', wet1 < wet0, [wet0, wet1]);
-  await m.tap(sector(room, 9, .5)); await wait(400);
+  await m.tap(sector(room, 10, .5)); await wait(400);
   const clip = await probe(() => navigator.clipboard.readText().catch(e => 'clipboard: ' + e.name));
   check('tap the seal: a #w= link reaches the clipboard', /#w=[\w-]+$/.test(clip), clip.slice(0, 40) + '…');
 
@@ -348,9 +348,61 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await tp.tap(await tp.empty());
   await tp.stroke([box2[0], [box2[0][0] + 60, box2[0][1] + 40]], { steps: 6 });
   check('a slide on empty ground still pans', await tp.probe(() => JSON.stringify(__cogs.serialize().view)) !== v0b && (await tp.probe(() => __cogs.group)).length === 0, null);
+  await tp.stroke(box2, { steps: 8, hold: 550 });
+  const kept = await tp.probe(() => __cogs.group);
+  await tp.stroke([box2[0], [box2[0][0] + 40, box2[0][1] + 30]], { steps: 6 });
+  is('a slide on empty ground pans and keeps the selection', await tp.probe(() => __cogs.group), kept);
+  const nParts = await tp.probe(() => __cogs.W.cogs.length);
+  await tp.tap(await centre('#copy-parts')); await tp.tap(await centre('#paste-parts'));
+  check('copy and paste buttons: the parts come back as a new selection', await tp.probe(() => __cogs.W.cogs.length) > nParts && (await tp.probe(() => __cogs.group)).length > 0, [nParts, await tp.probe(() => __cogs.W.cogs.length)]);
+  await tp.probe(() => __cogs.undo());
+  await tp.tap(await tp.empty());
+
+  console.log('SEATED READERS');
+  const seat = () => tp.probe(() => { const c = __cogs.W.cogs.find(c => c.id === 8), r = __cogs.W.readers.find(r => r.id === 9), R = __cogs.radius(c);
+    return { on: r.on && r.on.id, f: [Math.hypot(r.x1 - c.x, r.y1 - c.y) / R, Math.hypot(r.x2 - c.x, r.y2 - c.y) / R].map(v => +v.toFixed(3)), ang: +Math.atan2((r.y1 + r.y2) / 2 - c.y, (r.x1 + r.x2) / 2 - c.x).toFixed(3) }; });
+  const st0 = await seat();
+  is('the default bass reader sits on its disc', st0.on, 8);
+  await tp.probe(() => { const c = __cogs.W.cogs.find(c => c.id === 8); c.x += 40; c.y -= 25; __cogs.solve(); __cogs.commit(); });
+  const st1 = await seat();
+  is('move the disc: the reader comes with it, same radius and span', [st1.on, st1.f, st1.ang], [8, st0.f, st0.ang]);
+  await tp.probe(() => { const c = __cogs.W.cogs.find(c => c.id === 8); c.n = 72; __cogs.solve(); __cogs.commit(); });
+  is('resize the disc: the reader scales with it', (await seat()).f, st0.f);
+  await tp.probe(() => __cogs.undo()); await tp.probe(() => __cogs.undo());
+  await tp.dbl(await tp.empty()); await wait(500);
+  const rpt = () => tp.probe(() => { const r = __cogs.W.readers.find(r => r.id === 9), c = __cogs.W.cogs.find(c => c.id === 8), m = __cogs.toScreen({ x: (r.x1 * .3 + r.x2 * .7), y: (r.y1 * .3 + r.y2 * .7) }), s = __cogs.toScreen(c), R = __cogs.radius(c) * __cogs.S.zoom; return { m: [m.x, m.y], c: [s.x, s.y], R }; });
+  const g1 = await rpt(), around = k => [g1.c[0] + Math.cos(k) * g1.R * .7, g1.c[1] + Math.sin(k) * g1.R * .7];
+  const k0 = Math.atan2(g1.m[1] - g1.c[1], g1.m[0] - g1.c[0]);
+  await tp.stroke([g1.m, around(k0 + .4), around(k0 + .8)], { steps: 6 });
+  const st2 = await seat();
+  check('drag a seated reader: it slides around its disc and stays seated', st2.on === 8 && Math.abs(st2.ang - st0.ang) > .4, [st0.ang, st2.ang]);
+  const g2 = await rpt();
+  await tp.stroke([g2.m, [g2.c[0] + (g2.m[0] - g2.c[0]) * 3, g2.c[1] + (g2.m[1] - g2.c[1]) * 3]], { steps: 10 });
+  is('pull it well past the rim: it comes free', (await seat()).on, null);
+  await tp.probe(() => __cogs.undo()); await tp.probe(() => __cogs.undo());
+  is('undo seats it again', (await seat()).on, 8);
+
+  console.log('RATIO SNAP');
+  const snapN = await tp.probe(() => { const { W, S } = __cogs; S.ratios = 1; const c = W.cogs.find(c => c.id === 1), d = W.cogs.find(c => c.id === 8);
+    return [c.n, d.n]; });
+  const rimR = await tp.probe(() => { const c = __cogs.W.cogs.find(c => c.id === 1), d = __cogs.W.cogs.find(c => c.id === 8), s = __cogs.toScreen(c), R = __cogs.radius(c) * __cogs.S.zoom, a = Math.atan2(c.y - d.y, c.x - d.x) + .9; return { p: [s.x + Math.cos(a) * R, s.y + Math.sin(a) * R], u: [Math.cos(a), Math.sin(a)] }; });
+  await tp.stroke([rimR.p, [rimR.p[0] + rimR.u[0] * 9, rimR.p[1] + rimR.u[1] * 9]], { steps: 6 });
+  const n1 = await tp.probe(() => __cogs.W.cogs.find(c => c.id === 1).n);
+  check('ratio snap on: a pulled rim lands on a simple ratio to its neighbour', [1/4,1/3,1/2,2/3,3/4,1,4/3,3/2,2,3,4].some(r => Math.abs(n1 / snapN[1] - r) < 1e-9), [snapN, n1]);
+  await tp.probe(() => { __cogs.S.ratios = 0; __cogs.undo(); });
+
+  console.log('LISTENER');
+  const mix = () => tp.probe(() => new Promise(r => setTimeout(() => r(__cogs.listener()), 700)));
+  await tp.dbl(await tp.empty()); const near0 = await mix();
+  await tp.pinch([195, 360], 240, 60); const far = await mix();
+  check('zoomed out past the machine: quieter, darker, wetter', far.gain < near0.gain * .8 && far.cutoff < near0.cutoff / 3 && far.mix > near0.mix, [near0, far]);
+  await tp.dbl(await tp.empty()); const full = await mix();
+  check('back to the whole machine: the full mix', Math.abs(full.gain - near0.gain) < .02 && full.cutoff > 15000, full);
+
   console.log('NOTES SHEET');
   const hist = await tp.probe(() => ['#undo-all', '#redo-all'].map(s => { const b = document.querySelector(s), r = b.getBoundingClientRect(); return { at: [r.x + r.width / 2, r.y + r.height / 2], off: b.disabled, shown: r.width > 0 }; }));
   check('undo and redo sit in the thumb row, always shown', hist.every(h => h.shown && h.at[1] > 844 * .7), hist);
+  await tp.probe(() => { __cogs.W.cogs[0].x += 12; __cogs.solve(); __cogs.commit(); });
   const wk0 = await tp.probe(() => __cogs.worldKey()), un = await tp.probe(() => __cogs.undos);
   await tp.tap(hist[0].at);
   check('the global undo steps the machine back', un > 0 && await tp.probe(() => __cogs.worldKey()) !== wk0, un);
@@ -521,7 +573,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   check('probability 0.5: some of 12 play', half > 0 && half < 12, half);
   await m.dev(false); await m.room();
   const room2 = await probe(() => { const b = __cogs.activeBezel(); return b && { cx: b.cx, cy: b.cy, R: b.R, n: b.sectors.length }; });
-  await m.tap(sector(room2, 9, .5)); await wait(400);
+  await m.tap(sector(room2, 10, .5)); await wait(400);
   const url = await probe(() => navigator.clipboard.readText());
   check('share yields a #w= url', /#w=[\w-]+$/.test(url), url.slice(0, 50) + '…');
   const sp = await (await b.newContext(PHONE)).newPage();

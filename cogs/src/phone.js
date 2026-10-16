@@ -62,6 +62,8 @@ function syncRollBar(){
 function syncEditor(){syncRollBar();
   const mode=editorMode(),button=$('#edit-part'),start=$('#to-start'),busy=(panelShown()&&!sheetMin())||!!ui.carry;
   button.hidden=!mode||busy;$('#delete-part').hidden=!(sel||group.length)||busy;
+  $('#copy-parts').hidden=!(group.length||sel&&sel.type!=='dot')||busy;$('#paste-parts').hidden=!partClip||busy;
+  {const ct=shelfTop()-102+'px';if($('#clip-bar').style.top!==ct)$('#clip-bar').style.top=ct}
   start.hidden=$('#history').hidden=busy;const top=shelfTop()-54+'px';if(start.style.top!==top)start.style.top=$('#part-bar').style.top=$('#history').style.top=top;
   const noUndo=!edits.past.length,noRedo=!edits.future.length;
   if($('#undo-all').disabled!==noUndo)$('#undo-all').disabled=$('#editor-undo').disabled=noUndo;
@@ -120,6 +122,10 @@ function mount(){
   $('#editor-close').onclick=()=>togglePanel(false);
   $('#delete-part').innerHTML=rx('Trash',22);$('#to-start').innerHTML=rx('TrackPrevious',22);
   $('#editor-undo').innerHTML=rx('Reset',20);$('#editor-redo').innerHTML=rx('Reset',20,true);$('#editor-close').innerHTML=rx('Cross2',20);
+  $('#copy-parts').innerHTML=rx('Copy',22);$('#paste-parts').innerHTML=rx('Clipboard',22);
+  $('#copy-parts').onclick=()=>{if(copyParts()){buzz(8);showInteraction(()=>`copy parts: ${group.length||1}`)}};
+  // A finger has no hover: paste lands in the middle of the open stage, selected, ready to drag into place.
+  $('#paste-parts').onclick=()=>{const h=ui.hover;ui.hover={x:CW/2,y:(safeTop+shelfTop())/2};pasteParts();ui.hover=h;buzz(8)};
   $('#undo-all').innerHTML=rx('Reset',22);$('#redo-all').innerHTML=rx('Reset',22,true);
   $('#undo-all').onclick=()=>{edits.undo();buzz(6)};$('#redo-all').onclick=()=>{edits.redo();buzz(6)};
   $('#editor-undo').onclick=()=>edits.undo();$('#editor-redo').onclick=()=>edits.redo();
@@ -252,6 +258,7 @@ function roomSectors(){
   const out=ROOM_SPACE.filter(k=>k!=='freeze').map(k=>defSector(ROOM_ICON[k],SPACE,SPACE_DEFS.find(d=>d[0]===k),roomEdited));
   out.push(choiceSector('freeze','reverb freeze',[0,1],()=>SPACE.freeze,x=>{SPACE.freeze=x;roomEdited()},onOff));
   out.push(defSector('level',S,S_DEFS.find(d=>d[0]==='master'),roomEdited));
+  out.push(choiceSector('quant','ratio snap',[0,1],()=>S.ratios,x=>{S.ratios=x;changed(true)},onOff));
   out.push(numSector('tempo','tempo bpm',S,'bpm',0,300,1,()=>changed(true)),numSector('beats','beats/bar',S,'beats',1,16,1,()=>changed(true)));
   out.push({icon:'seal',label:'share',action:share});
   return out;
