@@ -45,6 +45,8 @@ body.sheet-min #interaction{bottom:var(--peek,80px);border-bottom:1px solid var(
 #dev[data-editor="notes"] #inspector>:is([data-k="teeth"],[data-k="rpm"],[data-k="revs/bar"],[data-k="layer"],[data-k="phase deg"],.ro){display:none}
 .roll-sel{display:flex;justify-content:flex-end;gap:var(--space-1,4px)}
 #dev .roll-sel button{min-width:44px;min-height:44px;padding:0;border:0;background:none;display:grid;place-items:center;color:var(--fg)}
+#dev .roll-sel .roll-snap{width:auto;margin-right:auto;padding:0 8px;border:1px solid var(--line)}
+#dev .roll-sel button[aria-pressed=true]{color:var(--hot)}
 #dev .roll-sel button:disabled{color:var(--faint,#555);opacity:.5}
 #interaction{position:fixed;left:0;right:0;bottom:0;z-index:30;padding:var(--space-2,8px) var(--space-3,12px) calc(env(safe-area-inset-bottom,0px) + var(--space-2,8px));background:var(--bg);border-top:1px solid var(--line);color:var(--hot);font-size:14px;text-align:center;pointer-events:none}
 #interaction[hidden]{display:none}

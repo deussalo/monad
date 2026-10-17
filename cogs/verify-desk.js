@@ -213,6 +213,24 @@ const SHOTS = process.env.COGS_SHOTS || '';
   const walk = [];
   for (let i = rk.length - 2; i >= 0; i--) { await p.keyboard.press('Control+z'); walk.push(await key() === rk[i]); }
   is('ctrl+z walks every roll edit back exactly', walk, walk.map(() => true));
+  console.log('ROLL SNAP');
+  const heads = () => probe(() => { const c = __cogs.W.cogs.find(o => o.track), n = c.track.div, TAU = 2 * Math.PI, dir = c.w < 0 ? -1 : 1;
+    return c.track.dots.filter(d => d.ring === 1).map(d => [+((((-dir * d.a) % TAU + TAU) % TAU) / TAU * n).toFixed(4), +d.len.toFixed(4)]).sort((a, b) => a[0] - b[0]); });
+  is('the dock has a snap picker, on step by default', await p.inputValue('#dock [data-k="snap"] select'), 'step');
+  is('it offers free, step fractions, triplets, quarters, wholes and bars', await p.$$eval('#dock [data-k="snap"] option', o => ['none', '1/3 step', '1/8 triplet', '1/4 (beat)', 'whole', 'bar'].every(v => o.some(x => x.value === v))), true);
+  const snapTo = v => p.selectOption('#dock [data-k="snap"] select', v);
+  await snapTo('1/3 step'); await p.mouse.click(...grid(5.5, R.rings - 1 - 1 + .5)); await settle();
+  is('snap 1/3 step: a click at 5.5 lands on 5 1/3, one third of a step long', await heads(), [[5.3333, .3333]]);
+  await snapTo('none'); await p.mouse.click(...grid(7.27, R.rings - 1 - 1 + .5)); await settle();
+  is('snap none: the note lands where clicked', (await heads())[1][0], 7.27);
+  await snapTo('1/4 (beat)'); await p.mouse.click(...grid(9.5, R.rings - 1 - 1 + .5)); await settle();
+  is('snap 1/4: a click at 9.5 lands on the beat at 8', (await heads())[2][0], 8);
+  await p.mouse.move(...grid(8.5, R.rings - 1 - 1 + .5)); await p.mouse.down(); await p.mouse.move(...grid(10.6, R.rings - 1 - 1 + .5), { steps: 8 }); await p.mouse.up(); await settle();
+  is('snap 1/4: dragging a note 2 steps keeps it on the beat at 8', (await heads())[2][0], 8);
+  await p.mouse.move(...grid(8.5, R.rings - 1 - 1 + .5)); await p.mouse.down(); await p.mouse.move(...grid(12.2, R.rings - 1 - 1 + .5), { steps: 8 }); await p.mouse.up(); await settle();
+  is('snap 1/4: dragging past a beat moves it a whole beat', (await heads()).map(h => h[0]), [5.3333, 7.27, 12]);
+  await snapTo('step'); for (let i = 0; i < 4; i++) await p.keyboard.press('Control+z');
+  is('undo takes the snapped notes back', await heads(), []);
   await click([150, -250]);
   is('deselect: the dock goes', await probe(() => __cogs.roll), null);
 

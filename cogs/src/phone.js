@@ -50,6 +50,10 @@ function placeRoll(c,f){
   const c0=c,act=(icon,label,fn)=>{const b=el('button',{ariaLabel:label,innerHTML:rx(icon,20),onclick:()=>{fn();buzz(6)}});b.dataset.roll=label;return b};
   const bar=el('div',{className:'roll-sel'},act('CardStackPlus','duplicate',()=>dupSel(c0)),act('Copy','copy',()=>copySel(c0)),
     act('Clipboard','paste',()=>pasteClip(c0)),act('Trash','delete notes',()=>deleteSel(c0.track)));
+  // The velocity lane stays tucked away until this toggle shows it; the choice holds for every disc.
+  const vel=act('Velocity','velocity',()=>{setRollVel(!rollVel);vel.ariaPressed=String(rollVel)});vel.ariaPressed=String(rollVel);bar.prepend(vel);
+  // The snap picker rides the bar, left of the actions, so it stays in thumb reach above the strip.
+  const snap=roll.snapRow.querySelector('select');snap.ariaLabel='snap';snap.className='roll-snap';bar.prepend(snap);roll.snapRow.remove();
   f.prepend(bar,roll.box);syncRollBar();
 }
 const PART_BAR_ICON={notes:rx('Piano',22),patch:rx('MixerVertical',22)};
@@ -57,7 +61,7 @@ const editorMode=()=>sel?.type==='cog'&&sel.o.track?'notes':sel?.o.voice?'patch'
 let editorOwner=null,editorOpenedAt=-Infinity;
 function syncRollBar(){
   const bar=document.querySelector('.roll-sel');if(!bar||!roll)return;const some=rollSel.size>0;
-  for(const b of bar.children){const off=b.dataset.roll==='paste'?!rollClip.length:!some;if(b.disabled!==off)b.disabled=off}
+  for(const b of bar.querySelectorAll('button')){const off=b.dataset.roll==='velocity'?false:b.dataset.roll==='paste'?!rollClip.length:!some;if(b.disabled!==off)b.disabled=off}
 }
 function syncEditor(){syncRollBar();
   const mode=editorMode(),button=$('#edit-part'),start=$('#to-start'),busy=(panelShown()&&!sheetMin())||!!ui.carry;

@@ -604,17 +604,34 @@ function readerPlayheads(c){
 function rollGeom(){const t=roll.c.track,L=roll.label,cw=Math.max(4,Math.round(Math.max(roll.minCell,Math.floor((roll.box.clientWidth-L)/t.div))*rollZoom));return {cw,W:L+cw*t.div,H:roll.row*trackRings(t)}}
 const colAngle=(c,col)=>wrap(-rollDir(c)*col*TAU/c.track.div);
 const rollCol=(c,d)=>Math.round(rollU(c,d.a)*c.track.div)%c.track.div;
+// Snap, as FL Studio's menu: none, fractions of a step (a roll column), and note values. A note value needs the
+// disc's steps per beat: with a bpm lock, from the disc's real speed; without one, a revolution counts as a bar.
+// A beat is a quarter note, so a whole note is four beats and a bar is beats/bar of them.
+const SNAPS=[['none',0,'s'],['1/6 step',1/6,'s'],['1/4 step',1/4,'s'],['1/3 step',1/3,'s'],['1/2 step',1/2,'s'],['step',1,'s'],
+  ['1/32',1/32,'n'],['1/16 triplet',1/24,'n'],['1/16',1/16,'n'],['1/8 triplet',1/12,'n'],['1/8',1/8,'n'],['1/4 triplet',1/6,'n'],
+  ['1/4 (beat)',1/4,'n'],['1/2 triplet',1/3,'n'],['1/2',1/2,'n'],['whole',1,'n'],['bar',1,'bar']];
+let rollSnap='step',rollVel=false;
+const tidy=x=>Math.round(x*1e6)/1e6;
+function stepsPerBeat(c){const rpm=Math.abs(c.w*60/TAU);return S.bpm&&rpm>1e-6?c.track.div*rpm/S.bpm:c.track.div/S.beats}
+// The snap in steps for this disc; 0 is free.
+function snapOf(c){const[,v,k]=SNAPS.find(s=>s[0]===rollSnap)||SNAPS[5];return k==='s'?v:k==='n'?v*4*stepsPerBeat(c):S.beats*stepsPerBeat(c)}
+const snapDown=(x,g)=>g?tidy(Math.floor(x/g+1e-6)*g):x;
+const MIN_LEN=1/16;
+// A note's head in steps from the strip's left edge, fractional when it sits off the step grid.
+const rollPos=(c,d)=>{const n=c.track.div,x=tidy(rollU(c,d.a)*n);return x>=n?x-n:x};
+const fmtSteps=x=>`${+x.toFixed(2)} step${x===1?'':'s'}`;
 // The pointer in grid units: columns from the first step, rows from the top ring.
 function rollAt(e){const g=rollGeom(),r=roll.cv.getBoundingClientRect();return {x:(e.clientX-r.left-roll.label)/g.cw,y:(e.clientY-r.top)/roll.row}}
+// The cell under the pointer: its column, ring, and `x`, the pointer snapped down to the grid, where a note lands.
 function rollCell(e){
   const t=roll.c.track,at=rollAt(e),col=Math.floor(at.x),row=Math.floor(at.y);
   if(col<0||col>=t.div||row<0||row>=trackRings(t))return null;
-  return {col,ring:trackRings(t)-1-row,a:colAngle(roll.c,col)};
+  const x=Math.min(snapDown(at.x,snapOf(roll.c)),t.div);return {col,x,ring:trackRings(t)-1-row,a:colAngle(roll.c,x)};
 }
 // The pen: a new note takes the length of the last note touched on the same disc (pressed, placed or resized),
-// as FL Studio's does, but each disc keeps its own; a disc not yet touched writes one-step notes.
+// as FL Studio's does, but each disc keeps its own; a disc not yet touched writes notes one snap long (one step if free).
 const penLen=new WeakMap();
-const pin=(cell,c)=>({ring:cell.ring,a:cell.a,p:brush.p,v:brush.v,len:c?Math.min(penLen.get(c)||1,c.track.div):1});
+const pin=(cell,c)=>({ring:cell.ring,a:cell.a,p:brush.p,v:brush.v,len:c?Math.min(penLen.get(c)||snapOf(c)||1,c.track.div):1});
 // The note whose span, head column onward and wrapping round the disc, covers this cell.
 const sameCell=(a,b)=>a.ring===b.ring&&Math.abs(wrap(a.a-b.a+Math.PI)-Math.PI)<1e-6;
 
@@ -633,18 +650,18 @@ function nudgeSel(c,dc,dr){const t=c.track,from=selPins(t).map(d=>[d,d.a,d.ring]
 function deleteSel(t){if(!rollSel.size)return;t.dots=t.dots.filter(d=>!rollSel.has(d));rollSel.clear();rollEdit()}
 function copySel(c){
   const sel=selPins(c.track);if(!sel.length)return false;
-  const cols=sel.map(d=>rollCol(c,d)),min=Math.min(...cols);rollClip=sel.map((d,i)=>({dc:cols[i]-min,ring:d.ring,p:d.p,v:d.v,len:d.len}));return true;
+  const cols=sel.map(d=>rollPos(c,d)),min=Math.min(...cols);rollClip=sel.map((d,i)=>({dc:tidy(cols[i]-min),ring:d.ring,p:d.p,v:d.v,len:d.len}));return true;
 }
 function pasteClip(c){
   const t=c.track;if(!rollClip.length)return;
-  const head=readerPlayheads(c)[0],at=rollAnchor??(head?Math.floor(head.u*t.div):0);
+  const head=readerPlayheads(c)[0],at=rollAnchor??(head?snapDown(head.u*t.div,snapOf(c)||1):0);
   rollSel.clear();
   for(const q of rollClip){const d={ring:Math.min(q.ring,trackRings(t)-1),a:colAngle(c,(at+q.dc)%t.div),p:q.p,v:q.v,len:q.len};t.dots.push(d);rollSel.add(d)}
   settleSel(t);rollEdit();
 }
 // Duplicate, as FL's ctrl+B: a copy of the selection right after it, selected in its place.
 function dupSel(c){
-  const t=c.track,sel=selPins(t);if(!sel.length)return;const cols=sel.map(d=>rollCol(c,d)+d.len),span=Math.max(...cols)-Math.min(...sel.map(d=>rollCol(c,d)));
+  const t=c.track,sel=selPins(t);if(!sel.length)return;const cols=sel.map(d=>rollPos(c,d)+d.len),span=tidy(Math.max(...cols)-Math.min(...sel.map(d=>rollPos(c,d))));
   const copies=sel.map(d=>({...d,a:wrap(d.a-rollDir(c)*span*TAU/t.div)}));t.dots.push(...copies);rollSel.clear();for(const d of copies)rollSel.add(d);settleSel(t);rollEdit();
 }
 function brushSel(t,k){const sel=selPins(t);if(!sel.length)return;for(const d of sel)d[k]=brush[k];changed()}
@@ -659,7 +676,7 @@ function rollKey(e){
     if(!op||e.altKey)return false;e.preventDefault();op();return true;
   }
   const arrow={arrowleft:[-1,0],arrowright:[1,0],arrowup:[0,1],arrowdown:[0,-1]}[k];
-  if(arrow){e.preventDefault();nudgeSel(c,arrow[0],arrow[1]*(e.shiftKey?SCALES[t.scale].length:1));return true}
+  if(arrow){e.preventDefault();nudgeSel(c,arrow[0]*(snapOf(c)||1),arrow[1]*(e.shiftKey?SCALES[t.scale].length:1));return true}
   if(k==='delete'||k==='backspace'){e.preventDefault();deleteSel(t);return true}
   if(k==='escape'&&rollSel.size){rollSel.clear();return true}
   return !!PART_KEYS[k]||k==='s';
@@ -683,6 +700,13 @@ function drawRoll(){
   }
   x.lineWidth=1;
   for(let k=0;k<=t.div;k++){x.strokeStyle=k%4?FAINT:DIM;x.beginPath();x.moveTo(L+k*g.cw+.5,0);x.lineTo(L+k*g.cw+.5,g.H);x.stroke()}
+  // Snap lines: a snap of whole steps marks its multiples, a snap off the step grid (triplets, step fractions) dashes them.
+  const sg=snapOf(c),whole=Number.isInteger(tidy(sg));
+  if(sg&&sg!==1&&sg*g.cw>=4){
+    x.strokeStyle=whole?DIM:FAINT;if(!whole)x.setLineDash([2,3]);
+    for(let k=1;k*sg<t.div-1e-6;k++){const p=tidy(k*sg);if(!whole&&Number.isInteger(p))continue;const px=Math.round(L+p*g.cw)+.5;x.beginPath();x.moveTo(px,0);x.lineTo(px,g.H);x.stroke()}
+    x.setLineDash([]);
+  }
   x.strokeStyle=FAINT;
   for(let r=0;r<=trackRings(t);r++){x.beginPath();x.moveTo(L,r*RH+.5);x.lineTo(L+gw,r*RH+.5);x.stroke()}
   for(const d of byLength(t)){
@@ -698,7 +722,7 @@ function drawRoll(){
   for(const p of readerPlayheads(c)){x.strokeStyle=hot(p.rd.flash,READ,x);x.beginPath();x.moveTo(L+p.u*gw,0);x.lineTo(L+p.u*gw,g.H);x.stroke();x.globalAlpha=1}
   const m=roll.marquee;
   if(m){x.lineWidth=1;x.strokeStyle=SEL;x.setLineDash([5,4]);x.strokeRect(L+m.x0*g.cw+.5,m.y0*RH+.5,(m.x1-m.x0)*g.cw,(m.y1-m.y0)*RH);x.setLineDash([])}
-  if(roll.lane)drawLane(c,g);
+  if(roll.lane&&rollVel)drawLane(c,g);
 }
 const LANE_H=56;
 function drawLane(c,g){
@@ -709,7 +733,7 @@ function drawLane(c,g){
   x.lineWidth=1;for(let k=0;k<=t.div;k++){x.strokeStyle=k%4?FAINT:DIM;x.beginPath();x.moveTo(L+k*g.cw+.5,0);x.lineTo(L+k*g.cw+.5,LANE_H);x.stroke()}
   const bw=clamp(Math.round(g.cw*.3),3,10),some=rollSel.size>0;
   for(const d of t.dots){
-    if(d.ring>=trackRings(t))continue;const on=rollSel.has(d),h=Math.max(2,d.v*(LANE_H-8)),bx=L+rollCol(c,d)*g.cw+(g.cw-bw)/2;
+    if(d.ring>=trackRings(t))continue;const on=rollSel.has(d),h=Math.max(2,d.v*(LANE_H-8)),bx=L+rollPos(c,d)*g.cw+(Math.min(g.cw,d.len*g.cw)-bw)/2;
     x.globalAlpha=some&&!on?.4:1;x.fillStyle=on?SEL:FG;x.fillRect(bx,LANE_H-4-h,bw,h);x.fillRect(bx-2,LANE_H-4-h,bw+4,2);
   }
   x.globalAlpha=1;
@@ -734,7 +758,9 @@ function drawGrip(x,ex,top,RH,cw,held){
 // The strip goes into `strip`, its controls into `tools`; row and label are in CSS px.
 function rollSection(c,{strip,tools,row,label,minCell=6}){
   const t=c.track,cv2=el('canvas'),box=el('div',{className:'roll'},cv2);
-  box.style.cssText='overflow-x:auto;margin:4px 0';cv2.style.cssText='display:block;touch-action:none;cursor:crosshair';
+  // position, isolation and paint containment keep the sticky keys clipped to the strip: without them a phone's
+  // compositor can paint the keys above the box once it scrolls down.
+  box.style.cssText='overflow-x:auto;margin:4px 0;position:relative;isolation:isolate;contain:paint';cv2.style.cssText='display:block;touch-action:none;cursor:crosshair';
   cv2.tabIndex=0;cv2.style.outline='none';
   const keys=minCell>6?el('canvas'):null;
   if(keys){
@@ -744,13 +770,15 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
   }
   // Touch builds get a velocity lane under the strip, as FL Mobile's: a bar per note at its start column. Drag on it
   // to set the bars under the finger; with a selection, only selected notes there change.
-  const lane=keys?el('canvas'):null;
+  const lane=keys?el('canvas'):null;let laneRow=null;
   if(lane){
     lane.style.cssText=`display:block;flex-shrink:0;touch-action:none;margin-left:${-label}px`;
     const tag=el('div',{textContent:'vel',style:`position:sticky;left:0;z-index:1;flex-shrink:0;width:${label}px;display:grid;place-items:center;color:var(--dim);font-size:11px;background:var(--bg)`});
-    box.append(el('div',{style:'display:flex;position:sticky;bottom:0;z-index:2;background:var(--bg);border-top:1px solid var(--line)'},tag,lane));
+    // Hidden until asked for (rollVel, the bar's velocity toggle).
+    laneRow=el('div',{style:'display:flex;position:sticky;bottom:0;z-index:2;background:var(--bg);border-top:1px solid var(--line)'},tag,lane);
+    laneRow.style.display=rollVel?'flex':'none';box.append(laneRow);
   }
-  roll={cv:cv2,keys,lane,box,c,row:Math.round(row*rollZoom),row0:row,label,minCell,marquee:null,hover:null,grabbed:null,status:null};
+  roll={cv:cv2,keys,lane,laneRow:laneRow,box,c,row:Math.round(row*rollZoom),row0:row,label,minCell,marquee:null,hover:null,grabbed:null,status:null};
   cv2.onpointerleave=e=>{if(e.pointerType!=='touch'&&roll.hover){roll.hover=null;drawRoll()}};
   if(rollSelOf!==c){rollSel.clear();rollAnchor=null;rollSelOf=c}
   // A press: ctrl/cmd draws a box (a click toggles one pin), a selected pin drags the set,
@@ -786,12 +814,12 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     keys.onpointerup=keys.onpointercancel=()=>previewOff();
   }
   const erase=(cell,at)=>{const d=cell&&rollHit(c,at);if(d){t.dots.splice(t.dots.indexOf(d),1);rollSel.delete(d)}};
-  const moveSet=(set,cell)=>({from:set.map(d=>[d,d.a,d.ring]),col:cell.col,ring:cell.ring,moved:false,heard:set[0]?.ring});
+  const moveSet=(set,cell,at)=>({from:set.map(d=>[d,d.a,d.ring]),x0:at.x,ring:cell.ring,moved:false,heard:set[0]?.ring});
   let press=null;
   cv2.oncontextmenu=e=>e.preventDefault();
   const down=e=>{
     const at=rollAt(e),cell=rollCell(e),hit=cell&&rollHit(c,at),ctrl=e.ctrlKey||e.metaKey;
-    cv2.focus({preventScroll:true});cv2.setPointerCapture(e.pointerId);if(cell)rollAnchor=cell.col;
+    cv2.focus({preventScroll:true});cv2.setPointerCapture(e.pointerId);if(cell)rollAnchor=cell.x;
     if(e.button===2){press={erase:true};erase(cell,at);return}
     if(ctrl){
       if(!hit&&!e.shiftKey)rollSel.clear();
@@ -803,12 +831,12 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
       if(!rollSel.has(hit)){rollSel.clear();rollSel.add(hit)}
       let set=selPins(t);play(hit.ring);penLen.set(c,hit.len);
       if(e.shiftKey){set=set.map(d=>({...d}));t.dots.push(...set);rollSel.clear();for(const d of set)rollSel.add(d)}
-      press=moveSet(set,cell);return;
+      press=moveSet(set,cell,at);return;
     }
     if(rollSel.size){rollSel.clear();press=null;return}
     if(!cell){press=null;return}
     const d=pin(cell,c);t.dots.push(d);play(cell.ring);rollSel.clear();rollSel.add(d);
-    press={...moveSet([d],cell),fresh:true};
+    press={...moveSet([d],cell,at),fresh:true};
   };
   const move=e=>{
     const at=rollAt(e),cell=rollCell(e);
@@ -816,11 +844,16 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
       cv2.style.cursor=gp?'ew-resize':hit?'move':'crosshair';if(roll.hover!==gp){roll.hover=gp;drawRoll()}return}
     if(roll.marquee){Object.assign(roll.marquee,{x1:at.x,y1:at.y});return}
     if(press.erase){erase(cell,at);return}
-    if(press.from){const dc=Math.floor(at.x)-press.col,dr=trackRings(t)-1-Math.floor(at.y)-press.ring;if(dc||dr||press.moved){press.moved=true;moveSel(c,press.from,dc,dr)}
+    // A drag moves by whole snaps counted from where the press began, so a note off the grid keeps its offset;
+    // free, it follows the pointer once it has gone 4 px, so a tap stays a tap.
+    if(press.from){const sg=snapOf(c),dc=sg?tidy((Math.floor(at.x/sg+1e-6)-Math.floor(press.x0/sg+1e-6))*sg):press.moved||Math.abs(at.x-press.x0)*rollGeom().cw>=4?at.x-press.x0:0,dr=trackRings(t)-1-Math.floor(at.y)-press.ring;if(dc||dr||press.moved){press.moved=true;moveSel(c,press.from,dc,dr)}
       const lead=press.from[0][0];if(lead.ring!==press.heard){press.heard=lead.ring;play(lead.ring)}return}
-    if(press.stretch){const delta=Math.round(at.x-press.x0),was=press.stretch.len;
-      for(const[d,len0]of press.set)d.len=clamp(len0+delta,1,t.div);
-      if(press.stretch.len!==was){press.moved=true;buzz(3);play(press.stretch.ring);penLen.set(c,press.stretch.len)}roll.status=`note length: ${press.stretch.len} step${press.stretch.len>1?'s':''}`}
+    // A resize puts the grabbed note's end on the snap grid (never at or before its head) and stretches the rest of
+    // the set by as much; free, the end follows the pointer.
+    if(press.stretch){const sg=snapOf(c),lead=press.stretch,head=rollPos(c,lead),len0=press.set.find(s=>s[0]===lead)[1],end=head+len0+at.x-press.x0,was=lead.len;
+      const want=sg?Math.max(tidy(Math.round(end/sg)*sg),tidy((Math.floor(head/sg+1e-6)+1)*sg)):Math.max(end,head+MIN_LEN),delta=tidy(want-head-len0);
+      for(const[d,l0]of press.set)d.len=clamp(tidy(l0+delta),Math.min(l0,sg||MIN_LEN),t.div);
+      if(press.stretch.len!==was){press.moved=true;buzz(3);play(press.stretch.ring);penLen.set(c,press.stretch.len)}roll.status=`note length: ${fmtSteps(press.stretch.len)}`}
   };
   const up=()=>{
     const p=press,m=roll.marquee;press=null;roll.marquee=null;roll.grabbed=null;roll.status=null;previewOff();if(!p)return;
@@ -905,7 +938,7 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
     let painting=false;
     const setVel=e=>{
       const r=lane.getBoundingClientRect(),g=rollGeom(),col=Math.floor((e.clientX-r.left-roll.label)/g.cw),v=clamp(+(1-(e.clientY-r.top-4)/(LANE_H-8)).toFixed(2),.05,1);
-      let at=t.dots.filter(d=>d.ring<trackRings(t)&&rollCol(c,d)===col);if(at.some(d=>rollSel.has(d)))at=at.filter(d=>rollSel.has(d));
+      let at=t.dots.filter(d=>d.ring<trackRings(t)&&Math.floor(rollPos(c,d)+1e-6)===col);if(at.some(d=>rollSel.has(d)))at=at.filter(d=>rollSel.has(d));
       roll.status=`velocity: ${Math.round(v*100)}%`;if(!at.length)return;
       for(const d of at)d.v=v;painting=true;drawRoll();
     };
@@ -915,6 +948,7 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
   }
   const shift=k=>()=>{const s=rollDir(c)*TAU/t.div;for(const d of t.dots)d.a=wrap(d.a-k*s);changed()};
   strip.append(box);
+  roll.snapRow=selRow(tools,'snap',SNAPS.map(s=>s[0]),()=>rollSnap,v=>{rollSnap=v});
   tools.append(el('button',{textContent:'shift <',onclick:shift(-1)}),el('button',{textContent:'shift >',onclick:shift(1)}));
   numRow(tools,'brush p',0,1,.01,...bind(brush,'p',()=>brushSel(t,'p')),BRUSH_DEFAULT.p);
   numRow(tools,'brush vel',0,1,.01,...bind(brush,'v',()=>brushSel(t,'v')),BRUSH_DEFAULT.v);
@@ -1139,3 +1173,5 @@ function frame(ts){
   if(panelShown()&&now-roAt>250){roAt=now;readPalette();for(const[b,fn]of readouts)b.textContent=fn()}
   requestAnimationFrame(frame);
 }
+// Show or hide the velocity lane under the strip.
+function setRollVel(on){rollVel=on;if(roll?.laneRow)roll.laneRow.style.display=on?'flex':'none'}

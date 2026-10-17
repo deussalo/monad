@@ -445,6 +445,8 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   is('duplicate: four notes, the copies selected', [(await trackOf(discAt.id)).length, await tp.probe(() => __cogs.rollSel)], [4, 2]);
   await tp.tap((await rbtn('delete notes')).at);
   is('delete: back to two, nothing selected, the buttons rest', [(await trackOf(discAt.id)).length, await tp.probe(() => __cogs.rollSel), (await rbtn('delete notes')).off], [2, 0, true]);
+  is('the velocity lane is hidden until its toggle shows it', await tp.probe(() => document.querySelector('#inspector .roll').querySelectorAll('canvas')[2].getBoundingClientRect().height), 0);
+  await tp.tap((await rbtn('velocity')).at); await wait(100);
   const lane = await tp.probe(() => { const r = document.querySelector('#inspector .roll').querySelectorAll('canvas')[2].getBoundingClientRect(); return { x: r.left + 28, top: r.top, h: r.height }; });
   const lx = lane.x + 9.5 * rg.cw;
   await tp.p.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))); await tp.stroke([[lx, lane.top + 16], [lx, lane.top + lane.h - 4]], { steps: 6 });
