@@ -108,6 +108,18 @@ function harmEditor(v,i,edited){
   cv.onpointerdown=e=>{cv.setPointerCapture(e.pointerId);on=true;set(e)};cv.onpointermove=e=>{if(on)set(e)};cv.onpointerup=cv.onpointercancel=()=>{if(on){on=false;edited()}};
   draw();return {box:cv,draw};
 }
+// A route's curve: drag along it, the bend shows as the line it draws from source in (left) to depth out (up).
+function curveEditor(m,edited){
+  const cv=el('canvas',{className:'wave-curve',title:'curve: drag up or down'}),W=48,H=32;cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';cv.style.touchAction='none';
+  const draw=()=>{const x=cv.getContext('2d'),cs=getComputedStyle(document.documentElement);x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
+    x.strokeStyle=cs.getPropertyValue('--sel');x.lineWidth=1.5;x.beginPath();for(let i=0;i<=24;i++){const u=i/24,y=modCurve(u,m.curve||0);i?x.lineTo(u*W,H-2-y*(H-4)):x.moveTo(0,H-2-y*(H-4))}x.stroke()};
+  let d=null;
+  cv.onpointerdown=e=>{cv.setPointerCapture(e.pointerId);d={y:e.clientY,c:m.curve||0}};
+  cv.onpointermove=e=>{if(!d)return;m.curve=clamp(+(d.c+(d.y-e.clientY)/80).toFixed(2),-1,1);draw()};
+  cv.onpointerup=cv.onpointercancel=()=>{if(d){d=null;edited()}};
+  cv.ondblclick=()=>{m.curve=0;draw();edited()};
+  draw();return el('label',{className:'wave-choice'},el('span',{textContent:'curve'}),cv);
+}
 function waveEditor(f,owner){
   const v=owner.voice,root=el('div',{className:'wave'}),body=el('div',{className:'wave-body'});
   let parts=[];
@@ -143,9 +155,12 @@ function waveEditor(f,owner){
         choice('table',WAVE_TABLES,()=>o.table,x=>{o.table=x;edited();rebuild()}),choice('filter',WAVE_FILTERS,()=>o.filter,x=>{o.filter=x;edited()})),pv.box);
       if(o.table==='harmonics'){const h=harmEditor(v,i,edited);parts.push(h);body.append(h.box)}
       body.append(group('wave',O('pos'),O('warp'),O('phase'),O('level'),O('pan')),group('pitch',O('oct'),O('semi'),O('fine')),
-        group('unison',O('uni'),O('detune'),O('spread')),group('amp envelope',O('a'),O('d'),O('s'),O('r')),
+        group('unison',O('uni'),O('detune'),O('blend'),O('spread')),group('amp envelope',O('a'),O('d'),O('s'),O('r')),
         group('filter',O('cut'),O('res'),O('drive'),O('key')),group('filter envelope',O('famt'),O('fa'),O('fd'),O('fs'),O('fr')));
-    }else if(t==='SUB')body.append(group('sub (on ENV1)',K('sub.level'),K('sub.oct')),group('noise (on ENV1)',K('noise.level'),K('noise.color')),group('voice',K('vol'),K('glide'),K('gate')));
+    }else if(t==='SUB')body.append(group('sub (on ENV1)',K('sub.level'),K('sub.oct')),group('noise (on ENV1)',K('noise.level'),K('noise.color')),group('voice',K('vol'),K('glide'),K('gate')),
+      el('div',{className:'wave-row'},choice('voicing',VOICE_MODES,()=>v.voicing.mode,x=>{v.voicing.mode=x;edited()}),
+        toggle('glide always',()=>v.voicing.always,x=>{v.voicing.always=x;edited()}),toggle('glide scales',()=>v.voicing.scale,x=>{v.voicing.scale=x;edited()})),
+      el('p',{className:'wave-hint',textContent:'Mono plays one note at a time and restarts the envelopes; legato restarts them only after a gap. Glide always slides every note; otherwise only overlapping ones. Glide scales makes short steps faster.'}));
     else if(t==='ENV')for(let e=1;e<=WAVE_ENVS;e++)body.append(group(`ENV${e}`+(e===1?' (also sub and noise)':''),...['a','d','s','r'].map(k=>K(`env${e}.${k}`))));
     else if(t==='LFO')for(let l=1;l<=WAVE_LFOS;l++){const L=v.lfo[l-1];
       body.append(el('div',{className:'wave-group'},el('h4',{textContent:'LFO'+l}),el('div',{className:'wave-row'},
@@ -179,6 +194,8 @@ function waveEditor(f,owner){
           const row=el('div',{className:'wave-route'},
             choice('source',WAVE_SOURCES,()=>m.src,x=>{m.src=x;edited()},srcLabel),choice('to',dsts,()=>m.dst,x=>{m.dst=x;edited()},p=>waveLabel(v,p)),
             el('div',{className:'wave-amt'},amt,num),toggle('±',()=>m.bi,x=>{m.bi=x;edited()}),toggle('bypass',()=>m.off,x=>{m.off=x;edited()}),
+            choice('aux',['',...WAVE_SOURCES],()=>m.aux||'',x=>{m.aux=x;edited()},x=>x?srcLabel(x):'none'),toggle('aux inv',()=>m.auxInv,x=>{m.auxInv=x;edited()}),
+            curveEditor(m,edited),
             el('button',{textContent:'×',ariaLabel:'delete route',onclick:()=>{v.mods.splice(j,1);edited();fill()}}));
           list.append(row)})};
       fill();

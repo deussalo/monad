@@ -28,7 +28,7 @@ function buildTable(spectra){
 }
 const NP=WAVE_PARAMS.length,NS=WAVE_SOURCES.length,SRC_VEL=WAVE_SOURCES.indexOf('vel'),SRC_NOTE=WAVE_SOURCES.indexOf('note'),SRC_RAND=WAVE_SOURCES.indexOf('rand');
 const PI_=(path)=>WAVE_INDEX.get(path);
-const OSC_KEYS=['pos','oct','semi','fine','level','pan','uni','detune','spread','phase','warp','a','d','s','r','cut','res','drive','key','famt','fa','fd','fs','fr'];
+const OSC_KEYS=['pos','oct','semi','fine','level','pan','uni','detune','blend','spread','phase','warp','a','d','s','r','cut','res','drive','key','famt','fa','fd','fs','fr'];
 const OSC_P=Array.from({length:WAVE_OSCS},(_,i)=>Object.fromEntries(OSC_KEYS.map(k=>[k,PI_(`osc${i+1}.${k}`)])));
 const ENV_P=Array.from({length:WAVE_ENVS},(_,i)=>['a','d','s','r'].map(k=>PI_(`env${i+1}.${k}`)));
 const LFO_P=Array.from({length:WAVE_LFOS},(_,i)=>[PI_(`lfo${i+1}.rate`),PI_(`lfo${i+1}.phase`)]);
@@ -80,7 +80,8 @@ function runFx(cp,L,R,n,bpm){
   const fs=sampleRate,v=cp.fxv,st=cp.fxs;
   // FX knobs take the macros' routes (a rack is shared by every voice, so per-note sources do not reach it)
   for(const i of FX_IDX)v[i]=cp.base[i];
-  for(const[s,d,amt,bi]of cp.routes)if(s>=MAC0&&s<MAC0+WAVE_MACROS&&FXI[WAVE_PARAMS[d][0]]===d){const x=cp.base[MAC_P[s-MAC0]];v[d]+=(bi?x*2-1:x)*amt}
+  for(const[s,d,amt,bi,ax,ai,cv]of cp.routes)if(s>=MAC0&&s<MAC0+WAVE_MACROS&&FXI[WAVE_PARAMS[d][0]]===d){const x=modCurve(cp.base[MAC_P[s-MAC0]],cv);
+    const a=ax>=MAC0&&ax<MAC0+WAVE_MACROS?cp.base[MAC_P[ax-MAC0]]:1;v[d]+=(bi?x*2-1:x)*amt*(ax<0?1:ai?1-a:a)}
   for(const i of FX_IDX)v[i]=waveDenorm(WAVE_PARAMS[i],v[i]);
   if(cp.fxOn[0]){const dr=v[FXI['dist.drive']],mix=v[FXI['dist.mix']],g=1+dr*30,inv=1/Math.sqrt(g),mode=cp.distMode,q=Math.pow(2,16-dr*14),hold=1+Math.floor(dr*16);
     for(let s=0;s<n;s++)for(let c=0;c<2;c++){const B=c?R:L,x=B[s];let y;
@@ -109,7 +110,7 @@ class WaveSynth extends AudioWorkletProcessor{
   constructor(){
     super();
     this.tables={};for(const n of WAVE_TABLES)if(n!=='harmonics')this.tables[n]=buildTable(waveSpectra(n));
-    this.patches=new Map();this.bpm=120;this.queue=[];this.offs=[];this.frame=0;this.statAt=0;this.ver=0;
+    this.patches=new Map();this.bpm=120;this.bws=new Float64Array(8);this.queue=[];this.offs=[];this.frame=0;this.statAt=0;this.ver=0;
     this.voices=Array.from({length:WVOICES},()=>this.voice());
     this.mixL=new Float32Array(WSLICE);this.mixR=new Float32Array(WSLICE);this.ol=new Float32Array(WSLICE);this.or=new Float32Array(WSLICE);
     this.port.onmessage=e=>{const m=e.data;
@@ -128,22 +129,34 @@ class WaveSynth extends AudioWorkletProcessor{
     const old=this.patches.get(id),base=new Float64Array(NP),val=new Float64Array(NP);
     for(let i=0;i<NP;i++){const P=WAVE_PARAMS[i];let x=+waveGet(p,P[0]);if(!Number.isFinite(x))x=P[4];base[i]=Math.min(1,Math.max(0,waveNorm(P,x)));val[i]=waveDenorm(P,base[i])}
     const routes=[],modded=new Set();
-    for(const m of p.mods||[]){const s=WAVE_SOURCES.indexOf(m.src),d=WAVE_INDEX.get(m.dst);if(s<0||d===undefined||!m.amt||m.off)continue;routes.push([s,d,+m.amt,m.bi?1:0]);modded.add(d)}
+    for(const m of p.mods||[]){const s=WAVE_SOURCES.indexOf(m.src),d=WAVE_INDEX.get(m.dst);if(s<0||d===undefined||!m.amt||m.off)continue;routes.push([s,d,+m.amt,m.bi?1:0,WAVE_SOURCES.indexOf(m.aux),m.auxInv?1:0,+m.curve||0]);modded.add(d)}
     const tabs=p.osc.map((o,i)=>o.table==='harmonics'?(old&&old.harmKey[i]===JSON.stringify(o.harm)?old.tabs[i]:buildTable(waveSpectra('harmonics',o.harm))):this.tables[o.table]||this.tables.basic);
     this.patches.set(id,{id,ver:++this.ver,base,val,routes,modded:[...modded],tabs,harmKey:p.osc.map(o=>JSON.stringify(o.harm)),
       on:p.osc.map(o=>!!o.on),ftype:p.osc.map(o=>Math.max(0,WAVE_FILTERS.indexOf(o.filter))),
-      lfoShape:p.lfo.map(l=>Math.max(0,LFO_SHAPES.indexOf(l.shape))),lfoRetrig:p.lfo.map(l=>l.retrig!==false),lfoSync:p.lfo.map(l=>LFO_SYNCS[l.sync]||0),last:old?old.last:null,
+      lfoShape:p.lfo.map(l=>Math.max(0,LFO_SHAPES.indexOf(l.shape))),lfoRetrig:p.lfo.map(l=>l.retrig!==false),lfoSync:p.lfo.map(l=>LFO_SYNCS[l.sync]||0),mode:Math.max(0,VOICE_MODES.indexOf(p.voicing?.mode)),always:p.voicing?.always!==false,glideScale:!!p.voicing?.scale,last:old?old.last:null,
       fxOn:WAVE_FX.map(k=>!!(p.fx&&p.fx[k]&&p.fx[k].on)),distMode:Math.max(0,DIST_MODES.indexOf(p.fx?.dist?.mode)),delaySync:DELAY_SYNCS[p.fx?.delay?.sync]||0,ping:p.fx?.delay?.ping!==false,
       busL:old?old.busL:new Float32Array(128),busR:old?old.busR:new Float32Array(128),fxs:old?old.fxs:newFxState(sampleRate),fxv:new Float64Array(NP),quiet:old?old.quiet:1e9,live:false});
     for(const v of this.voices)if(v.on&&v.cp&&v.cp.id===id)v.cp=this.patches.get(id);
   }
   start(m){
     const cp=this.patches.get(m.id);if(!cp)return;
-    let live=0,free=null,oldest=null;
-    for(const v of this.voices){if(!v.on){free??=v;continue}if(v.kill)continue;live++;if(!oldest||v.age<oldest.age)oldest=v}
+    let live=0,free=null,oldest=null,mine=null,held=false;
+    for(const v of this.voices){if(!v.on){free??=v;continue}if(v.kill)continue;live++;if(!oldest||v.age<oldest.age)oldest=v;
+      if(v.cp.id===cp.id){if(!mine||v.age>mine.age)mine=v;if(!v.released)held=true}}
+    const gl=cp.val[P_GLIDE];
+    // mono and legato: one voice per patch, gliding to the new note; mono restarts the envelopes from where they are,
+    // legato only when the last note had already let go
+    if(cp.mode&&mine){
+      for(const v of this.voices)if(v!==mine&&v.on&&v.cp.id===cp.id)v.kill=1;
+      const v=mine,from=gl>0&&(cp.always||held)?this.pitch(v,m.at):m.midi;
+      v.from=from;v.midi=m.midi;v.t0=m.at;v.key=m.key;v.age=this.frame;v.amp=m.amp;v.vel=Math.min(1,Math.max(0,m.vel??m.amp));v.glideT=this.glideTime(cp,from,m.midi);
+      v.offAt=m.at+Math.max(m.hold||0,cp.val[P_GATE])*sampleRate;cp.last=m.midi;
+      if(cp.mode===1||!held){for(const o of v.osc){o.env.st=1;o.fenv.st=1}for(const e of v.envs)e.st=1}
+      v.released=false;return;
+    }
     if(live>=WPOLY&&oldest)oldest.kill=1;
     const v=free||oldest;if(!v)return;
-    v.on=true;v.kill=0;v.cp=cp;v.ver=-1;v.age=this.frame;v.key=m.key;v.midi=m.midi;v.from=cp.last??m.midi;cp.last=m.midi;
+    v.on=true;v.kill=0;v.cp=cp;v.ver=-1;v.age=this.frame;v.key=m.key;v.midi=m.midi;v.from=gl>0&&(cp.always||held)&&cp.last!=null?cp.last:m.midi;v.glideT=this.glideTime(cp,v.from,m.midi);cp.last=m.midi;
     v.amp=m.amp;v.pan=m.pan||0;v.dark=m.dark||0;v.vel=Math.min(1,Math.max(0,m.vel??m.amp));v.rand=Math.random();
     v.t0=m.at;v.offAt=m.at+Math.max(m.hold||0,cp.val[P_GATE])*sampleRate;v.released=false;v.dl=v.dr=0;
     v.vals.set(cp.val);
@@ -153,6 +166,10 @@ class WaveSynth extends AudioWorkletProcessor{
     for(let i=0;i<WAVE_LFOS;i++){const l=v.lfo[i];l.ph=0;l.held=Math.random();l.prev=Math.random()}
     v.subPh=0;
   }
+  // the voice's pitch now, partway along its glide
+  pitch(v,at){const T=v.glideT||0,tt=(at-v.t0)/sampleRate;return T>0?v.midi+(v.from-v.midi)*Math.exp(-tt/(T/4.6)):v.midi}
+  // glide time; scaled, it is per octave of the interval, so short steps glide faster
+  glideTime(cp,a,b){const g=cp.val[P_GLIDE];return cp.glideScale?g*Math.abs(a-b)/12:g}
   release(v){if(v.released)return;v.released=true;for(const o of v.osc){if(o.env.st)o.env.st=4;if(o.fenv.st)o.fenv.st=4}for(const e of v.envs)if(e.st)e.st=4}
   // One voice for one slice: sources, routed values, then the oscillators through their filters.
   lfoRate(cp,vals,i){const b=cp.lfoSync[i];return b?this.bpm/60/b:vals[LFO_P[i][0]]}
@@ -166,12 +183,12 @@ class WaveSynth extends AudioWorkletProcessor{
     src[SRC_VEL]=v.vel;src[SRC_NOTE]=Math.min(1,Math.max(0,(v.midi-24)/84));src[SRC_RAND]=v.rand;
     if(cp.routes.length){
       for(const d of cp.modded)vals[d]=cp.base[d];
-      for(const[s,d,amt,bi]of cp.routes)vals[d]+=(bi?src[s]*2-1:src[s])*amt;
+      // a route: its source through the curve, bipolar or not, times the depth, times the aux source (or its inverse)
+      for(const[s,d,amt,bi,ax,ai,cv]of cp.routes){const x=modCurve(src[s],cv);vals[d]+=(bi?x*2-1:x)*amt*(ax<0?1:ai?1-src[ax]:src[ax])}
       for(const d of cp.modded)vals[d]=waveDenorm(WAVE_PARAMS[d],vals[d]);
     }
     for(let i=0;i<WAVE_LFOS;i++){const l=v.lfo[i],nph=l.ph+this.lfoRate(cp,vals,i)*n/fs;if(nph>=1){l.prev=l.held;l.held=Math.random()}l.ph=nph%1}
-    const gl=vals[P_GLIDE],tt=(now-v.t0)/fs,midi=gl>0?v.midi+(v.from-v.midi)*Math.exp(-tt/(gl/4.6)):v.midi;
-    if(gl>0&&Math.abs(v.from-v.midi)>1e-3&&tt>gl)v.from=v.midi;
+    const midi=this.pitch(v,now);
     const ol=this.ol,or=this.or;
     let alive=false;
     for(let i=0;i<WAVE_OSCS;i++){
@@ -184,15 +201,18 @@ class WaveSynth extends AudioWorkletProcessor{
       const fmax=f*Math.pow(2,span/24)*(1+Math.abs(vals[P.warp])*3),lim=.45*fs/Math.max(1,fmax);
       let mip=0;while(mip<WMIPS-1&&(1023>>mip)>lim)mip++;
       const fp=vals[P.pos]*(tab.frames-1),f0=Math.floor(fp),ff=fp-f0,f1=Math.min(f0+1,tab.frames-1),A=tab.mips[mip][f0],B=tab.mips[mip][f1];
-      const warp=vals[P.warp],norm=1/Math.sqrt(nu),pan0=vals[P.pan],spread=vals[P.spread];
+      const warp=vals[P.warp],norm=1/Math.sqrt(nu),pan0=vals[P.pan],spread=vals[P.spread],blend=vals[P.blend];
       // the filter: cutoff from the knob, the key and the filter envelope (±6 octaves), set once per slice
       const ft=cp.ftype[i];
       let cut=vals[P.cut]*Math.pow(2,vals[P.key]*(midi-60)/12+vals[P.famt]*6*o.fenv.lv);cut=Math.min(fs*.45,Math.max(20,cut));
       const g=Math.tan(Math.PI*cut/fs),k=2-1.96*vals[P.res],a1=1/(1+g*(g+k)),a2=g*a1,a3=g*a2,drive=1+vals[P.drive]*8,dn=1/Math.sqrt(drive);
       const z=o.z;ol.fill(0,0,n);or.fill(0,0,n);
+      // blend weights, kept at the same total power: 0.5 even, toward 1 the outer voices, toward 0 the centre ones
+      const bws=this.bws;let sw=0;for(let j=0;j<nu;j++){bws[j]=nu>1?Math.max(0,1+(blend-.5)*2*(Math.abs(j/(nu-1)-.5)*4-1)):1;sw+=bws[j]*bws[j]}
+      const bn=sw>1e-9?Math.sqrt(nu/sw):1;if(sw<=1e-9)bws.fill(1);
       for(let j=0;j<nu;j++){
         const off=nu>1?(j/(nu-1)-.5)*span:0,inc=f*Math.pow(2,off/12)/fs,p=Math.max(-1,Math.min(1,pan0+(nu>1?spread*(j/(nu-1)*2-1):0))),ang=(p+1)*Math.PI/4;
-        const gl_=Math.cos(ang)*norm*level*Math.SQRT2,gr_=Math.sin(ang)*norm*level*Math.SQRT2;let ph=o.ph[j];
+        const bw=bws[j]*bn,gl_=Math.cos(ang)*norm*level*Math.SQRT2*bw,gr_=Math.sin(ang)*norm*level*Math.SQRT2*bw;let ph=o.ph[j];
         for(let s=0;s<n;s++){
           let q=ph;if(warp)q=warp>0?Math.pow(q,1+3*warp):1-Math.pow(1-q,1-3*warp);
           const x=q*WN,xi=x|0,xf=x-xi,a=A[xi]+(A[xi+1]-A[xi])*xf,b=B[xi]+(B[xi+1]-B[xi])*xf,y=a+(b-a)*ff;

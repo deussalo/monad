@@ -2,7 +2,7 @@
 // Three wavetable oscillators (A, B, C) whose tables are built additively, each with its own amp envelope and its own
 // filter with a filter envelope; a sub and a noise source on ENV1; three global envelopes, four LFOs and eight
 // macros that any knob can take as modulation, as in Serum. Every value here can be a mod destination.
-const WAVE_OSCS=3,WAVE_ENVS=3,WAVE_LFOS=4,WAVE_MACROS=8,WAVE_HARMS=32;
+const WAVE_OSCS=3,WAVE_ENVS=4,WAVE_LFOS=4,WAVE_MACROS=8,WAVE_HARMS=32;
 const WAVE_TABLES=['basic','harmonics','sweep','pulse','vocal','organ'];
 const WAVE_FILTERS=['off','lp12','lp24','hp12','hp24','bp','notch','peak'];
 const LFO_SHAPES=['sine','tri','saw up','saw down','square','s&h','smooth'];
@@ -12,6 +12,9 @@ const DELAY_SYNCS={off:0,'1/16':1/4,'1/8T':1/3,'1/8':1/2,'1/8.':3/4,'1/4T':2/3,'
 // The FX rack, after the voices of a patch are summed, in this order, as Serum's: each on or off.
 const WAVE_FX=['dist','chorus','delay','eq','comp'];
 const DIST_MODES=['tube','hard','fold','crush'];
+const VOICE_MODES=['poly','mono','legato'];
+// A route's source through its curve (−1 bends toward the bottom, +1 toward the top), as the matrix's curve column.
+const modCurve=(x,c)=>!c?x:c>0?1-Math.pow(1-x,1+3*c):Math.pow(x,1-3*c);
 const WAVE_SOURCES=[...Array.from({length:WAVE_ENVS},(_,i)=>'env'+(i+1)),...Array.from({length:WAVE_LFOS},(_,i)=>'lfo'+(i+1)),
   ...Array.from({length:WAVE_MACROS},(_,i)=>'m'+(i+1)),'vel','note','rand'];
 // [path, label, min, max, default, curve]: lin, log (a ratio range), time (cubic, fine at the short end), int.
@@ -19,7 +22,7 @@ function waveParamList(){
   const P=[];
   for(let i=1;i<=WAVE_OSCS;i++){const o='osc'+i+'.';P.push(
     [o+'pos','wt pos',0,1,0,'lin'],[o+'oct','octave',-4,4,0,'int'],[o+'semi','semi',-12,12,0,'int'],[o+'fine','fine ct',-100,100,0,'lin'],
-    [o+'level','level',0,1,i===1?.75:0,'lin'],[o+'pan','pan',-1,1,0,'lin'],[o+'uni','unison',1,8,1,'int'],[o+'detune','detune',0,1,.25,'lin'],
+    [o+'level','level',0,1,i===1?.75:0,'lin'],[o+'pan','pan',-1,1,0,'lin'],[o+'uni','unison',1,8,1,'int'],[o+'detune','detune',0,1,.25,'lin'],[o+'blend','blend',0,1,.5,'lin'],
     [o+'spread','stereo',0,1,.8,'lin'],[o+'phase','phase',0,1,0,'lin'],[o+'warp','bend',-1,1,0,'lin'],
     [o+'a','attack',0,8,.003,'time'],[o+'d','decay',0,8,.8,'time'],[o+'s','sustain',0,1,.7,'lin'],[o+'r','release',0,8,.3,'time'],
     [o+'cut','cutoff',20,20000,20000,'log'],[o+'res','res',0,1,.1,'lin'],[o+'drive','drive',0,1,0,'lin'],[o+'key','key track',0,1,0,'lin'],

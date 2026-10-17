@@ -49,3 +49,4 @@ textarea{height:90px}
 .wave-amt{display:flex;align-items:center;gap:4px;min-width:140px;flex:1}.wave-amt b{width:34px;text-align:right;font-weight:normal}
 .wave-lib{display:flex;flex-direction:column;gap:4px}
 .wave-file{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--dim)}
+.wave-curve{background:var(--rig-surface,#000);border-radius:6px;cursor:ns-resize}
