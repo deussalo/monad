@@ -161,7 +161,7 @@ function waveEditor(f,owner){
   const chips=el('div',{className:'wave-src'});
   const hint=el('div',{className:'wave-hint'});
   const syncChips=()=>{for(const c of chips.children)c.ariaPressed=String(c.dataset.src===waveUi.arm);
-    hint.textContent=waveUi.arm?`${srcLabel(waveUi.arm)} armed: drag a knob to set its depth, double tap to remove. Tap ${srcLabel(waveUi.arm)} to finish.`:'Tap a source, or drag it onto a knob, to modulate.';redraw()};
+    hint.toggleAttribute('data-armed',!!waveUi.arm);hint.textContent=waveUi.arm?`${srcLabel(waveUi.arm)} armed: drag a knob to set its depth, double tap to remove. Tap ${srcLabel(waveUi.arm)} to finish.`:'Tap a source, or drag it onto a knob, to modulate.';redraw()};
   for(const s of WAVE_SOURCES){
     const b=el('button',{textContent:srcLabel(s)});b.dataset.src=s;b.style.touchAction='none';
     let start=null;

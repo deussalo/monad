@@ -65,6 +65,18 @@ body.sheet-min #interaction{bottom:var(--peek,80px);border-bottom:1px solid var(
 .disc-fields .stepper{display:flex;align-items:center;gap:2px}
 #dev .disc-fields .stepper input{width:48px;padding:0}
 #dev .disc-fields .stepper button{min-width:40px;min-height:40px;background:var(--pad);border-radius:8px;font-size:18px}
+/* the synth's patch sheet: pitch chips on one row, level and vel sense side by side on the next, no pitch readout
+   (the keyboard says the shift) and the routing hint only while a source is armed, so the synth itself is on screen */
+#dev[data-editor="patch"] #inspector:has(.wave)>.row:has(>input[type=range]):not(:is([data-k="x"],[data-k="y"],[data-k="radius"])){display:inline-flex;flex-wrap:wrap;align-items:center;column-gap:6px;width:calc(50% - 6px);margin:0 6px 2px 0;min-height:0;vertical-align:top}
+#dev[data-editor="patch"] #inspector:has(.wave)>.row:has(>input[type=range])>span:first-child{flex:1 0 100%;font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+#dev[data-editor="patch"] #inspector:has(.wave)>.row>input[type=range]{flex:1 1 0;min-width:0;min-height:36px}
+#dev[data-editor="patch"] #inspector:has(.wave)>.row>input[type=number]{flex:0 0 44px;width:44px;min-height:36px;padding:0;text-align:center;background:none}
+#dev[data-editor="patch"] #inspector:has(.wave)>.ro,#dev .wave div.wave-hint:not([data-armed]){display:none}
+/* a synth row of choices (osc on, table, filter, warp, warp 2) stays one row: the choices share the width */
+#dev .wave-row:has(>.wave-choice){flex-wrap:nowrap}
+#dev .wave-row>.wave-choice{flex:1 1 0;min-width:0}
+#dev .wave-row>.wave-choice select{width:100%;min-width:0;padding:0 4px;font-size:13px;text-overflow:ellipsis}
+#dev .wave-row>button{flex:0 0 auto}
 #dev .roll-sel button[aria-pressed=true]{color:var(--hot)}
 #dev .roll-sel button:disabled{color:var(--faint,#555);opacity:.5}
 #interaction{position:fixed;left:0;right:0;bottom:0;z-index:30;padding:var(--space-2,8px) var(--space-3,12px) calc(env(safe-area-inset-bottom,0px) + var(--space-2,8px));background:var(--bg);border-top:1px solid var(--line);color:var(--hot);font-size:14px;text-align:center;pointer-events:none}

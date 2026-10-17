@@ -1170,11 +1170,13 @@ function heardAt(frameSec){
   if(heardOffset===null||Math.abs(err)>.25)heardOffset=target;else heardOffset+=clamp(err,-.02*dt,.02*dt);
   return frameSec+heardOffset;
 }
+let coveredSkip=0;
 function frame(ts){
   syncClock();
   if(!clock.paused)clock.view=Math.max(clock.view,heardAt(ts/1000));
   if(meter){meter.getFloatTimeDomainData(meterBuf);let m=0;for(const x of meterBuf)m=Math.max(m,Math.abs(x));peak=Math.max(m,peak*.95)}
-  stepCamera();draw();drawGroup();listen();
+  // under an open sheet the machine shows only dimmed behind the scrim: it is drawn at a quarter of the frame rate
+  stepCamera();if(!worldCovered()||++coveredSkip>=4){coveredSkip=0;draw();drawGroup()}else syncEditor();listen();
   const now=performance.now();
   if(roll&&roll.cv.offsetParent)drawRoll();
   if(panelShown()&&now-roAt>250){roAt=now;readPalette();for(const[b,fn]of readouts)b.textContent=fn()}

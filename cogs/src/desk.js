@@ -7,6 +7,7 @@ const offStage=s=>s.x>=barLeft();
 const chromeHit=()=>null;
 function reveal(){}
 const panelShown=()=>bar.classList.contains('open'),inspectorLive=()=>true;
+const worldCovered=()=>false;
 function togglePanel(open=!panelShown()){bar.classList.toggle('open',open);if(open)syncRows()}
 function placeRoll(c){
   const t=c.track;

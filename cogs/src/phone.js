@@ -7,6 +7,7 @@ const stage=()=>({l:0,r:CW,t:safeTop,b:shelfTop()});
 const offStage=s=>s.y>=shelfTop();
 function drawChrome(){const b=activeBezel();if(b)drawBezel(b);if(ui.carry&&ui.carry.ghost)drawGhost(ui.carry.ghost);drawShelf();drawGlyph();syncEditor();drawInteraction()}
 const panelShown=()=>!$('#dev').hidden,inspectorLive=panelShown;
+const worldCovered=()=>panelShown()&&!sheetMin()&&!!$("#dev").dataset.editor;
 function togglePanel(open=$('#dev').hidden,mode=''){
   $('#dev').dataset.editor=mode;$('#dev').hidden=$('#scrim').hidden=!open;setSheetMin(false);
   if(open){syncRows();buildInspector()}

@@ -2743,11 +2743,13 @@ function heardAt(frameSec){
   if(heardOffset===null||Math.abs(err)>.25)heardOffset=target;else heardOffset+=clamp(err,-.02*dt,.02*dt);
   return frameSec+heardOffset;
 }
+let coveredSkip=0;
 function frame(ts){
   syncClock();
   if(!clock.paused)clock.view=Math.max(clock.view,heardAt(ts/1000));
   if(meter){meter.getFloatTimeDomainData(meterBuf);let m=0;for(const x of meterBuf)m=Math.max(m,Math.abs(x));peak=Math.max(m,peak*.95)}
-  stepCamera();draw();drawGroup();listen();
+  // under an open sheet the machine shows only dimmed behind the scrim: it is drawn at a quarter of the frame rate
+  stepCamera();if(!worldCovered()||++coveredSkip>=4){coveredSkip=0;draw();drawGroup()}else syncEditor();listen();
   const now=performance.now();
   if(roll&&roll.cv.offsetParent)drawRoll();
   if(panelShown()&&now-roAt>250){roAt=now;readPalette();for(const[b,fn]of readouts)b.textContent=fn()}
@@ -2918,7 +2920,7 @@ function waveEditor(f,owner){
   const chips=el('div',{className:'wave-src'});
   const hint=el('div',{className:'wave-hint'});
   const syncChips=()=>{for(const c of chips.children)c.ariaPressed=String(c.dataset.src===waveUi.arm);
-    hint.textContent=waveUi.arm?`${srcLabel(waveUi.arm)} armed: drag a knob to set its depth, double tap to remove. Tap ${srcLabel(waveUi.arm)} to finish.`:'Tap a source, or drag it onto a knob, to modulate.';redraw()};
+    hint.toggleAttribute('data-armed',!!waveUi.arm);hint.textContent=waveUi.arm?`${srcLabel(waveUi.arm)} armed: drag a knob to set its depth, double tap to remove. Tap ${srcLabel(waveUi.arm)} to finish.`:'Tap a source, or drag it onto a knob, to modulate.';redraw()};
   for(const s of WAVE_SOURCES){
     const b=el('button',{textContent:srcLabel(s)});b.dataset.src=s;b.style.touchAction='none';
     let start=null;
@@ -3036,6 +3038,7 @@ const offStage=s=>s.x>=barLeft();
 const chromeHit=()=>null;
 function reveal(){}
 const panelShown=()=>bar.classList.contains('open'),inspectorLive=()=>true;
+const worldCovered=()=>false;
 function togglePanel(open=!panelShown()){bar.classList.toggle('open',open);if(open)syncRows()}
 function placeRoll(c){
   const t=c.track;

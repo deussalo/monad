@@ -56,3 +56,7 @@ CPU of the wave worklet, ms per second of audio on this box (node, min of 3; 8 h
   amp envelopes ramped per slice, warp-free fast loop, a 64-stream unison budget across voices; env4 now actually runs.
   UX: tabs in a 5×2 grid (no sideways scroll), ◀ patch ▶ browsing in the header (plays it), a sticky two-octave
   keyboard with octave shift, multi-touch and slide.
+- 2026-10-17 06:40Z (beat 6): the keyboard is transposed by the voice's octave/semitones (it is MIDI into the instrument).
+  Phone, patch sheet open: the machine behind the scrim is drawn at a quarter rate; 390×844 at 2×, CPU throttled 4×:
+  frame median 33.4 → 16.7 ms, idle 0.6% → 37%. Sheet header compacted (level and vel sense side by side, no pitch
+  readout, hint only while armed, choice rows one line): the oscillator knobs are now on screen when it opens.
