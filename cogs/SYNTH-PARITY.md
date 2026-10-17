@@ -70,3 +70,6 @@ CPU of the wave worklet, ms per second of audio on this box (node, min of 3; 8 h
 - 2026-10-17 07:50Z (beat 8): knob fine control for touch: the drag integrates step by step, and each vertical pixel
   counts less the further the finger is out to the side (60 px out: half, 120 px: a third); the readout shows
   "fine ×N". Shift still gives 4× finer on a desk.
+- 2026-10-17 08:20Z (beat 9): editor canvases (knobs, wave shape, curves, keyboard) read the palette from a cache
+  refreshed at most every 250 ms instead of getComputedStyle per draw. Phone, 4× throttle: knob release (edit +
+  redraw of the tab) 18–21 → 11 ms, LFO tab 18 → 10 ms, FX 26 → 19 ms; A/B/C tabs unchanged at ~27 ms (layout).

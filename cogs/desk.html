@@ -2802,14 +2802,17 @@ function waveText(P,x){
   return Math.round(x*100)+'%';
 }
 const routesTo=(v,path)=>v.mods.filter(m=>m.dst===path);
+// The palette, read once a frame at most: a tab of knobs drawing together asks the style system once, not per knob.
+let wavePalAt=-1,wavePalMap=null;
+const wavePal=k=>{const t=performance.now();if(!wavePalMap||t-wavePalAt>250){wavePalAt=t;wavePalMap=new Map();wavePalMap.cs=getComputedStyle(document.documentElement)}
+  let c=wavePalMap.get(k);if(c===undefined){c=wavePalMap.cs.getPropertyValue(k).trim()||'#888';wavePalMap.set(k,c)}return c};
 function waveKnob(v,path,edited){
   const P=WAVE_PARAMS[WAVE_INDEX.get(path)],S_=52,cv=el('canvas'),val=el('b'),name=el('span',{textContent:P[1]});
   const box=el('div',{className:'knob'},cv,name,val);box.dataset.path=path;
   cv.width=cv.height=S_*dpr;cv.style.width=cv.style.height=S_+'px';
   const A0=Math.PI*.75,SW=Math.PI*1.5;
   const draw=()=>{
-    const x=cv.getContext('2d'),c=S_/2,n=waveNorm(P,waveGet(v,path)),cs=getComputedStyle(document.documentElement);
-    const col=k=>cs.getPropertyValue(k).trim()||'#888';
+    const x=cv.getContext('2d'),c=S_/2,n=waveNorm(P,waveGet(v,path)),col=wavePal;
     x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,S_,S_);x.lineCap='round';
     x.lineWidth=4;x.strokeStyle=col('--line');x.beginPath();x.arc(c,c,c-6,A0,A0+SW);x.stroke();
     const z=P[2]<0&&P[3]>0?waveNorm(P,0):0;
@@ -2870,7 +2873,7 @@ function wavePreview(v,i){
     const o=v.osc[i],sp=waveSpectra(o.table,o.harm),fp=o.pos*(sp.length-1),f0=Math.floor(fp),f1=Math.min(f0+1,sp.length-1),ff=fp-f0,x=cv.getContext('2d');
     const ys=[];let peak=1e-9;
     for(let s=0;s<=96;s++){let y=0;const t=s/96;for(let k=1;k<=64;k++){const a=sp[f0][k-1]*(1-ff)+sp[f1][k-1]*ff;if(a)y+=a*Math.sin(TAU*k*t)}ys.push(y);peak=Math.max(peak,Math.abs(y))}
-    const cs=getComputedStyle(document.documentElement);
+    const cs={getPropertyValue:wavePal};
     x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);x.strokeStyle=cs.getPropertyValue('--line');x.beginPath();x.moveTo(0,H/2);x.lineTo(W,H/2);x.stroke();
     x.strokeStyle=o.on?cs.getPropertyValue('--hot'):cs.getPropertyValue('--dim');x.lineWidth=1.5;x.beginPath();
     ys.forEach((y,s)=>{const px=s/96*W,py=H/2-y/peak*(H/2-4);s?x.lineTo(px,py):x.moveTo(px,py)});x.stroke();
@@ -2881,7 +2884,7 @@ function wavePreview(v,i){
 function harmEditor(v,i,edited){
   const cv=el('canvas',{className:'wave-harm'}),W=Math.min(320,innerWidth-48),H=72;cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';cv.style.touchAction='none';
   const o=v.osc[i],bw=W/WAVE_HARMS;
-  const draw=()=>{const x=cv.getContext('2d'),cs=getComputedStyle(document.documentElement);x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
+  const draw=()=>{const x=cv.getContext('2d'),cs={getPropertyValue:wavePal};x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
     for(let k=0;k<WAVE_HARMS;k++){const h=o.harm[k]*(H-4);x.fillStyle=cs.getPropertyValue('--faint');x.fillRect(k*bw+1,0,bw-2,H);x.fillStyle=cs.getPropertyValue('--hot');x.fillRect(k*bw+1,H-h,bw-2,h)}};
   let on=false;
   const set=e=>{const r=cv.getBoundingClientRect(),k=Math.floor((e.clientX-r.left)/bw);if(k<0||k>=WAVE_HARMS)return;o.harm[k]=clamp(+(1-(e.clientY-r.top)/H).toFixed(2),0,1);draw();wavePost(v);
@@ -2892,7 +2895,7 @@ function harmEditor(v,i,edited){
 // A route's curve: drag along it, the bend shows as the line it draws from source in (left) to depth out (up).
 function curveEditor(m,edited){
   const cv=el('canvas',{className:'wave-curve',title:'curve: drag up or down'}),W=48,H=32;cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';cv.style.touchAction='none';
-  const draw=()=>{const x=cv.getContext('2d'),cs=getComputedStyle(document.documentElement);x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
+  const draw=()=>{const x=cv.getContext('2d'),cs={getPropertyValue:wavePal};x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
     x.strokeStyle=cs.getPropertyValue('--sel');x.lineWidth=1.5;x.beginPath();for(let i=0;i<=24;i++){const u=i/24,y=modCurve(u,m.curve||0);i?x.lineTo(u*W,H-2-y*(H-4)):x.moveTo(0,H-2-y*(H-4))}x.stroke()};
   let d=null;
   cv.onpointerdown=e=>{cv.setPointerCapture(e.pointerId);d={y:e.clientY,c:m.curve||0}};
@@ -2910,7 +2913,7 @@ function waveKeys(owner){
   const lab=el('span',{className:'wave-oct'});
   const geom=()=>{const W=cv.clientWidth||300;return {W,ww:W/14}};
   const draw=()=>{const {W,ww}=geom();if(cv.width!==Math.round(W*dpr)){cv.width=Math.round(W*dpr);cv.height=H*dpr}
-    const x=cv.getContext('2d'),cs=getComputedStyle(document.documentElement),on=new Set([...held.values()].map(h=>h.midi)),base=12*(waveKeysAt.oct+1);
+    const x=cv.getContext('2d'),cs={getPropertyValue:wavePal},on=new Set([...held.values()].map(h=>h.midi)),base=12*(waveKeysAt.oct+1);
     x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
     for(let i=0;i<14;i++){const m=base+12*Math.floor(i/7)+WHITE[i%7];x.fillStyle=on.has(m)?cs.getPropertyValue('--hot'):cs.getPropertyValue('--fg');x.fillRect(i*ww+1,0,ww-2,H)}
     for(let o=0;o<2;o++)for(const[k,after]of Object.entries(BLACK)){const m=base+12*o+ +k,xx=(o*7+after+1)*ww-ww*.3;x.fillStyle=on.has(m)?cs.getPropertyValue('--hot'):cs.getPropertyValue('--bg');x.fillRect(xx,0,ww*.6,H*.6)}
