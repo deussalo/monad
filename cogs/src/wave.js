@@ -2,7 +2,7 @@
 // A wave voice is the patch itself: {kind:'wave', note, octave, semi, level, velSense, name, osc[3], sub, noise,
 // env[3], lfo[4], macro[8], macroNames[8], mods[], vol, glide, gate}. Knob values live where wavePath puts them.
 function waveInit(){
-  const p={name:'init',osc:[],sub:{},noise:{},env:[],lfo:[],macro:[],macroNames:[],mods:[],
+  const p={name:'init',osc:[],sub:{},noise:{},tune:{},env:[],lfo:[],macro:[],macroNames:[],mods:[],
     voicing:{mode:'poly',always:true,scale:false},
     fxOrder:[...WAVE_FX],
     fx:{hyper:{on:false},flanger:{on:false},phaser:{on:false},dist:{on:false,mode:'tube'},chorus:{on:false},delay:{on:false,sync:'1/8.',ping:true},eq:{on:false},comp:{on:false}}};
@@ -33,7 +33,16 @@ function wavePatch(j){
 }
 // The voice-level keys every kind shares, kept apart from the patch so a loaded patch keeps the part's pitch and level.
 const WAVE_VOICE_KEYS=['kind','note','octave','semi','level','velSense'];
-const waveVoice=(j,keep={})=>({kind:'wave',note:60,octave:0,semi:0,level:.7,velSense:.7,...keep,...wavePatch(j)});
+// The synth transposes itself (tune.oct, tune.semi, in the patch); a part's octave and semitones from before that,
+// or carried over from another kind, fold into the patch's, so the part's own stay at 0 and its dial needs no pitch.
+function waveVoice(j,keep={}){
+  const v={kind:'wave',note:60,octave:0,semi:0,level:.7,velSense:.7,...keep,...wavePatch(j)};
+  if(v.octave||v.semi){v.tune.oct=Math.min(4,Math.max(-4,v.tune.oct+(v.octave|0)));v.tune.semi=Math.min(12,Math.max(-12,v.tune.semi+(v.semi|0)));v.octave=v.semi=0}
+  v.dial=waveDial(j&&j.dial);return v;
+}
+// The part's dial carries its volume, and up to WAVE_DIAL knobs of the patch the player pins there.
+const WAVE_DIAL=12;
+const waveDial=d=>Array.isArray(d)?[...new Set(d.filter(x=>typeof x==='string'&&WAVE_INDEX.has(x)))].slice(0,WAVE_DIAL):[];
 const patchOf=v=>{const p={};for(const k in v)if(!WAVE_VOICE_KEYS.includes(k))p[k]=v[k];return p};
 function loadPatch(v,j){const keep={};for(const k of WAVE_VOICE_KEYS)keep[k]=v[k];for(const k of Object.keys(v))delete v[k];Object.assign(v,waveVoice(j,keep))}
 

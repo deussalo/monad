@@ -38,6 +38,9 @@ textarea{height:90px}
 .knob canvas{cursor:ns-resize}
 .knob span{color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:62px}
 .knob b{font-weight:normal;color:var(--fg);white-space:nowrap}
+.knob.pinned span{color:var(--hot)}
+.knob.pinned span::before{content:'◎ '}
+.wave-src .wave-pin{color:var(--hot)}
 .knob.armed canvas{background:radial-gradient(circle,rgba(255,204,68,.08),transparent 70%)}
 .wave-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .wave-choice{display:flex;flex-direction:column;gap:2px;font-size:10px;color:var(--dim)}

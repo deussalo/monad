@@ -231,6 +231,9 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   check('reader: 3 dots x 2 revolutions', rd.hits === 6, rd.hits);
   check('three distinct rings sounded', rd.rings.length === 3, rd.rings);
   check('a new reader plays the wave synth: its notes went to it', rd.eng.waveNotes - disc.notes >= rd.hits - 1, rd.eng.waveNotes - disc.notes);
+  const synthDial = await probe(() => { const r = __cogs.W.readers.at(-1), v = r.voice, lab = () => readerSectors(r).map(s => s.label); const a = lab(); v.dial = ['osc1.cut', 'tune.oct']; const b = lab(); v.dial = []; return [v.kind, a, b]; });
+  is('a synth reader\'s dial: its voice and volume, and the knobs pinned to it', synthDial, ['wave', ['voice', 'volume'], ['voice', 'volume', 'A cutoff', 'synth octave']]);
+  is('the disc\'s dial: root, octave and range are sliders, as every number is', await probe(() => trackSectors(__cogs.W.cogs[2]).map(s => s.options ? 'choice' : 'slider')), ['choice', 'slider', 'slider', 'slider', 'slider']);
   await m.dev(true); await wait(300);
   const peak = await probe(() => document.querySelector('#panel [data-k="peak dB"] b').textContent);
   check('output reaches the destination', parseFloat(peak) > -60, peak);

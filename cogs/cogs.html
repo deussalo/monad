@@ -46,6 +46,9 @@ textarea{height:90px}
 .knob canvas{cursor:ns-resize}
 .knob span{color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:62px}
 .knob b{font-weight:normal;color:var(--fg);white-space:nowrap}
+.knob.pinned span{color:var(--hot)}
+.knob.pinned span::before{content:'◎ '}
+.wave-src .wave-pin{color:var(--hot)}
 .knob.armed canvas{background:radial-gradient(circle,rgba(255,204,68,.08),transparent 70%)}
 .wave-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .wave-choice{display:flex;flex-direction:column;gap:2px;font-size:10px;color:var(--dim)}
@@ -513,7 +516,7 @@ function waveParamList(){
   for(let i=1;i<=WAVE_ENVS;i++){const e='env'+i+'.';P.push([e+'a','attack',0,8,.003,'time'],[e+'d','decay',0,8,.6,'time'],[e+'s','sustain',0,1,i===1?.8:0,'lin'],[e+'r','release',0,8,.3,'time'])}
   for(let i=1;i<=WAVE_LFOS;i++){const l='lfo'+i+'.';P.push([l+'rate','rate Hz',.02,40,2,'log'],[l+'phase','phase',0,1,0,'lin'])}
   for(let i=1;i<=WAVE_MACROS;i++)P.push(['m'+i,'macro '+i,0,1,0,'lin']);
-  P.push(['vol','volume',0,1,.8,'lin'],['glide','glide',0,2,0,'time'],['gate','gate s',.02,8,.35,'time']);
+  P.push(['tune.oct','octave',-4,4,0,'int'],['tune.semi','semi',-12,12,0,'int'],['vol','volume',0,1,.8,'lin'],['glide','glide',0,2,0,'time'],['gate','gate s',.02,8,.35,'time']);
   P.push(['hyper.voices','voices',1,7,4,'int'],['hyper.rate','rate Hz',.05,5,.5,'log'],['hyper.detune','detune',0,1,.4,'lin'],['hyper.mix','mix',0,1,.5,'lin'],['hyper.dim','dimension',0,1,.3,'lin'],
     ['flanger.rate','rate Hz',.05,10,.3,'log'],['flanger.depth','depth',0,1,.7,'lin'],['flanger.fb','feedback',0,.95,.5,'lin'],['flanger.spread','stereo',0,1,.25,'lin'],['flanger.mix','mix',0,1,.5,'lin'],
     ['phaser.rate','rate Hz',.05,10,.4,'log'],['phaser.depth','depth',0,1,.7,'lin'],['phaser.freq','freq',100,8000,800,'log'],['phaser.fb','feedback',0,.9,.4,'lin'],['phaser.spread','stereo',0,1,.25,'lin'],['phaser.mix','mix',0,1,.5,'lin'],
@@ -531,7 +534,7 @@ const waveDenorm=(p,n)=>{const[,,a,b,,c]=p;n=Math.min(1,Math.max(0,n));if(c==='l
 function wavePath(p,path){
   let m=path.match(/^(osc|env|lfo)(\d)\.(\w+)$/);if(m)return [p[m[1]][+m[2]-1],m[3]];
   m=path.match(/^m(\d)$/);if(m)return [p.macro,+m[1]-1];
-  m=path.match(/^(sub|noise)\.(\w+)$/);if(m)return [p[m[1]],m[2]];
+  m=path.match(/^(sub|noise|tune)\.(\w+)$/);if(m)return [p[m[1]],m[2]];
   m=path.match(/^(hyper|dist|flanger|phaser|chorus|delay|eq|comp)\.(\w+)$/);if(m)return [(p.fx||{})[m[1]],m[2]];
   return [p,path];
 }
@@ -586,7 +589,7 @@ const OSC_P=Array.from({length:WAVE_OSCS},(_,i)=>Object.fromEntries(OSC_KEYS.map
 const ENV_P=Array.from({length:WAVE_ENVS},(_,i)=>['a','d','s','r'].map(k=>PI_(`env${i+1}.${k}`)));
 const LFO_P=Array.from({length:WAVE_LFOS},(_,i)=>[PI_(`lfo${i+1}.rate`),PI_(`lfo${i+1}.phase`)]);
 const MAC_P=Array.from({length:WAVE_MACROS},(_,i)=>PI_('m'+(i+1)));
-const P_SUB=PI_('sub.level'),P_SUBOCT=PI_('sub.oct'),P_NOISE=PI_('noise.level'),P_COLOR=PI_('noise.color'),P_VOL=PI_('vol'),P_GLIDE=PI_('glide'),P_GATE=PI_('gate');
+const P_TOCT=PI_('tune.oct'),P_TSEMI=PI_('tune.semi'),P_SUB=PI_('sub.level'),P_SUBOCT=PI_('sub.oct'),P_NOISE=PI_('noise.level'),P_COLOR=PI_('noise.color'),P_VOL=PI_('vol'),P_GLIDE=PI_('glide'),P_GATE=PI_('gate');
 const newEnv=()=>({st:0,lv:0});
 // An envelope stepped a whole slice at once, in closed form: for those that only modulate, sampled once per slice.
 function envSkip(e,c,s,n){
@@ -879,7 +882,8 @@ const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
       for(const d of cp.modded)vals[d]=waveDenorm(WAVE_PARAMS[d],vals[d]);
     }
     for(let i=0;i<WAVE_LFOS;i++){const l=v.lfo[i],nph=l.ph+this.lfoRate(cp,vals,i)*n/fs;if(nph>=1){l.prev=l.held;l.held=Math.random()}l.ph=nph%1}
-    const midi=this.pitch(v,now);
+    // the patch transposes itself: every note into it, from any part, sounds that far up or down
+    const midi=this.pitch(v,now)+12*vals[P_TOCT]+vals[P_TSEMI];
     let alive=false;
     for(let i=0;i<WAVE_OSCS;i++)if(cp.on[i]&&this.osc(v,cp,vals,i,n,midi,fs))alive=true;
     // sub and noise ride ENV1, sample by sample; the other envelopes only modulate, so they step a slice at a time
@@ -994,7 +998,8 @@ const VOICE_DEFS={
   cowbell:[['tune','tune Hz',200,1200,1],['decay','decay s',.02,2,.01]],
   wood:[['tune','tune Hz',500,5000,10],['decay','decay s',.01,.5,.005]],
   cymbal:[['cutoff','cutoff Hz',1000,12000,10],['tone','tone',0,1,.01],['decay','decay s',.1,4,.01]],
-  wave:[['note','note',12,108,1],['octave','octave',-3,3,1],['semi','semitones',-12,12,1]]};
+  // the synth's octave and semitones are its own knobs, in the patch (tune.oct, tune.semi)
+  wave:[['note','note',12,108,1]]};
 const COMMON_DEFS=[['level','level',0,1.5,.01],['velSense','vel sense',0,1,.01]];
 const DRUMS=Object.keys(VOICES).filter(k=>k!=='synth'&&k!=='wave');
 // What the kinds are called: the wave synth is the synth; the older modal one (saved as 'synth') is 'modal'.
@@ -1495,7 +1500,7 @@ function waveParamList(){
   for(let i=1;i<=WAVE_ENVS;i++){const e='env'+i+'.';P.push([e+'a','attack',0,8,.003,'time'],[e+'d','decay',0,8,.6,'time'],[e+'s','sustain',0,1,i===1?.8:0,'lin'],[e+'r','release',0,8,.3,'time'])}
   for(let i=1;i<=WAVE_LFOS;i++){const l='lfo'+i+'.';P.push([l+'rate','rate Hz',.02,40,2,'log'],[l+'phase','phase',0,1,0,'lin'])}
   for(let i=1;i<=WAVE_MACROS;i++)P.push(['m'+i,'macro '+i,0,1,0,'lin']);
-  P.push(['vol','volume',0,1,.8,'lin'],['glide','glide',0,2,0,'time'],['gate','gate s',.02,8,.35,'time']);
+  P.push(['tune.oct','octave',-4,4,0,'int'],['tune.semi','semi',-12,12,0,'int'],['vol','volume',0,1,.8,'lin'],['glide','glide',0,2,0,'time'],['gate','gate s',.02,8,.35,'time']);
   P.push(['hyper.voices','voices',1,7,4,'int'],['hyper.rate','rate Hz',.05,5,.5,'log'],['hyper.detune','detune',0,1,.4,'lin'],['hyper.mix','mix',0,1,.5,'lin'],['hyper.dim','dimension',0,1,.3,'lin'],
     ['flanger.rate','rate Hz',.05,10,.3,'log'],['flanger.depth','depth',0,1,.7,'lin'],['flanger.fb','feedback',0,.95,.5,'lin'],['flanger.spread','stereo',0,1,.25,'lin'],['flanger.mix','mix',0,1,.5,'lin'],
     ['phaser.rate','rate Hz',.05,10,.4,'log'],['phaser.depth','depth',0,1,.7,'lin'],['phaser.freq','freq',100,8000,800,'log'],['phaser.fb','feedback',0,.9,.4,'lin'],['phaser.spread','stereo',0,1,.25,'lin'],['phaser.mix','mix',0,1,.5,'lin'],
@@ -1513,7 +1518,7 @@ const waveDenorm=(p,n)=>{const[,,a,b,,c]=p;n=Math.min(1,Math.max(0,n));if(c==='l
 function wavePath(p,path){
   let m=path.match(/^(osc|env|lfo)(\d)\.(\w+)$/);if(m)return [p[m[1]][+m[2]-1],m[3]];
   m=path.match(/^m(\d)$/);if(m)return [p.macro,+m[1]-1];
-  m=path.match(/^(sub|noise)\.(\w+)$/);if(m)return [p[m[1]],m[2]];
+  m=path.match(/^(sub|noise|tune)\.(\w+)$/);if(m)return [p[m[1]],m[2]];
   m=path.match(/^(hyper|dist|flanger|phaser|chorus|delay|eq|comp)\.(\w+)$/);if(m)return [(p.fx||{})[m[1]],m[2]];
   return [p,path];
 }
@@ -1537,7 +1542,7 @@ function waveSpectra(name,user){
 // A wave voice is the patch itself: {kind:'wave', note, octave, semi, level, velSense, name, osc[3], sub, noise,
 // env[3], lfo[4], macro[8], macroNames[8], mods[], vol, glide, gate}. Knob values live where wavePath puts them.
 function waveInit(){
-  const p={name:'init',osc:[],sub:{},noise:{},env:[],lfo:[],macro:[],macroNames:[],mods:[],
+  const p={name:'init',osc:[],sub:{},noise:{},tune:{},env:[],lfo:[],macro:[],macroNames:[],mods:[],
     voicing:{mode:'poly',always:true,scale:false},
     fxOrder:[...WAVE_FX],
     fx:{hyper:{on:false},flanger:{on:false},phaser:{on:false},dist:{on:false,mode:'tube'},chorus:{on:false},delay:{on:false,sync:'1/8.',ping:true},eq:{on:false},comp:{on:false}}};
@@ -1568,7 +1573,16 @@ function wavePatch(j){
 }
 // The voice-level keys every kind shares, kept apart from the patch so a loaded patch keeps the part's pitch and level.
 const WAVE_VOICE_KEYS=['kind','note','octave','semi','level','velSense'];
-const waveVoice=(j,keep={})=>({kind:'wave',note:60,octave:0,semi:0,level:.7,velSense:.7,...keep,...wavePatch(j)});
+// The synth transposes itself (tune.oct, tune.semi, in the patch); a part's octave and semitones from before that,
+// or carried over from another kind, fold into the patch's, so the part's own stay at 0 and its dial needs no pitch.
+function waveVoice(j,keep={}){
+  const v={kind:'wave',note:60,octave:0,semi:0,level:.7,velSense:.7,...keep,...wavePatch(j)};
+  if(v.octave||v.semi){v.tune.oct=Math.min(4,Math.max(-4,v.tune.oct+(v.octave|0)));v.tune.semi=Math.min(12,Math.max(-12,v.tune.semi+(v.semi|0)));v.octave=v.semi=0}
+  v.dial=waveDial(j&&j.dial);return v;
+}
+// The part's dial carries its volume, and up to WAVE_DIAL knobs of the patch the player pins there.
+const WAVE_DIAL=12;
+const waveDial=d=>Array.isArray(d)?[...new Set(d.filter(x=>typeof x==='string'&&WAVE_INDEX.has(x)))].slice(0,WAVE_DIAL):[];
 const patchOf=v=>{const p={};for(const k in v)if(!WAVE_VOICE_KEYS.includes(k))p[k]=v[k];return p};
 function loadPatch(v,j){const keep={};for(const k of WAVE_VOICE_KEYS)keep[k]=v[k];for(const k of Object.keys(v))delete v[k];Object.assign(v,waveVoice(j,keep))}
 
@@ -2738,8 +2752,9 @@ function buildInspector(){
     if(o.track){
       const t=o.track,retune=()=>{trimDots(t);changed()};
       selRow(f,'root',NOTE_NAMES.map((_,i)=>String(i)),()=>String(t.root),x=>{t.root=+x;retune()},i=>NOTE_NAMES[i]);
-      selRow(f,'octave',OCTAVES.map(String),()=>String(t.octave),x=>{t.octave=+x;retune()});
-      selRow(f,'range',RANGES.map(String),()=>String(t.range),x=>{t.range=+x;retune()},r=>`${r} oct · ${r*SCALES[t.scale].length} lanes`);
+      // numbers are sliders here as on the dial
+      numRow(f,'octave',OCTAVES[0],OCTAVES.at(-1),1,()=>t.octave,x=>{t.octave=x;retune()},MODEL.disc.track.octave);
+      numRow(f,'range',RANGES[0],RANGES.at(-1),1,()=>t.range,x=>{t.range=x;retune()},MODEL.disc.track.range);
       selRow(f,'scale',Object.keys(SCALES),()=>t.scale,v=>{t.scale=v;retune()});
       numRow(f,'steps',1,96,1,...bind(t,'div',changed),TRACK_DEFAULT.div);
       roRow(f,'lanes',()=>`${trackRings(t)} · ${noteName(trackBase(t))} to ${noteName(ringNote(t,trackRings(t)-1))} · ${t.dots.length} pins`);
@@ -2822,7 +2837,7 @@ function setRollVel(on){rollVel=on;if(roll?.laneRow)roll.laneRow.style.display=o
 // set how far that source moves it; the knob shows each route as a blue arc beside its value. Double tap resets a
 // knob, or, armed, removes that route. The matrix tab lists every route to edit, bypass or delete.
 const waveSay=read=>{if(typeof showInteraction==='function')showInteraction(read)};
-const waveUi={tab:'A',arm:null,msg:''};
+const waveUi={tab:'A',arm:null,pin:false,msg:''};
 const WAVE_TABS=['A','B','C','SUB','ENV','LFO','FX','MACRO','MATRIX','PATCH'];
 const srcLabel=s=>s.replace(/^env/,'ENV').replace(/^lfo/,'LFO').replace(/^m(\d)$/,'M$1').toUpperCase();
 function waveLabel(v,path){
@@ -2831,6 +2846,7 @@ function waveLabel(v,path){
   m=path.match(/^(env|lfo)(\d)\./);if(m)return m[1].toUpperCase()+m[2]+' '+P[1];
   m=path.match(WAVE_FX_RE);if(m)return m[1]+' '+P[1];
   m=path.match(/^m(\d)$/);if(m)return v.macroNames[+m[1]-1];
+  if(path.startsWith('tune.'))return 'synth '+P[1];
   return P[1];
 }
 function waveText(P,x){
@@ -2867,12 +2883,16 @@ function waveKnob(v,path,edited){
     const a=A0+SW*n;x.strokeStyle=col('--fg');x.lineWidth=2;x.beginPath();x.moveTo(c+Math.cos(a)*(c-16),c+Math.sin(a)*(c-16));x.lineTo(c+Math.cos(a)*(c-4),c+Math.sin(a)*(c-4));x.stroke();
     const rt=waveUi.arm&&routesTo(v,path).find(m=>m.src===waveUi.arm);
     val.textContent=rt?`${srcLabel(rt.src)} ${rt.amt>0?'+':''}${Math.round(rt.amt*100)}`:waveText(P,waveGet(v,path));
-    box.classList.toggle('armed',!!waveUi.arm);box.classList.toggle('routed',routesTo(v,path).length>0);
+    box.classList.toggle('armed',!!waveUi.arm||waveUi.pin);box.classList.toggle('pinned',!!v.dial?.includes(path));box.classList.toggle('routed',routesTo(v,path).length>0);
   };
   let drag=null,lastTap=0;
   cv.style.touchAction='none';
   cv.onpointerdown=e=>{
     cv.setPointerCapture(e.pointerId);e.preventDefault();
+    // pinning: a tap puts the knob on the part's dial, or takes it off
+    if(waveUi.pin){const d=v.dial||(v.dial=[]),i=d.indexOf(path);if(i>=0)d.splice(i,1);else if(d.length<WAVE_DIAL)d.push(path);
+      else{waveSay(()=>`the dial is full: ${WAVE_DIAL} knobs`);return}
+      waveSay(()=>`${waveLabel(v,path)}: ${i>=0?'off':'on'} the dial`);edited();return}
     let route=null;
     if(waveUi.arm){route=routesTo(v,path).find(m=>m.src===waveUi.arm);if(!route){route={src:waveUi.arm,dst:path,amt:0,bi:waveUi.arm.startsWith('lfo'),off:false};v.mods.push(route);drag={fresh:true}}}
     drag={...drag,y:e.clientY,n0:waveNorm(P,waveGet(v,path)),route,a0:route?route.amt:0,moved:false};
@@ -2952,7 +2972,7 @@ function waveKeys(owner){
     x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
     for(let i=0;i<14;i++){const m=base+12*Math.floor(i/7)+WHITE[i%7];x.fillStyle=on.has(m)?cs.getPropertyValue('--hot'):cs.getPropertyValue('--fg');x.fillRect(i*ww+1,0,ww-2,H)}
     for(let o=0;o<2;o++)for(const[k,after]of Object.entries(BLACK)){const m=base+12*o+ +k,xx=(o*7+after+1)*ww-ww*.3;x.fillStyle=on.has(m)?cs.getPropertyValue('--hot'):cs.getPropertyValue('--bg');x.fillRect(xx,0,ww*.6,H*.6)}
-    const v=owner.voice,sh=12*(v.octave||0)+(v.semi||0);lab.textContent='C'+waveKeysAt.oct+(sh?' '+(sh>0?'+':'')+sh:'');lab.title=sh?`the voice transposes by ${sh} semitones`:''};
+    const v=owner.voice,sh=12*(v.octave||0)+(v.semi||0)+12*(v.tune?.oct||0)+(v.tune?.semi||0);lab.textContent='C'+waveKeysAt.oct+(sh?' '+(sh>0?'+':'')+sh:'');lab.title=sh?`the synth transposes by ${sh} semitones`:''};
   const noteAt=e=>{const r=cv.getBoundingClientRect(),{ww}=geom(),px=e.clientX-r.left,py=e.clientY-r.top,base=12*(waveKeysAt.oct+1);
     if(px<0||px>=ww*14)return null;
     if(py<H*.6)for(let o=0;o<2;o++)for(const[k,after]of Object.entries(BLACK)){const xx=(o*7+after+1)*ww-ww*.3;if(px>=xx&&px<xx+ww*.6)return base+12*o+ +k}
@@ -2979,8 +2999,10 @@ function waveEditor(f,owner){
   // sources: tap to arm, drag onto a knob to route
   const chips=el('div',{className:'wave-src'});
   const hint=el('div',{className:'wave-hint'});
-  const syncChips=()=>{for(const c of chips.children)c.ariaPressed=String(c.dataset.src===waveUi.arm);
-    hint.toggleAttribute('data-armed',!!waveUi.arm);hint.textContent=waveUi.arm?`${srcLabel(waveUi.arm)} armed: drag a knob to set its depth, double tap to remove. Tap ${srcLabel(waveUi.arm)} to finish.`:'Tap a source, or drag it onto a knob, to modulate.';redraw()};
+  const syncChips=()=>{for(const c of chips.children)c.ariaPressed=String(c.dataset.src?c.dataset.src===waveUi.arm:waveUi.pin);
+    hint.toggleAttribute('data-armed',!!waveUi.arm||waveUi.pin);hint.textContent=waveUi.pin?`Tap knobs to put them on the part's dial, or take them off: ${(v.dial||[]).length} of ${WAVE_DIAL}. Tap DIAL to finish.`:waveUi.arm?`${srcLabel(waveUi.arm)} armed: drag a knob to set its depth, double tap to remove. Tap ${srcLabel(waveUi.arm)} to finish.`:'Tap a source, or drag it onto a knob, to modulate.';redraw()};
+  // the dial chip: armed, a tap on a knob pins it to the dial that opens when the part is tapped
+  chips.append(el('button',{className:'wave-pin',textContent:'◎ DIAL',onclick:()=>{waveUi.pin=!waveUi.pin;waveUi.arm=null;syncChips()}}));
   for(const s of WAVE_SOURCES){
     const b=el('button',{textContent:srcLabel(s)});b.dataset.src=s;b.style.touchAction='none';
     let start=null;
@@ -2988,7 +3010,7 @@ function waveEditor(f,owner){
     b.onpointermove=e=>{if(start&&Math.hypot(e.clientX-start.x,e.clientY-start.y)>10){start.moved=true;b.classList.add('dragging')}};
     b.onpointerup=e=>{const st=start;start=null;b.classList.remove('dragging');if(!st)return;
       if(st.moved){const k=document.elementFromPoint(e.clientX,e.clientY)?.closest('.knob');if(k)k.dispatchEvent(new CustomEvent('wave-drop',{detail:s}));return}
-      waveUi.arm=waveUi.arm===s?null:s;syncChips()};
+      waveUi.arm=waveUi.arm===s?null:s;waveUi.pin=false;syncChips()};
     chips.append(b);
   }
   const tabs=el('div',{className:'wave-tabs'});
@@ -3008,7 +3030,7 @@ function waveEditor(f,owner){
       body.append(group('wave',O('pos'),O('warp'),O('warp2'),O('phase'),O('level'),O('pan')),group('pitch',O('oct'),O('semi'),O('fine')),
         group('unison',O('uni'),O('detune'),O('blend'),O('spread')),group('amp envelope',O('a'),O('d'),O('s'),O('r')),
         group('filter',O('cut'),O('res'),O('drive'),O('key')),group('filter envelope',O('famt'),O('fa'),O('fd'),O('fs'),O('fr')));
-    }else if(t==='SUB')body.append(group('sub (on ENV1)',K('sub.level'),K('sub.oct')),group('noise (on ENV1)',K('noise.level'),K('noise.color')),group('voice',K('vol'),K('glide'),K('gate')),
+    }else if(t==='SUB')body.append(group('sub (on ENV1)',K('sub.level'),K('sub.oct')),group('noise (on ENV1)',K('noise.level'),K('noise.color')),group('voice',K('tune.oct'),K('tune.semi'),K('vol'),K('glide'),K('gate')),
       el('div',{className:'wave-row'},choice('voicing',VOICE_MODES,()=>v.voicing.mode,x=>{v.voicing.mode=x;edited()}),
         toggle('glide always',()=>v.voicing.always,x=>{v.voicing.always=x;edited()}),toggle('glide scales',()=>v.voicing.scale,x=>{v.voicing.scale=x;edited()})),
       el('p',{className:'wave-hint',textContent:'Mono plays one note at a time and restarts the envelopes; legato restarts them only after a gap. Glide always slides every note; otherwise only overlapping ones. Glide scales makes short steps faster.'}));
@@ -3149,12 +3171,11 @@ function placeRoll(c,f){
   // The bar takes the sheet head's row, in place of the title, beside undo, redo and close: one row of tools.
   const head=$('#editor-head');head.querySelector('.roll-sel')?.remove();head.insertBefore(bar,$('#editor-undo'));
   f.prepend(roll.box);
-  // The disc's tuning as compact chips under the strip, not full-width form rows; steps gets − and + beside its number.
+  // The disc's tuning as compact chips under the strip, not full-width form rows; each number gets − and + beside it.
   const fields=el('div',{className:'disc-fields'},...['root','octave','range','scale','steps'].map(k=>f.querySelector(`:scope>.row[data-k="${k}"]`)).filter(Boolean));
   roll.box.after(fields);
-  const sr=fields.querySelector('[data-k="steps"]');
-  if(sr){const num=sr.querySelector('input[type=number]'),bump=d=>()=>{num.value=+num.value+d;num.dispatchEvent(new Event('input'));buzz(4)};
-    const box=el('div',{className:'stepper'},el('button',{textContent:'−',ariaLabel:'fewer steps',onclick:bump(-1)}),num,el('button',{textContent:'+',ariaLabel:'more steps',onclick:bump(1)}));
+  for(const sr of fields.querySelectorAll('[data-k="steps"],[data-k="octave"],[data-k="range"]')){const num=sr.querySelector('input[type=number]'),bump=d=>()=>{num.value=+num.value+d;num.dispatchEvent(new Event('input'));buzz(4)},k=sr.dataset.k;
+    const box=el('div',{className:'stepper'},el('button',{textContent:'−',ariaLabel:k+' down',onclick:bump(-1)}),num,el('button',{textContent:'+',ariaLabel:k+' up',onclick:bump(1)}));
     sr.querySelector('input[type=range]').remove();sr.append(box)}
   syncRollBar();
 }
@@ -3324,7 +3345,7 @@ const ICON={
   odds:'M12 3a9 9 0 1 0 .01 0M12 3v9h9',string:'M3 19L21 5M3 19h.01M21 5h.01',quant:'M4 20V14M9 20V9M14 20V12M19 20V4',
   seal:'M12 3a9 9 0 1 0 .01 0M12 7l1.5 3.2 3.5.4-2.6 2.4.7 3.5-3.1-1.8-3.1 1.8.7-3.5L7 10.6l3.5-.4z',
   semi:'M4 14h16M4 10h16M9 5v14M15 5v14',partials:'M3 20V8M7 20V5M11 20V9M15 20V11M19 20V13M23 20v-5',even:'M3 20V8M11 20V12M19 20V15',attack:'M3 20L10 5h11',
-  range:'M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4',octave:'M4 18V6M4 12h16M20 18V6',spread:'M4 20V9M8 20V6M12 20V9M16 20V12'};
+  range:'M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4',octave:'M4 18V6M4 12h16M20 18V6',knob:'M12 4a8 8 0 1 0 .01 0M12 12L16 6',spread:'M4 20V9M8 20V6M12 20V9M16 20V12'};
 const icons=new Map();const iconPath=k=>{let p=icons.get(k);if(!p){p=new Path2D(ICON[k]);icons.set(k,p)}return p};
 const VOICE_ICON={note:'fork',octave:'octave',semi:'semi',tune:'fork',body:'bell',partials:'partials',bright:'bright',even:'even',bend:'bend',hard:'hard',attack:'attack',
   decay:'decay',pdecay:'pdecay',damp:'damp',sweep:'sweep',tone:'tone',cutoff:'cutoff',spread:'spread',level:'level',velSense:'vel'};
@@ -3335,8 +3356,21 @@ const onOff=x=>x?'on':'off';
 const numSector=(icon,label,o,k,min,max,step,after)=>({icon,label,min,max,step,format:['note','base','combBase'].includes(k)?noteName:settingText,
   log:min>0&&max/min>=20,get:()=>o[k],set:x=>{o[k]=x;after&&after()}});
 const defSector=(icon,o,def,after)=>numSector(icon,def[1],o,def[0],def[2],def[3],def[4],after);
+const stepSector=(icon,label,min,max,get,set,format=settingText)=>({icon,label,min,max,step:1,format,get,set});
 const choiceSector=(icon,label,options,get,set,format=settingText)=>({icon,label,options,get,set,format,toggle:format===onOff});
+// The synth's dial: its volume, a pad's note, and the knobs pinned to it in the patch sheet (◎ DIAL), as they turn there.
+function waveSectors(owner,withNote){
+  const v=owner.voice,out=[choiceSector('kind','voice',Object.keys(VOICES),()=>owner.voice.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense,note:v.note})},kindLabel)];
+  if(withNote)out.push(defSector('fork',v,VOICE_DEFS.wave[0]));
+  out.push(numSector('level','volume',v,'level',0,1.5,.01));
+  for(const path of v.dial||[]){const P=WAVE_PARAMS[WAVE_INDEX.get(path)];if(!P)continue;
+    const int=P[5]==='int',post=()=>wavePost(v);
+    out.push(int?{icon:'knob',label:waveLabel(v,path),min:P[2],max:P[3],step:1,format:x=>waveText(P,x),get:()=>waveGet(v,path),set:x=>{waveSet(v,path,x);post()}}
+      :{icon:'knob',label:waveLabel(v,path),min:0,max:1,step:.001,format:n=>waveText(P,waveDenorm(P,n)),get:()=>waveNorm(P,waveGet(v,path)),set:n=>{waveSet(v,path,waveDenorm(P,n));post()}})}
+  return out;
+}
 function voiceSectors(owner,withNote){
+  if(owner.voice.kind==='wave')return waveSectors(owner,withNote);
   const v=owner.voice,out=[choiceSector('kind','voice',Object.keys(VOICES),()=>owner.voice.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense,...(v.note!=null?{note:v.note,octave:v.octave,semi:v.semi}:{})})},kindLabel)];
   for(const def of [...VOICE_DEFS[v.kind].filter(d=>withNote||d[0]!=='note').slice(0,BEZEL_PARAMS),COMMON_DEFS[0]])
     out.push(Array.isArray(def[2])?choiceSector(VOICE_ICON[def[0]],def[1],def[2],()=>v[def[0]],x=>{v[def[0]]=x}):defSector(VOICE_ICON[def[0]],v,def));
@@ -3354,8 +3388,9 @@ const stringSectors=o=>[choiceSector('string','instrument',['string','bar'],()=>
 function trackSectors(c){
   const t=c.track;
   const trim=()=>trimDots(t);
-  return [choiceSector('scale','scale',Object.keys(SCALES),()=>t.scale,x=>{t.scale=x;trim()}),choiceSector('fork','root',NOTE_NAMES.map((_,i)=>i),()=>t.root,x=>{t.root=x},i=>NOTE_NAMES[i]),
-    choiceSector('octave','octave',OCTAVES,()=>t.octave,x=>{t.octave=x}),choiceSector('range','range',RANGES,()=>t.range,x=>{t.range=x;trim()},r=>r+' oct'),
+  // numbers are sliders, as every number on every dial is: drag along the ring, a step at a time
+  return [choiceSector('scale','scale',Object.keys(SCALES),()=>t.scale,x=>{t.scale=x;trim()}),stepSector('fork','root',0,11,()=>t.root,x=>{t.root=x},i=>NOTE_NAMES[i]),
+    stepSector('octave','octave',OCTAVES[0],OCTAVES.at(-1),()=>t.octave,x=>{t.octave=x}),stepSector('range','range',RANGES[0],RANGES.at(-1),()=>t.range,x=>{t.range=x;trim()},r=>r+' oct'),
     numSector('div','steps',t,'div',1,96,1)];
 }
 const dotSectors=d=>[numSector('odds','probability',d,'p',0,1,.01),numSector('level','velocity',d,'v',0,1,.01),numSector('div','length steps',d,'len',1,ui.dotOf.track.div,1)];

@@ -69,7 +69,7 @@ const SHOTS = process.env.COGS_SHOTS || '';
     const mono = sine(); mono.voicing.mode = 'mono'; mono.glide = .05; mono.voicing.always = false; const monoL = await raw(mono, [[0, 57, 1], [.2, 69, 1]], .6);
     const rms = (L, a, b) => { let e = 0, n = 0; for (let i = Math.round(a * 48000); i < b * 48000; i++) { e += L[i] * L[i]; n++; } return Math.sqrt(e / n); };
     const tr = (o, se) => { const q = sine(); q.osc[0].oct = o; q.osc[0].semi = se; return q; };
-    out.oscPitch = [pitchOf(await raw(tr(0, 0), [[0, 57, 1]], .3), .05, .28), pitchOf(await raw(tr(1, 0), [[0, 57, 1]], .3), .05, .28), pitchOf(await raw(tr(-1, 7), [[0, 57, 1]], .3), .05, .28)].map(Math.round);
+    out.oscPitch = [pitchOf(await raw(tr(0, 0), [[0, 57, 1]], .3), .05, .28), pitchOf(await raw(tr(1, 0), [[0, 57, 1]], .3), .05, .28), pitchOf(await raw(tr(-1, 7), [[0, 57, 1]], .3), .05, .28), pitchOf(await raw((q => { q.tune.oct = 1; q.tune.semi = -12; q.osc[0].semi = 7; return q; })(sine()), [[0, 57, 1]], .3), .05, .28)].map(Math.round);
     out.voicing = { polyRms: rms(poly, .4, .58), monoRms: rms(monoL, .4, .58), monoHz: pitchOf(monoL, .4, .58), monoEarly: pitchOf(monoL, .206, .236) };
     const aux = base(); aux.osc[0].cut = 300; aux.lfo[0].rate = 6; aux.macro[0] = 0; aux.mods = [{ src: 'lfo1', dst: 'osc1.cut', amt: .7, aux: 'm1' }]; out.aux0 = await render(aux, [[0, 57, 1]], 1);
     aux.macro[0] = 1; out.aux1 = await render(aux, [[0, 57, 1]], 1);
@@ -96,7 +96,7 @@ const SHOTS = process.env.COGS_SHOTS || '';
   check('every filter type sounds and stays finite', Object.entries(off.filters).every(([k, r]) => r > .001 && r < 1), off.filters);
   const g = off.gate.wins;
   check('the gate closes the note: silent after gate plus release', g[0] > .01 && g[g.length - 1] < 1e-4, [g[0], g[g.length - 1]]);
-  check('three oscillators with unison, sub and noise, four notes: no clipping', off.all.peak < 1 && off.all.rms > .02, [off.all.rms, off.all.peak]);
+  check('three oscillators with unison, sub and noise, four notes: no clipping (random unison phases peak near 1)', off.all.peak < 1.1 && off.all.rms > .02, [off.all.rms, off.all.peak]);
   const tail = r => r.wins.slice(-3).reduce((a, b) => a + b, 0);
   check('delay and chorus leave a tail after the note; the dry patch does not', tail(off.fx.delay) > 1e-3 && tail(off.fx.none) < 1e-4, [tail(off.fx.delay), tail(off.fx.none)]);
   check('every FX module sounds, finite and below clipping', Object.values(off.fx).every(r => r.finite && r.rms > .002 && r.peak < 1.2), Object.fromEntries(Object.entries(off.fx).map(([k, r]) => [k, +r.rms.toFixed(4)])));
@@ -112,7 +112,7 @@ const SHOTS = process.env.COGS_SHOTS || '';
   const edges = hiW.slice(2).reduce((a, x, i, A) => a + (i && x !== A[i - 1] ? 1 : 0), 0);
   check('a square LFO synced to 1/4 at 120 bpm switches every 0.25 s (about 7 edges in 1.9 s)', edges >= 6 && edges <= 9, edges);
   // two notes, A3 then A4: a sine's zero crossings give the pitch
-  check('osc octave and semi knobs move its pitch: A3, +1 oct, -1 oct +7 semi', off.oscPitch.every((h, i) => Math.abs(h - [220, 440, 165][i]) <= 2), off.oscPitch);
+  check('osc octave and semi knobs move its pitch: A3, +1 oct, -1 oct +7 semi; the synth\'s own +1 oct -12 semi with A +7', off.oscPitch.every((h, i) => Math.abs(h - [220, 440, 165, 330][i]) <= 2), off.oscPitch);
   check('poly: the overlapping notes both sound, louder than mono\'s one', off.voicing.polyRms > off.voicing.monoRms * 1.2, [off.voicing.polyRms, off.voicing.monoRms].map(x => +x.toFixed(4)));
   check('mono: one voice, landing on A4', Math.abs(off.voicing.monoHz - 440) < 3, +off.voicing.monoHz.toFixed(1));
   check('mono with glide: just after the second note it is still on its way up', off.voicing.monoEarly > 225 && off.voicing.monoEarly < 420, +off.voicing.monoEarly.toFixed(1));
@@ -198,18 +198,26 @@ const SHOTS = process.env.COGS_SHOTS || '';
   await p.mouse.click(...at); await wait(200);
   await p.click('#inspector .wave-play'); await wait(400);
   check('play sounds it in the live engine', (await probe(() => __cogs.engine().wave)) > 0, await probe(() => __cogs.engine().wave));
-  // the voice's octave and semitones transpose every note it plays: the keyboard, a tap, a hit
-  await p.selectOption('#inspector .row[data-k="octave"] select', '1'); await settle();
-  await p.selectOption('#inspector .row[data-k="semitones"] select', '2'); await settle();
+  // the synth transposes itself: its octave and semi knobs (SUB tab, voice) move every note into it, keyboard or part
+  await p.click('#inspector .wave-tabs button[data-tab="SUB"]'); await wait(100);
+  await dragKnob('tune.oct', 19); await dragKnob('tune.semi', 12);
+  const tv = await voice();
+  check('the synth\'s octave and semi knobs turn: +1 octave, a few semitones up', tv.tune.oct === 1 && tv.tune.semi > 0, tv.tune);
   const kb = await p.$('#inspector .wave-keys'); await kb.scrollIntoViewIfNeeded(); const kr = await kb.boundingBox();
-  const keyNote = 60;
   await p.mouse.move(kr.x + kr.width / 28, kr.y + kr.height * .85); await p.mouse.down(); await wait(80); await p.mouse.up(); await wait(80);
-  is('octave +1, semitones +2: the keyboard\'s low C sounds 14 semitones up', await probe(() => __cogs.engine().waveLast), keyNote + 14);
-  is('its octave label says so', await probe(() => document.querySelector('#inspector .wave-oct').textContent), 'C4 +14');
-  const padNote = (await voice()).note;
-  await p.click('#inspector .wave-play'); await wait(100);
-  is('play sounds the part\'s note transposed', await probe(() => __cogs.engine().waveLast), padNote + 14);
-  await p.selectOption('#inspector .row[data-k="octave"] select', '0'); await p.selectOption('#inspector .row[data-k="semitones"] select', '0'); await settle();
+  is('the keyboard sends its key as is (the synth transposes it) and its label says by how much', [await probe(() => __cogs.engine().waveLast), await probe(() => document.querySelector('#inspector .wave-oct').textContent)], [60, 'C4 +' + (12 * tv.tune.oct + tv.tune.semi)]);
+  is('no octave or semitones rows for the part: they are the synth\'s', await probe(() => ['octave', 'semitones'].map(k => !!document.querySelector(`#inspector .row[data-k="${k}"]`))), [false, false]);
+  const mig = await probe(() => { const j = __cogs.serialize(); j.pads[0].voice = { ...j.pads[0].voice, octave: -1, semi: 3, tune: { oct: 0, semi: 0 } }; __cogs.deserialize(j); return __cogs.serialize().pads[0].voice; });
+  is('a part saved with its own octave and semitones: they fold into the synth\'s', [mig.octave, mig.semi, mig.tune.oct, mig.tune.semi], [0, 0, -1, 3]);
+  await p.mouse.click(...at); await wait(200);
+  // pin knobs to the part's dial: arm ◎ DIAL, tap knobs; tap again to take one off
+  await p.click('#inspector .wave-pin'); await p.click('#inspector .wave-tabs button[data-tab="A"]'); await wait(100);
+  for (const k of ['osc1.cut', 'osc1.res', 'osc1.cut']) { const [x, y] = await knobAt(k); await p.mouse.click(x, y); await settle(); }
+  const [cx, cy] = await knobAt('osc1.res'); await p.mouse.click(cx, cy); await settle();
+  is('◎ DIAL armed: a tap pins a knob, a second takes it off; the knob turns not at all', [(await voice()).dial, (await voice()).osc[0].res === tv.osc[0].res], [[], true]);
+  { const [x, y] = await knobAt('osc1.cut'); await p.mouse.click(x, y); await settle(); }
+  is('pinned: saved with the patch, marked on the knob', [(await voice()).dial, await probe(() => document.querySelector('#inspector .knob[data-path="osc1.cut"]').classList.contains('pinned'))], [['osc1.cut'], true]);
+  await p.click('#inspector .wave-pin');
   check('page errors', errs.length === 0, errs.slice(0, 3));
   console.log(pass ? 'COGS WAVE: PASS' : 'COGS WAVE: FAIL');
   await b.close(); process.exit(pass ? 0 : 1);

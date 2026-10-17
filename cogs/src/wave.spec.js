@@ -38,7 +38,7 @@ function waveParamList(){
   for(let i=1;i<=WAVE_ENVS;i++){const e='env'+i+'.';P.push([e+'a','attack',0,8,.003,'time'],[e+'d','decay',0,8,.6,'time'],[e+'s','sustain',0,1,i===1?.8:0,'lin'],[e+'r','release',0,8,.3,'time'])}
   for(let i=1;i<=WAVE_LFOS;i++){const l='lfo'+i+'.';P.push([l+'rate','rate Hz',.02,40,2,'log'],[l+'phase','phase',0,1,0,'lin'])}
   for(let i=1;i<=WAVE_MACROS;i++)P.push(['m'+i,'macro '+i,0,1,0,'lin']);
-  P.push(['vol','volume',0,1,.8,'lin'],['glide','glide',0,2,0,'time'],['gate','gate s',.02,8,.35,'time']);
+  P.push(['tune.oct','octave',-4,4,0,'int'],['tune.semi','semi',-12,12,0,'int'],['vol','volume',0,1,.8,'lin'],['glide','glide',0,2,0,'time'],['gate','gate s',.02,8,.35,'time']);
   P.push(['hyper.voices','voices',1,7,4,'int'],['hyper.rate','rate Hz',.05,5,.5,'log'],['hyper.detune','detune',0,1,.4,'lin'],['hyper.mix','mix',0,1,.5,'lin'],['hyper.dim','dimension',0,1,.3,'lin'],
     ['flanger.rate','rate Hz',.05,10,.3,'log'],['flanger.depth','depth',0,1,.7,'lin'],['flanger.fb','feedback',0,.95,.5,'lin'],['flanger.spread','stereo',0,1,.25,'lin'],['flanger.mix','mix',0,1,.5,'lin'],
     ['phaser.rate','rate Hz',.05,10,.4,'log'],['phaser.depth','depth',0,1,.7,'lin'],['phaser.freq','freq',100,8000,800,'log'],['phaser.fb','feedback',0,.9,.4,'lin'],['phaser.spread','stereo',0,1,.25,'lin'],['phaser.mix','mix',0,1,.5,'lin'],
@@ -56,7 +56,7 @@ const waveDenorm=(p,n)=>{const[,,a,b,,c]=p;n=Math.min(1,Math.max(0,n));if(c==='l
 function wavePath(p,path){
   let m=path.match(/^(osc|env|lfo)(\d)\.(\w+)$/);if(m)return [p[m[1]][+m[2]-1],m[3]];
   m=path.match(/^m(\d)$/);if(m)return [p.macro,+m[1]-1];
-  m=path.match(/^(sub|noise)\.(\w+)$/);if(m)return [p[m[1]],m[2]];
+  m=path.match(/^(sub|noise|tune)\.(\w+)$/);if(m)return [p[m[1]],m[2]];
   m=path.match(/^(hyper|dist|flanger|phaser|chorus|delay|eq|comp)\.(\w+)$/);if(m)return [(p.fx||{})[m[1]],m[2]];
   return [p,path];
 }

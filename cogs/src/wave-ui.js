@@ -3,7 +3,7 @@
 // set how far that source moves it; the knob shows each route as a blue arc beside its value. Double tap resets a
 // knob, or, armed, removes that route. The matrix tab lists every route to edit, bypass or delete.
 const waveSay=read=>{if(typeof showInteraction==='function')showInteraction(read)};
-const waveUi={tab:'A',arm:null,msg:''};
+const waveUi={tab:'A',arm:null,pin:false,msg:''};
 const WAVE_TABS=['A','B','C','SUB','ENV','LFO','FX','MACRO','MATRIX','PATCH'];
 const srcLabel=s=>s.replace(/^env/,'ENV').replace(/^lfo/,'LFO').replace(/^m(\d)$/,'M$1').toUpperCase();
 function waveLabel(v,path){
@@ -12,6 +12,7 @@ function waveLabel(v,path){
   m=path.match(/^(env|lfo)(\d)\./);if(m)return m[1].toUpperCase()+m[2]+' '+P[1];
   m=path.match(WAVE_FX_RE);if(m)return m[1]+' '+P[1];
   m=path.match(/^m(\d)$/);if(m)return v.macroNames[+m[1]-1];
+  if(path.startsWith('tune.'))return 'synth '+P[1];
   return P[1];
 }
 function waveText(P,x){
@@ -48,12 +49,16 @@ function waveKnob(v,path,edited){
     const a=A0+SW*n;x.strokeStyle=col('--fg');x.lineWidth=2;x.beginPath();x.moveTo(c+Math.cos(a)*(c-16),c+Math.sin(a)*(c-16));x.lineTo(c+Math.cos(a)*(c-4),c+Math.sin(a)*(c-4));x.stroke();
     const rt=waveUi.arm&&routesTo(v,path).find(m=>m.src===waveUi.arm);
     val.textContent=rt?`${srcLabel(rt.src)} ${rt.amt>0?'+':''}${Math.round(rt.amt*100)}`:waveText(P,waveGet(v,path));
-    box.classList.toggle('armed',!!waveUi.arm);box.classList.toggle('routed',routesTo(v,path).length>0);
+    box.classList.toggle('armed',!!waveUi.arm||waveUi.pin);box.classList.toggle('pinned',!!v.dial?.includes(path));box.classList.toggle('routed',routesTo(v,path).length>0);
   };
   let drag=null,lastTap=0;
   cv.style.touchAction='none';
   cv.onpointerdown=e=>{
     cv.setPointerCapture(e.pointerId);e.preventDefault();
+    // pinning: a tap puts the knob on the part's dial, or takes it off
+    if(waveUi.pin){const d=v.dial||(v.dial=[]),i=d.indexOf(path);if(i>=0)d.splice(i,1);else if(d.length<WAVE_DIAL)d.push(path);
+      else{waveSay(()=>`the dial is full: ${WAVE_DIAL} knobs`);return}
+      waveSay(()=>`${waveLabel(v,path)}: ${i>=0?'off':'on'} the dial`);edited();return}
     let route=null;
     if(waveUi.arm){route=routesTo(v,path).find(m=>m.src===waveUi.arm);if(!route){route={src:waveUi.arm,dst:path,amt:0,bi:waveUi.arm.startsWith('lfo'),off:false};v.mods.push(route);drag={fresh:true}}}
     drag={...drag,y:e.clientY,n0:waveNorm(P,waveGet(v,path)),route,a0:route?route.amt:0,moved:false};
@@ -133,7 +138,7 @@ function waveKeys(owner){
     x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
     for(let i=0;i<14;i++){const m=base+12*Math.floor(i/7)+WHITE[i%7];x.fillStyle=on.has(m)?cs.getPropertyValue('--hot'):cs.getPropertyValue('--fg');x.fillRect(i*ww+1,0,ww-2,H)}
     for(let o=0;o<2;o++)for(const[k,after]of Object.entries(BLACK)){const m=base+12*o+ +k,xx=(o*7+after+1)*ww-ww*.3;x.fillStyle=on.has(m)?cs.getPropertyValue('--hot'):cs.getPropertyValue('--bg');x.fillRect(xx,0,ww*.6,H*.6)}
-    const v=owner.voice,sh=12*(v.octave||0)+(v.semi||0);lab.textContent='C'+waveKeysAt.oct+(sh?' '+(sh>0?'+':'')+sh:'');lab.title=sh?`the voice transposes by ${sh} semitones`:''};
+    const v=owner.voice,sh=12*(v.octave||0)+(v.semi||0)+12*(v.tune?.oct||0)+(v.tune?.semi||0);lab.textContent='C'+waveKeysAt.oct+(sh?' '+(sh>0?'+':'')+sh:'');lab.title=sh?`the synth transposes by ${sh} semitones`:''};
   const noteAt=e=>{const r=cv.getBoundingClientRect(),{ww}=geom(),px=e.clientX-r.left,py=e.clientY-r.top,base=12*(waveKeysAt.oct+1);
     if(px<0||px>=ww*14)return null;
     if(py<H*.6)for(let o=0;o<2;o++)for(const[k,after]of Object.entries(BLACK)){const xx=(o*7+after+1)*ww-ww*.3;if(px>=xx&&px<xx+ww*.6)return base+12*o+ +k}
@@ -160,8 +165,10 @@ function waveEditor(f,owner){
   // sources: tap to arm, drag onto a knob to route
   const chips=el('div',{className:'wave-src'});
   const hint=el('div',{className:'wave-hint'});
-  const syncChips=()=>{for(const c of chips.children)c.ariaPressed=String(c.dataset.src===waveUi.arm);
-    hint.toggleAttribute('data-armed',!!waveUi.arm);hint.textContent=waveUi.arm?`${srcLabel(waveUi.arm)} armed: drag a knob to set its depth, double tap to remove. Tap ${srcLabel(waveUi.arm)} to finish.`:'Tap a source, or drag it onto a knob, to modulate.';redraw()};
+  const syncChips=()=>{for(const c of chips.children)c.ariaPressed=String(c.dataset.src?c.dataset.src===waveUi.arm:waveUi.pin);
+    hint.toggleAttribute('data-armed',!!waveUi.arm||waveUi.pin);hint.textContent=waveUi.pin?`Tap knobs to put them on the part's dial, or take them off: ${(v.dial||[]).length} of ${WAVE_DIAL}. Tap DIAL to finish.`:waveUi.arm?`${srcLabel(waveUi.arm)} armed: drag a knob to set its depth, double tap to remove. Tap ${srcLabel(waveUi.arm)} to finish.`:'Tap a source, or drag it onto a knob, to modulate.';redraw()};
+  // the dial chip: armed, a tap on a knob pins it to the dial that opens when the part is tapped
+  chips.append(el('button',{className:'wave-pin',textContent:'◎ DIAL',onclick:()=>{waveUi.pin=!waveUi.pin;waveUi.arm=null;syncChips()}}));
   for(const s of WAVE_SOURCES){
     const b=el('button',{textContent:srcLabel(s)});b.dataset.src=s;b.style.touchAction='none';
     let start=null;
@@ -169,7 +176,7 @@ function waveEditor(f,owner){
     b.onpointermove=e=>{if(start&&Math.hypot(e.clientX-start.x,e.clientY-start.y)>10){start.moved=true;b.classList.add('dragging')}};
     b.onpointerup=e=>{const st=start;start=null;b.classList.remove('dragging');if(!st)return;
       if(st.moved){const k=document.elementFromPoint(e.clientX,e.clientY)?.closest('.knob');if(k)k.dispatchEvent(new CustomEvent('wave-drop',{detail:s}));return}
-      waveUi.arm=waveUi.arm===s?null:s;syncChips()};
+      waveUi.arm=waveUi.arm===s?null:s;waveUi.pin=false;syncChips()};
     chips.append(b);
   }
   const tabs=el('div',{className:'wave-tabs'});
@@ -189,7 +196,7 @@ function waveEditor(f,owner){
       body.append(group('wave',O('pos'),O('warp'),O('warp2'),O('phase'),O('level'),O('pan')),group('pitch',O('oct'),O('semi'),O('fine')),
         group('unison',O('uni'),O('detune'),O('blend'),O('spread')),group('amp envelope',O('a'),O('d'),O('s'),O('r')),
         group('filter',O('cut'),O('res'),O('drive'),O('key')),group('filter envelope',O('famt'),O('fa'),O('fd'),O('fs'),O('fr')));
-    }else if(t==='SUB')body.append(group('sub (on ENV1)',K('sub.level'),K('sub.oct')),group('noise (on ENV1)',K('noise.level'),K('noise.color')),group('voice',K('vol'),K('glide'),K('gate')),
+    }else if(t==='SUB')body.append(group('sub (on ENV1)',K('sub.level'),K('sub.oct')),group('noise (on ENV1)',K('noise.level'),K('noise.color')),group('voice',K('tune.oct'),K('tune.semi'),K('vol'),K('glide'),K('gate')),
       el('div',{className:'wave-row'},choice('voicing',VOICE_MODES,()=>v.voicing.mode,x=>{v.voicing.mode=x;edited()}),
         toggle('glide always',()=>v.voicing.always,x=>{v.voicing.always=x;edited()}),toggle('glide scales',()=>v.voicing.scale,x=>{v.voicing.scale=x;edited()})),
       el('p',{className:'wave-hint',textContent:'Mono plays one note at a time and restarts the envelopes; legato restarts them only after a gap. Glide always slides every note; otherwise only overlapping ones. Glide scales makes short steps faster.'}));

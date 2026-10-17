@@ -60,3 +60,8 @@ CPU of the wave worklet, ms per second of audio on this box (node, min of 3; 8 h
   Phone, patch sheet open: the machine behind the scrim is drawn at a quarter rate; 390×844 at 2×, CPU throttled 4×:
   frame median 33.4 → 16.7 ms, idle 0.6% → 37%. Sheet header compacted (level and vel sense side by side, no pitch
   readout, hint only while armed, choice rows one line): the oscillator knobs are now on screen when it opens.
+- 2026-10-17 07:15Z (beat 6, operator steer): the synth transposes itself: tune.oct / tune.semi knobs in the patch
+  (SUB tab, voice group), applied in the worklet to every note; a part's old octave/semitones fold into them on load.
+  The part's dial for a synth is now just voice + volume (+ note on a pad) plus up to 12 knobs pinned from the editor
+  with the ◎ DIAL chip (tap knobs to pin/unpin; saved in the patch as `dial`). Disc root/octave/range are stepped
+  sliders on the dial, and octave/range get − + steppers on the notes sheet, like steps.

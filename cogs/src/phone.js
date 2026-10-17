@@ -58,12 +58,11 @@ function placeRoll(c,f){
   // The bar takes the sheet head's row, in place of the title, beside undo, redo and close: one row of tools.
   const head=$('#editor-head');head.querySelector('.roll-sel')?.remove();head.insertBefore(bar,$('#editor-undo'));
   f.prepend(roll.box);
-  // The disc's tuning as compact chips under the strip, not full-width form rows; steps gets − and + beside its number.
+  // The disc's tuning as compact chips under the strip, not full-width form rows; each number gets − and + beside it.
   const fields=el('div',{className:'disc-fields'},...['root','octave','range','scale','steps'].map(k=>f.querySelector(`:scope>.row[data-k="${k}"]`)).filter(Boolean));
   roll.box.after(fields);
-  const sr=fields.querySelector('[data-k="steps"]');
-  if(sr){const num=sr.querySelector('input[type=number]'),bump=d=>()=>{num.value=+num.value+d;num.dispatchEvent(new Event('input'));buzz(4)};
-    const box=el('div',{className:'stepper'},el('button',{textContent:'−',ariaLabel:'fewer steps',onclick:bump(-1)}),num,el('button',{textContent:'+',ariaLabel:'more steps',onclick:bump(1)}));
+  for(const sr of fields.querySelectorAll('[data-k="steps"],[data-k="octave"],[data-k="range"]')){const num=sr.querySelector('input[type=number]'),bump=d=>()=>{num.value=+num.value+d;num.dispatchEvent(new Event('input'));buzz(4)},k=sr.dataset.k;
+    const box=el('div',{className:'stepper'},el('button',{textContent:'−',ariaLabel:k+' down',onclick:bump(-1)}),num,el('button',{textContent:'+',ariaLabel:k+' up',onclick:bump(1)}));
     sr.querySelector('input[type=range]').remove();sr.append(box)}
   syncRollBar();
 }
@@ -233,7 +232,7 @@ const ICON={
   odds:'M12 3a9 9 0 1 0 .01 0M12 3v9h9',string:'M3 19L21 5M3 19h.01M21 5h.01',quant:'M4 20V14M9 20V9M14 20V12M19 20V4',
   seal:'M12 3a9 9 0 1 0 .01 0M12 7l1.5 3.2 3.5.4-2.6 2.4.7 3.5-3.1-1.8-3.1 1.8.7-3.5L7 10.6l3.5-.4z',
   semi:'M4 14h16M4 10h16M9 5v14M15 5v14',partials:'M3 20V8M7 20V5M11 20V9M15 20V11M19 20V13M23 20v-5',even:'M3 20V8M11 20V12M19 20V15',attack:'M3 20L10 5h11',
-  range:'M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4',octave:'M4 18V6M4 12h16M20 18V6',spread:'M4 20V9M8 20V6M12 20V9M16 20V12'};
+  range:'M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4',octave:'M4 18V6M4 12h16M20 18V6',knob:'M12 4a8 8 0 1 0 .01 0M12 12L16 6',spread:'M4 20V9M8 20V6M12 20V9M16 20V12'};
 const icons=new Map();const iconPath=k=>{let p=icons.get(k);if(!p){p=new Path2D(ICON[k]);icons.set(k,p)}return p};
 const VOICE_ICON={note:'fork',octave:'octave',semi:'semi',tune:'fork',body:'bell',partials:'partials',bright:'bright',even:'even',bend:'bend',hard:'hard',attack:'attack',
   decay:'decay',pdecay:'pdecay',damp:'damp',sweep:'sweep',tone:'tone',cutoff:'cutoff',spread:'spread',level:'level',velSense:'vel'};
@@ -244,8 +243,21 @@ const onOff=x=>x?'on':'off';
 const numSector=(icon,label,o,k,min,max,step,after)=>({icon,label,min,max,step,format:['note','base','combBase'].includes(k)?noteName:settingText,
   log:min>0&&max/min>=20,get:()=>o[k],set:x=>{o[k]=x;after&&after()}});
 const defSector=(icon,o,def,after)=>numSector(icon,def[1],o,def[0],def[2],def[3],def[4],after);
+const stepSector=(icon,label,min,max,get,set,format=settingText)=>({icon,label,min,max,step:1,format,get,set});
 const choiceSector=(icon,label,options,get,set,format=settingText)=>({icon,label,options,get,set,format,toggle:format===onOff});
+// The synth's dial: its volume, a pad's note, and the knobs pinned to it in the patch sheet (◎ DIAL), as they turn there.
+function waveSectors(owner,withNote){
+  const v=owner.voice,out=[choiceSector('kind','voice',Object.keys(VOICES),()=>owner.voice.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense,note:v.note})},kindLabel)];
+  if(withNote)out.push(defSector('fork',v,VOICE_DEFS.wave[0]));
+  out.push(numSector('level','volume',v,'level',0,1.5,.01));
+  for(const path of v.dial||[]){const P=WAVE_PARAMS[WAVE_INDEX.get(path)];if(!P)continue;
+    const int=P[5]==='int',post=()=>wavePost(v);
+    out.push(int?{icon:'knob',label:waveLabel(v,path),min:P[2],max:P[3],step:1,format:x=>waveText(P,x),get:()=>waveGet(v,path),set:x=>{waveSet(v,path,x);post()}}
+      :{icon:'knob',label:waveLabel(v,path),min:0,max:1,step:.001,format:n=>waveText(P,waveDenorm(P,n)),get:()=>waveNorm(P,waveGet(v,path)),set:n=>{waveSet(v,path,waveDenorm(P,n));post()}})}
+  return out;
+}
 function voiceSectors(owner,withNote){
+  if(owner.voice.kind==='wave')return waveSectors(owner,withNote);
   const v=owner.voice,out=[choiceSector('kind','voice',Object.keys(VOICES),()=>owner.voice.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense,...(v.note!=null?{note:v.note,octave:v.octave,semi:v.semi}:{})})},kindLabel)];
   for(const def of [...VOICE_DEFS[v.kind].filter(d=>withNote||d[0]!=='note').slice(0,BEZEL_PARAMS),COMMON_DEFS[0]])
     out.push(Array.isArray(def[2])?choiceSector(VOICE_ICON[def[0]],def[1],def[2],()=>v[def[0]],x=>{v[def[0]]=x}):defSector(VOICE_ICON[def[0]],v,def));
@@ -263,8 +275,9 @@ const stringSectors=o=>[choiceSector('string','instrument',['string','bar'],()=>
 function trackSectors(c){
   const t=c.track;
   const trim=()=>trimDots(t);
-  return [choiceSector('scale','scale',Object.keys(SCALES),()=>t.scale,x=>{t.scale=x;trim()}),choiceSector('fork','root',NOTE_NAMES.map((_,i)=>i),()=>t.root,x=>{t.root=x},i=>NOTE_NAMES[i]),
-    choiceSector('octave','octave',OCTAVES,()=>t.octave,x=>{t.octave=x}),choiceSector('range','range',RANGES,()=>t.range,x=>{t.range=x;trim()},r=>r+' oct'),
+  // numbers are sliders, as every number on every dial is: drag along the ring, a step at a time
+  return [choiceSector('scale','scale',Object.keys(SCALES),()=>t.scale,x=>{t.scale=x;trim()}),stepSector('fork','root',0,11,()=>t.root,x=>{t.root=x},i=>NOTE_NAMES[i]),
+    stepSector('octave','octave',OCTAVES[0],OCTAVES.at(-1),()=>t.octave,x=>{t.octave=x}),stepSector('range','range',RANGES[0],RANGES.at(-1),()=>t.range,x=>{t.range=x;trim()},r=>r+' oct'),
     numSector('div','steps',t,'div',1,96,1)];
 }
 const dotSectors=d=>[numSector('odds','probability',d,'p',0,1,.01),numSector('level','velocity',d,'v',0,1,.01),numSector('div','length steps',d,'len',1,ui.dotOf.track.div,1)];

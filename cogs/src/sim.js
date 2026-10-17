@@ -58,7 +58,8 @@ const VOICE_DEFS={
   cowbell:[['tune','tune Hz',200,1200,1],['decay','decay s',.02,2,.01]],
   wood:[['tune','tune Hz',500,5000,10],['decay','decay s',.01,.5,.005]],
   cymbal:[['cutoff','cutoff Hz',1000,12000,10],['tone','tone',0,1,.01],['decay','decay s',.1,4,.01]],
-  wave:[['note','note',12,108,1],['octave','octave',-3,3,1],['semi','semitones',-12,12,1]]};
+  // the synth's octave and semitones are its own knobs, in the patch (tune.oct, tune.semi)
+  wave:[['note','note',12,108,1]]};
 const COMMON_DEFS=[['level','level',0,1.5,.01],['velSense','vel sense',0,1,.01]];
 const DRUMS=Object.keys(VOICES).filter(k=>k!=='synth'&&k!=='wave');
 // What the kinds are called: the wave synth is the synth; the older modal one (saved as 'synth') is 'modal'.

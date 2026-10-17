@@ -33,7 +33,7 @@ const OSC_P=Array.from({length:WAVE_OSCS},(_,i)=>Object.fromEntries(OSC_KEYS.map
 const ENV_P=Array.from({length:WAVE_ENVS},(_,i)=>['a','d','s','r'].map(k=>PI_(`env${i+1}.${k}`)));
 const LFO_P=Array.from({length:WAVE_LFOS},(_,i)=>[PI_(`lfo${i+1}.rate`),PI_(`lfo${i+1}.phase`)]);
 const MAC_P=Array.from({length:WAVE_MACROS},(_,i)=>PI_('m'+(i+1)));
-const P_SUB=PI_('sub.level'),P_SUBOCT=PI_('sub.oct'),P_NOISE=PI_('noise.level'),P_COLOR=PI_('noise.color'),P_VOL=PI_('vol'),P_GLIDE=PI_('glide'),P_GATE=PI_('gate');
+const P_TOCT=PI_('tune.oct'),P_TSEMI=PI_('tune.semi'),P_SUB=PI_('sub.level'),P_SUBOCT=PI_('sub.oct'),P_NOISE=PI_('noise.level'),P_COLOR=PI_('noise.color'),P_VOL=PI_('vol'),P_GLIDE=PI_('glide'),P_GATE=PI_('gate');
 const newEnv=()=>({st:0,lv:0});
 // An envelope stepped a whole slice at once, in closed form: for those that only modulate, sampled once per slice.
 function envSkip(e,c,s,n){
@@ -326,7 +326,8 @@ const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
       for(const d of cp.modded)vals[d]=waveDenorm(WAVE_PARAMS[d],vals[d]);
     }
     for(let i=0;i<WAVE_LFOS;i++){const l=v.lfo[i],nph=l.ph+this.lfoRate(cp,vals,i)*n/fs;if(nph>=1){l.prev=l.held;l.held=Math.random()}l.ph=nph%1}
-    const midi=this.pitch(v,now);
+    // the patch transposes itself: every note into it, from any part, sounds that far up or down
+    const midi=this.pitch(v,now)+12*vals[P_TOCT]+vals[P_TSEMI];
     let alive=false;
     for(let i=0;i<WAVE_OSCS;i++)if(cp.on[i]&&this.osc(v,cp,vals,i,n,midi,fs))alive=true;
     // sub and noise ride ENV1, sample by sample; the other envelopes only modulate, so they step a slice at a time

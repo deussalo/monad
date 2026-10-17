@@ -1105,8 +1105,9 @@ function buildInspector(){
     if(o.track){
       const t=o.track,retune=()=>{trimDots(t);changed()};
       selRow(f,'root',NOTE_NAMES.map((_,i)=>String(i)),()=>String(t.root),x=>{t.root=+x;retune()},i=>NOTE_NAMES[i]);
-      selRow(f,'octave',OCTAVES.map(String),()=>String(t.octave),x=>{t.octave=+x;retune()});
-      selRow(f,'range',RANGES.map(String),()=>String(t.range),x=>{t.range=+x;retune()},r=>`${r} oct · ${r*SCALES[t.scale].length} lanes`);
+      // numbers are sliders here as on the dial
+      numRow(f,'octave',OCTAVES[0],OCTAVES.at(-1),1,()=>t.octave,x=>{t.octave=x;retune()},MODEL.disc.track.octave);
+      numRow(f,'range',RANGES[0],RANGES.at(-1),1,()=>t.range,x=>{t.range=x;retune()},MODEL.disc.track.range);
       selRow(f,'scale',Object.keys(SCALES),()=>t.scale,v=>{t.scale=v;retune()});
       numRow(f,'steps',1,96,1,...bind(t,'div',changed),TRACK_DEFAULT.div);
       roRow(f,'lanes',()=>`${trackRings(t)} · ${noteName(trackBase(t))} to ${noteName(ringNote(t,trackRings(t)-1))} · ${t.dots.length} pins`);
