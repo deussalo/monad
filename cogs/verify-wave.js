@@ -85,7 +85,7 @@ const SHOTS = process.env.COGS_SHOTS || '';
   await dragKnob('osc1.pos', 45);
   const m1 = (await voice()).mods;
   check('armed, dragging wt pos draws a route LFO1 -> A wt pos', m1.length === 1 && m1[0].src === 'lfo1' && m1[0].dst === 'osc1.pos' && Math.abs(m1[0].amt - .3) < .03, m1);
-  is('the knob value is untouched by routing', (await voice()).osc[0].pos, 0);
+  is('the knob value is untouched by routing (init is a saw, wt pos 2/3)', (await voice()).osc[0].pos, 2 / 3);
   await p.click('#inspector .wave-src button[data-src="lfo1"]');
   // drag a chip onto a knob: Serum's drag and drop
   const tgt = await knobAt('osc1.cut');
