@@ -198,6 +198,12 @@ const SHOTS = process.env.COGS_SHOTS || '';
   await p.mouse.click(...at); await wait(200);
   await p.click('#inspector .wave-play'); await wait(400);
   check('play sounds it in the live engine', (await probe(() => __cogs.engine().wave)) > 0, await probe(() => __cogs.engine().wave));
+  // fine control: the same vertical drag, made 120 px to the side, moves the knob a third as far
+  await p.click('#inspector .wave-tabs button[data-tab="A"]'); await wait(100);
+  { await probe(() => { __cogs.W.pads[0].voice.osc[0].pos = .3; }); const P0 = .3; const [x, y] = await knobAt('osc1.pos'); await p.mouse.move(x, y); await p.mouse.down(); await p.mouse.move(x, y - 30, { steps: 6 }); await p.mouse.up(); await settle();
+    const P1 = (await voice()).osc[0].pos; await p.mouse.move(x, y); await p.mouse.down(); await p.mouse.move(x + 120, y, { steps: 6 }); await p.mouse.move(x + 120, y - 30, { steps: 6 }); await p.mouse.up(); await settle();
+    const P2 = (await voice()).osc[0].pos, coarse = P1 - P0, fine = P2 - P1;
+    check('drag sideways for fine control: a third of the travel 120 px out', coarse > .15 && Math.abs(fine / coarse - 1 / 3) < .05, [+coarse.toFixed(3), +fine.toFixed(3)]); }
   // the synth transposes itself: its octave and semi knobs (SUB tab, voice) move every note into it, keyboard or part
   await p.click('#inspector .wave-tabs button[data-tab="SUB"]'); await wait(100);
   await dragKnob('tune.oct', 19); await dragKnob('tune.semi', 12);

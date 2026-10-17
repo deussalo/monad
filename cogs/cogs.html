@@ -2836,7 +2836,7 @@ function setRollVel(on){rollVel=on;if(roll?.laneRow)roll.laneRow.style.display=o
 /* ---------- wave synth editor: knobs in tabs, the mod sources, the matrix and the patch library ---------- */
 // Serum's way to modulate: pick a source (tap its chip to arm it, or drag the chip onto a knob), then drag a knob to
 // set how far that source moves it; the knob shows each route as a blue arc beside its value. Double tap resets a
-// knob, or, armed, removes that route. The matrix tab lists every route to edit, bypass or delete.
+// knob, or, armed, removes that route. Drag out sideways for finer steps (the readout says how fine). The matrix tab lists every route to edit, bypass or delete.
 const waveSay=read=>{if(typeof showInteraction==='function')showInteraction(read)};
 const waveUi={tab:'A',arm:null,pin:false,msg:''};
 const WAVE_TABS=['A','B','C','SUB','ENV','LFO','FX','MACRO','MATRIX','PATCH'];
@@ -2896,14 +2896,15 @@ function waveKnob(v,path,edited){
       waveSay(()=>`${waveLabel(v,path)}: ${i>=0?'off':'on'} the dial`);edited();return}
     let route=null;
     if(waveUi.arm){route=routesTo(v,path).find(m=>m.src===waveUi.arm);if(!route){route={src:waveUi.arm,dst:path,amt:0,bi:waveUi.arm.startsWith('lfo'),off:false};v.mods.push(route);drag={fresh:true}}}
-    drag={...drag,y:e.clientY,n0:waveNorm(P,waveGet(v,path)),route,a0:route?route.amt:0,moved:false};
+    drag={...drag,x:e.clientX,y:e.clientY,ly:e.clientY,acc:0,n0:waveNorm(P,waveGet(v,path)),route,a0:route?route.amt:0,moved:false};
   };
   cv.onpointermove=e=>{
-    if(!drag)return;const dy=drag.y-e.clientY;if(!drag.moved&&Math.abs(dy)<3)return;drag.moved=true;
-    const d=dy/(e.shiftKey?600:150);
+    if(!drag)return;if(!drag.moved&&Math.abs(drag.y-e.clientY)<3)return;drag.moved=true;
+    // fine control: the further the finger strays sideways from the knob, the finer each vertical step (shift on a desk)
+    const fine=1+Math.abs(e.clientX-drag.x)/60;drag.acc+=(drag.ly-e.clientY)/((e.shiftKey?600:150)*fine);drag.ly=e.clientY;const d=drag.acc;
     if(drag.route)drag.route.amt=clamp(+(drag.a0+d).toFixed(3),-1,1);
     else waveSet(v,path,waveDenorm(P,drag.n0+d));
-    draw();wavePost(v);waveSay(()=>`${waveLabel(v,path)}: ${val.textContent}`);
+    draw();wavePost(v);waveSay(()=>`${waveLabel(v,path)}: ${val.textContent}${fine>=1.5?` · fine ×${fine.toFixed(1)}`:''}`);
   };
   cv.onpointerup=cv.onpointercancel=()=>{
     const d=drag;drag=null;if(!d)return;

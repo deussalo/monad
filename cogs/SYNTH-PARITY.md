@@ -67,3 +67,6 @@ CPU of the wave worklet, ms per second of audio on this box (node, min of 3; 8 h
   sliders on the dial, and octave/range get − + steppers on the notes sheet, like steps.
 - 2026-10-17 07:20Z (beat 7): the machine's canvas draws at most at 2× device pixels. A 3× phone (390×844, CPU
   throttled 4×, default world playing): frame median 50 → 33 ms, p90 67 → 50 ms (44% of the pixels to raster).
+- 2026-10-17 07:50Z (beat 8): knob fine control for touch: the drag integrates step by step, and each vertical pixel
+  counts less the further the finger is out to the side (60 px out: half, 120 px: a third); the readout shows
+  "fine ×N". Shift still gives 4× finer on a desk.
