@@ -61,7 +61,9 @@ const VOICE_DEFS={
   wave:[['note','note',12,108,1],['octave','octave',-3,3,1],['semi','semitones',-12,12,1]]};
 const COMMON_DEFS=[['level','level',0,1.5,.01],['velSense','vel sense',0,1,.01]];
 const DRUMS=Object.keys(VOICES).filter(k=>k!=='synth'&&k!=='wave');
-const makeVoice=(kind,common={level:.7,velSense:.7})=>kind==='wave'?waveVoice(null,common):({...common,...VOICES[kind],kind});
+// What the kinds are called: the wave synth is the synth; the older modal one (saved as 'synth') is 'modal'.
+const KIND_LABEL={synth:'modal',wave:'synth'},kindLabel=k=>KIND_LABEL[k]||k;
+const makeVoice=(kind,common={level:.7,velSense:.7})=>kind==='wave'?waveVoice(WAVE_PRESETS.pluck(),common):({...common,...VOICES[kind],kind});
 // The room's musical face; the rest of SPACE and S is engineering, kept behind the advanced drawer.
 const ROOM_SPACE=['wet','size','decay','highMult','shimmer','freeze'],ROOM_S=['master','bpm','beats'];
 const LOOKAHEAD_MIN=.12;
@@ -431,7 +433,8 @@ function deserialize(j){
   const cog=(id,who)=>{const c=byId.get(id);if(!c)throw new Error(`${who}: no cog ${id}`);return c};
   const importedVoice=o=>{
     const v=o.voice;if(!VOICES[v.kind])throw new Error(`${o.id}: voice kind ${v.kind}`);
-    if(v.kind==='wave'){const keep={};for(const k of WAVE_VOICE_KEYS)if(v[k]!==undefined)keep[k]=v[k];return waveVoice(v,keep)}
+    // a wave voice saved whole, or named by a factory preset (the demo's readers)
+    if(v.kind==='wave'){const keep={};for(const k of WAVE_VOICE_KEYS)if(v[k]!==undefined)keep[k]=v[k];return waveVoice(!v.osc&&WAVE_PRESETS[v.preset]?WAVE_PRESETS[v.preset]():v,keep)}
     return {...makeVoice(v.kind),...v};
   };
   for(const c of cogs)if(c.track){const t=c.track;

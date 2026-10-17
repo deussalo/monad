@@ -88,7 +88,9 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
 
   console.log('DEFAULT WORLD');
   const WANT = JSON.parse(require('fs').readFileSync(path.join(__dirname, 'src', 'default-world.json'), 'utf8'));
-  const parts = w => JSON.stringify({ ...w, S: { ...w.S, zoom: 0 }, view: 0, cogs: w.cogs.map(c => ({ ...c, th: 0 })) });
+  // a wave voice is saved in full; the default world names it by its factory preset
+  const voiceKey = v => v.kind === 'wave' ? { kind: v.kind, note: v.note, octave: v.octave, semi: v.semi, level: v.level, velSense: v.velSense, preset: v.preset ?? v.name } : v;
+  const parts = w => JSON.stringify({ ...w, S: { ...w.S, zoom: 0 }, view: 0, cogs: w.cogs.map(c => ({ ...c, th: 0 })), readers: w.readers.map(r => ({ ...r, voice: voiceKey(r.voice) })) });
   check('a fresh page opens the default world exactly (camera and phase aside)', parts(await probe(() => __cogs.serialize())) === parts(WANT), 'see src/default-world.json');
   const g0 = await m.reset();
   is('holding the glyph open over the panel presses nothing beneath it', await probe(() => [__cogs.W.cogs.length, __cogs.clock.paused]), [WANT.cogs.length, false]);

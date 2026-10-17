@@ -1073,7 +1073,10 @@ const span=(a,b)=>Array.from({length:b-a+1},(_,i)=>String(a+i));
 const PITCH_KEYS=new Set(['note','octave','semi']);
 function voiceRows(f,owner,withNote){
   const v=owner.voice,retune=()=>changed();
-  selRow(f,'kind',Object.keys(VOICES),()=>v.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense});buildInspector();changed()});
+  selRow(f,'kind',Object.keys(VOICES),()=>v.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense,...(v.note!=null?{note:v.note,octave:v.octave,semi:v.semi}:{})});buildInspector();changed()},kindLabel);
+  // the wave synth is one tap away from any other voice
+  if(v.kind!=='wave')f.append(el('button',{className:'to-wave',textContent:'Use the synth: 3 oscillators, filters, envelopes, LFOs, FX',onclick:()=>{
+    owner.voice=waveVoice(WAVE_PRESETS.pluck(),{note:v.note??60,octave:v.octave??0,semi:v.semi??0,level:v.level,velSense:v.velSense});buildInspector();changed()}}));
   for(const[k,l,a,b,s]of [...VOICE_DEFS[v.kind],...COMMON_DEFS]){
     if(k==='note'&&!withNote)continue;
     if(k==='note')selRow(f,l,MIDI_NOTES,()=>v.note,x=>{v.note=+x;retune()},noteName);

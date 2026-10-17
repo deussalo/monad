@@ -225,7 +225,7 @@ function waveEditor(f,owner){
     }
     redraw();
   };
-  root.append(el('div',{className:'wave-top'},el('b',{textContent:'wave synth'}),play),chips,hint,tabs,body);
+  root.append(el('div',{className:'wave-top'},el('b',{textContent:'synth'}),play),chips,hint,tabs,body);
   f.append(root);show(waveUi.tab);syncChips();
   // the sources stay in reach while the knobs scroll: they stick under the phone sheet's head, or at the panel's top
   requestAnimationFrame(()=>{const head=document.querySelector('#sheet-top');chips.style.top=(head&&head.offsetParent?head.offsetHeight:0)+'px'});

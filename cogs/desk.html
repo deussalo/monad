@@ -860,7 +860,9 @@ const VOICE_DEFS={
   wave:[['note','note',12,108,1],['octave','octave',-3,3,1],['semi','semitones',-12,12,1]]};
 const COMMON_DEFS=[['level','level',0,1.5,.01],['velSense','vel sense',0,1,.01]];
 const DRUMS=Object.keys(VOICES).filter(k=>k!=='synth'&&k!=='wave');
-const makeVoice=(kind,common={level:.7,velSense:.7})=>kind==='wave'?waveVoice(null,common):({...common,...VOICES[kind],kind});
+// What the kinds are called: the wave synth is the synth; the older modal one (saved as 'synth') is 'modal'.
+const KIND_LABEL={synth:'modal',wave:'synth'},kindLabel=k=>KIND_LABEL[k]||k;
+const makeVoice=(kind,common={level:.7,velSense:.7})=>kind==='wave'?waveVoice(WAVE_PRESETS.pluck(),common):({...common,...VOICES[kind],kind});
 // The room's musical face; the rest of SPACE and S is engineering, kept behind the advanced drawer.
 const ROOM_SPACE=['wet','size','decay','highMult','shimmer','freeze'],ROOM_S=['master','bpm','beats'];
 const LOOKAHEAD_MIN=.12;
@@ -1230,7 +1232,8 @@ function deserialize(j){
   const cog=(id,who)=>{const c=byId.get(id);if(!c)throw new Error(`${who}: no cog ${id}`);return c};
   const importedVoice=o=>{
     const v=o.voice;if(!VOICES[v.kind])throw new Error(`${o.id}: voice kind ${v.kind}`);
-    if(v.kind==='wave'){const keep={};for(const k of WAVE_VOICE_KEYS)if(v[k]!==undefined)keep[k]=v[k];return waveVoice(v,keep)}
+    // a wave voice saved whole, or named by a factory preset (the demo's readers)
+    if(v.kind==='wave'){const keep={};for(const k of WAVE_VOICE_KEYS)if(v[k]!==undefined)keep[k]=v[k];return waveVoice(!v.osc&&WAVE_PRESETS[v.preset]?WAVE_PRESETS[v.preset]():v,keep)}
     return {...makeVoice(v.kind),...v};
   };
   for(const c of cogs)if(c.track){const t=c.track;
@@ -1276,8 +1279,8 @@ const DEFAULT_WORLD=
   {"id":5,"on":2,"x1":-1.5283776298780056,"y1":184.19697773090462,"x2":-1.9210066237393315,"y2":196.190552780621,"voice":{"level":0.6,"velSense":0.3,"tune":185,"tone":0.25,"cutoff":6000,"decay":0.12,"kind":"snare"},"tines":0,"combBase":60,"combScale":"major"},
   {"id":6,"on":2,"x1":-2.0157906222369797,"y1":199.08590441605133,"x2":-2.4084196160983056,"y2":211.07947946576772,"voice":{"level":0.45,"velSense":0.6,"cutoff":9500,"decay":0.03,"kind":"hat"},"tines":0,"combBase":60,"combScale":"major"},
   {"id":7,"on":2,"x1":-2.5032036145959538,"y1":213.97483110119802,"x2":-2.8958326084572796,"y2":225.9684061509144,"voice":{"level":0.4,"velSense":0.5,"cutoff":8000,"decay":0.18,"kind":"hat"},"tines":0,"combBase":60,"combScale":"major"},
-  {"id":9,"on":8,"x1":154.00222039032928,"y1":0.5399036223052966,"x2":224.5528268368706,"y2":2.8494913399446213,"voice":{"level":1.1,"velSense":0.4,"note":60,"octave":0,"semi":0,"body":"harmonic","partials":4,"bright":0.35,"even":0.9,"bend":1,"hard":0.25,"attack":0.004,"decay":0.9,"damp":1.3,"kind":"synth"},"tines":0,"combBase":60,"combScale":"major"},
-  {"id":11,"on":10,"x1":-154.00222039032928,"y1":-0.5399036223052779,"x2":-224.5528268368706,"y2":-2.8494913399445942,"voice":{"level":0.42,"velSense":0.3,"note":60,"octave":0,"semi":0,"body":"harmonic","partials":6,"bright":0.45,"even":0.6,"bend":1,"hard":0.3,"attack":0.006,"decay":1.4,"damp":1.1,"kind":"synth"},"tines":0,"combBase":60,"combScale":"major"}],
+  {"id":9,"on":8,"x1":154.00222039032928,"y1":0.5399036223052966,"x2":224.5528268368706,"y2":2.8494913399446213,"voice":{"kind":"wave","preset":"reese bass","note":60,"octave":0,"semi":0,"level":0.9,"velSense":0.4},"tines":0,"combBase":60,"combScale":"major"},
+  {"id":11,"on":10,"x1":-154.00222039032928,"y1":-0.5399036223052779,"x2":-224.5528268368706,"y2":-2.8494913399445942,"voice":{"kind":"wave","preset":"pluck","note":60,"octave":0,"semi":0,"level":0.55,"velSense":0.3},"tines":0,"combBase":60,"combScale":"major"}],
 "belts":[
   ],
 "strings":[
@@ -2562,7 +2565,10 @@ const span=(a,b)=>Array.from({length:b-a+1},(_,i)=>String(a+i));
 const PITCH_KEYS=new Set(['note','octave','semi']);
 function voiceRows(f,owner,withNote){
   const v=owner.voice,retune=()=>changed();
-  selRow(f,'kind',Object.keys(VOICES),()=>v.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense});buildInspector();changed()});
+  selRow(f,'kind',Object.keys(VOICES),()=>v.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense,...(v.note!=null?{note:v.note,octave:v.octave,semi:v.semi}:{})});buildInspector();changed()},kindLabel);
+  // the wave synth is one tap away from any other voice
+  if(v.kind!=='wave')f.append(el('button',{className:'to-wave',textContent:'Use the synth: 3 oscillators, filters, envelopes, LFOs, FX',onclick:()=>{
+    owner.voice=waveVoice(WAVE_PRESETS.pluck(),{note:v.note??60,octave:v.octave??0,semi:v.semi??0,level:v.level,velSense:v.velSense});buildInspector();changed()}}));
   for(const[k,l,a,b,s]of [...VOICE_DEFS[v.kind],...COMMON_DEFS]){
     if(k==='note'&&!withNote)continue;
     if(k==='note')selRow(f,l,MIDI_NOTES,()=>v.note,x=>{v.note=+x;retune()},noteName);
@@ -2895,7 +2901,7 @@ function waveEditor(f,owner){
     }
     redraw();
   };
-  root.append(el('div',{className:'wave-top'},el('b',{textContent:'wave synth'}),play),chips,hint,tabs,body);
+  root.append(el('div',{className:'wave-top'},el('b',{textContent:'synth'}),play),chips,hint,tabs,body);
   f.append(root);show(waveUi.tab);syncChips();
   // the sources stay in reach while the knobs scroll: they stick under the phone sheet's head, or at the panel's top
   requestAnimationFrame(()=>{const head=document.querySelector('#sheet-top');chips.style.top=(head&&head.offsetParent?head.offsetHeight:0)+'px'});

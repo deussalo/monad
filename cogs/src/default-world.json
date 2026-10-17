@@ -16,8 +16,8 @@
   {"id":5,"on":2,"x1":-1.5283776298780056,"y1":184.19697773090462,"x2":-1.9210066237393315,"y2":196.190552780621,"voice":{"level":0.6,"velSense":0.3,"tune":185,"tone":0.25,"cutoff":6000,"decay":0.12,"kind":"snare"},"tines":0,"combBase":60,"combScale":"major"},
   {"id":6,"on":2,"x1":-2.0157906222369797,"y1":199.08590441605133,"x2":-2.4084196160983056,"y2":211.07947946576772,"voice":{"level":0.45,"velSense":0.6,"cutoff":9500,"decay":0.03,"kind":"hat"},"tines":0,"combBase":60,"combScale":"major"},
   {"id":7,"on":2,"x1":-2.5032036145959538,"y1":213.97483110119802,"x2":-2.8958326084572796,"y2":225.9684061509144,"voice":{"level":0.4,"velSense":0.5,"cutoff":8000,"decay":0.18,"kind":"hat"},"tines":0,"combBase":60,"combScale":"major"},
-  {"id":9,"on":8,"x1":154.00222039032928,"y1":0.5399036223052966,"x2":224.5528268368706,"y2":2.8494913399446213,"voice":{"level":1.1,"velSense":0.4,"note":60,"octave":0,"semi":0,"body":"harmonic","partials":4,"bright":0.35,"even":0.9,"bend":1,"hard":0.25,"attack":0.004,"decay":0.9,"damp":1.3,"kind":"synth"},"tines":0,"combBase":60,"combScale":"major"},
-  {"id":11,"on":10,"x1":-154.00222039032928,"y1":-0.5399036223052779,"x2":-224.5528268368706,"y2":-2.8494913399445942,"voice":{"level":0.42,"velSense":0.3,"note":60,"octave":0,"semi":0,"body":"harmonic","partials":6,"bright":0.45,"even":0.6,"bend":1,"hard":0.3,"attack":0.006,"decay":1.4,"damp":1.1,"kind":"synth"},"tines":0,"combBase":60,"combScale":"major"}],
+  {"id":9,"on":8,"x1":154.00222039032928,"y1":0.5399036223052966,"x2":224.5528268368706,"y2":2.8494913399446213,"voice":{"kind":"wave","preset":"reese bass","note":60,"octave":0,"semi":0,"level":0.9,"velSense":0.4},"tines":0,"combBase":60,"combScale":"major"},
+  {"id":11,"on":10,"x1":-154.00222039032928,"y1":-0.5399036223052779,"x2":-224.5528268368706,"y2":-2.8494913399445942,"voice":{"kind":"wave","preset":"pluck","note":60,"octave":0,"semi":0,"level":0.55,"velSense":0.3},"tines":0,"combBase":60,"combScale":"major"}],
 "belts":[
   ],
 "strings":[
