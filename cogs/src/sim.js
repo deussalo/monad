@@ -371,7 +371,10 @@ function setPaused(p){
 }
 // Each running train turns until its motor shows angle 0; its cogs move by their ratios, so meshes hold.
 function toStart(){
-  const by=new Map(W.cogs.filter(m=>m.motor&&m.w).map(m=>[m,-wrap(renderTh(m))/m.w]));
+  // a motor already at its start (within float noise either side of 0) stays put: wrap() can read that as 2π-ε,
+  // and a whole turn back would move every cog of a non-integer ratio to a different place
+  const back=m=>{const a=wrap(renderTh(m));return a>TAU-1e-6?a-TAU:a};
+  const by=new Map(W.cogs.filter(m=>m.motor&&m.w).map(m=>[m,-back(m)/m.w]));
   for(const c of W.cogs){const dt=by.get(c.driver);if(dt!==undefined)c.th=wrap(c.th+c.w*dt);c.turns=0}
   changed();
 }

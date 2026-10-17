@@ -235,6 +235,20 @@ const SHOTS = process.env.COGS_SHOTS || '';
   { const [x, y] = await knobAt('osc1.cut'); await p.mouse.click(x, y); await settle(); }
   is('pinned: saved with the patch, marked on the knob', [(await voice()).dial, await probe(() => document.querySelector('#inspector .knob[data-path="osc1.cut"]').classList.contains('pinned'))], [['osc1.cut'], true]);
   await p.click('#inspector .wave-pin');
+  console.log('MIDI IN');
+  await p.mouse.click(...at); await wait(200);
+  is('the selected pad\'s sheet offers Bluetooth MIDI and MIDI in', await probe(() => [...document.querySelectorAll('#inspector .midi-row button')].map(b => b.textContent)), ['Bluetooth MIDI', 'MIDI in']);
+  const mi = await probe(async () => { const n0 = __cogs.engine().waveNotes; midiMessage(0x90, 64, 100); await new Promise(r => setTimeout(r, 30));
+    const on = [__cogs.engine().waveNotes - n0, __cogs.engine().waveLast, midi.held.has(64)];
+    midiMessage(0xb0, 64, 127); midiMessage(0x80, 64, 0); const pedal = [midi.held.has(64), midi.sustained.has(64)];
+    midiMessage(0xb0, 64, 0); const up = midi.held.has(64);
+    // a BLE-MIDI packet: header, timestamp, note on 67, then running status: timestamp, note 67 velocity 0 (off)
+    bleMidi(new Uint8Array([0x80, 0x81, 0x90, 67, 90, 0x82, 67, 0])); const ble = [__cogs.engine().waveLast, midi.held.has(67)];
+    return { on, pedal, up, ble }; });
+  is('a note on plays the selected part (its key as sent), held until its note off', mi.on, [1, 64, true]);
+  is('sustain down: the note off waits; pedal up lets it go', [mi.pedal, mi.up], [[true, true], false]);
+  is('a BLE-MIDI packet with running status: note on, then off', mi.ble, [67, false]);
+  is('the mod wheel turns macro 1', await probe(() => { midiMessage(0xb0, 1, 127); return __cogs.W.pads[0].voice.macro[0]; }), 1);
   console.log('CAM');
   // a motor and a seated synth reader; the reader's patch has nothing on its macros yet
   await probe(() => { const j = __cogs.serialize(); j.cogs = [{ id: 1, x: 0, y: 0, n: 24, motor: { rpm: 60, revs: 1 }, layer: 0, th: 0, track: null }]; j.arms = []; j.belts = []; j.strings = []; j.pads = [];

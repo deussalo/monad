@@ -1088,13 +1088,14 @@ function listen(force=false){
 let inspector=null,panelRows=0,panelReadouts=0;
 const REVS=['-2','-1','-1/2','-1/3','-1/4','0','1/8','1/6','1/4','1/3','1/2','2/3','3/4','1','4/3','3/2','2','3','4','6','8'];
 const frac=s=>{const[a,b=1]=s.split('/').map(Number);return a/b};
-function select(type,o){sel=type?{type,o}:null;group=[];if(inspectorLive())buildInspector()}
+function select(type,o){sel=type?{type,o}:null;if(o&&o.voice&&(type==='reader'||type==='pad'))midi.target=o;group=[];if(inspectorLive())buildInspector()}
 const span=(a,b)=>Array.from({length:b-a+1},(_,i)=>String(a+i));
 const PITCH_KEYS=new Set(['note','octave','semi']);
 function voiceRows(f,owner,withNote){
   const v=owner.voice,retune=()=>changed();
   selRow(f,'kind',Object.keys(VOICES),()=>v.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense,...(v.note!=null?{note:v.note,octave:v.octave,semi:v.semi}:{})});buildInspector();changed()},kindLabel);
   // the wave synth is one tap away from any other voice
+  midiRow(f,owner);
   if(v.kind!=='wave')f.append(el('button',{className:'to-wave',textContent:'Use the synth: 3 oscillators, filters, envelopes, LFOs, FX',onclick:()=>{
     owner.voice=waveVoice(WAVE_PRESETS.pluck(),{note:v.note??60,octave:v.octave??0,semi:v.semi??0,level:v.level,velSense:v.velSense});buildInspector();changed()}}));
   for(const[k,l,a,b,s]of [...VOICE_DEFS[v.kind],...COMMON_DEFS]){

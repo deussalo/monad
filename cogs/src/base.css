@@ -38,6 +38,9 @@ textarea{height:90px}
 .knob canvas{cursor:ns-resize}
 .knob span{color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:62px}
 .knob b{font-weight:normal;color:var(--fg);white-space:nowrap}
+.midi-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:4px 0 8px}
+.midi-row button{font-size:12px;padding:4px 10px;min-height:36px}
+.midi-status{flex:1 1 140px;font-size:11px;color:var(--dim)}
 .cam-strip{display:block;width:100%;height:72px;background:var(--rig-surface,#000);border-radius:6px;margin:4px 0 8px;touch-action:none}
 .knob.pinned span{color:var(--hot)}
 .knob.pinned span::before{content:'◎ '}
