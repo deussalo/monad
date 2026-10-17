@@ -16,15 +16,14 @@ logs what landed. Sources: Xfer's [Serum 2 What's New](https://static.xferrecord
 | Macros | 8, assignable, as destinations | 8 named macros, any knob can take one | macro curve per route |
 | Mod matrix | any knob; bypass, reorder, curves, aux source | any knob, ±bipolar, bypass, delete, aux source (or inverted), drawn curve per route; drag-and-drop and arm-and-drag | reorder, modulating a route's depth, mod-wheel/aftertouch sources |
 | Voicing | poly/mono/legato, glide, always, scaled glide | poly, mono, legato; glide with always and scaled; 16 voices; gate | voice count knob, glide curve |
-| FX | 13 effects on buses, splitters, reorderable | per-patch rack: distortion (tube, hard, fold, crush), chorus, delay (tempo sync, ping-pong, tone), EQ shelves, compressor; macros drive it | hyper/dimension, phaser, flanger, filter FX, reverb per patch, reorder, multiband split |
+| FX | 13 effects on buses, splitters, reorderable | per-patch rack in any order (↑ ↓): hyper/dimension (1-7 voices), distortion (tube, hard, fold, crush), flanger, phaser (6 stages), chorus, delay (tempo sync, ping-pong, tone), compressor, EQ shelves; macros drive it | reverb per patch, filter FX, multiband split/second bus, tempo sync for flanger/phaser |
 | Extras | arpeggiator, clip sequencer, preset browser, undo | patch library (save/load/delete), JSON import/export, factory presets, undo | arpeggiator, preset tags |
 
 ## Next, ranked
 
-1. Hyper/dimension, phaser/flanger, FX reorder.
-2. More oscillator modes: spectral (live additive with partial modulation), and more warp modes (sync, FM from B, PWM).
-3. Drawable LFO shapes; envelope BPM sync and segment curves.
-4. Live mod display on knobs (moving dot), mod-wheel/aftertouch-like sources (e.g. reader hit speed).
+1. More oscillator modes: spectral (live additive with partial modulation), and more warp modes (sync, FM from B, PWM).
+2. Drawable LFO shapes; envelope BPM sync and segment curves.
+3. Live mod display on knobs (moving dot), mod-wheel/aftertouch-like sources (e.g. reader hit speed).
 
 ## Log
 
@@ -36,3 +35,4 @@ logs what landed. Sources: Xfer's [Serum 2 What's New](https://static.xferrecord
   on the shelf; new readers play the wave synth (pluck); the modal synth's bodies are tuned to equal temperament.
 - 2026-10-17 04:30Z (beat 2): matrix aux source (with invert) and a drawn curve per route; a 4th envelope; voicing modes
   poly/mono/legato with glide always and scaled glide; unison blend (power-kept).
+- 2026-10-17 05:00Z (beat 3): FX rack made modular and reorderable; hyper/dimension, flanger and phaser added (8 modules).

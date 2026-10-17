@@ -58,16 +58,18 @@ function lfoAt(shape,ph,l){
   }
 }
 
-/* the FX rack: distortion, chorus, delay, EQ, compressor, run on a patch's summed voices */
-const FX_IDX=WAVE_PARAMS.map((P,i)=>/^(dist|chorus|delay|eq|comp)\./.test(P[0])?i:-1).filter(i=>i>=0);
+/* the FX rack: hyper/dimension, distortion, flanger, phaser, chorus, delay, compressor, EQ, run in the patch's order on its summed voices */
+const FX_IDX=WAVE_PARAMS.map((P,i)=>WAVE_FX_RE.test(P[0])?i:-1).filter(i=>i>=0);
 const FXI=Object.fromEntries(FX_IDX.map(i=>[WAVE_PARAMS[i][0],i]));
 const MAC0=WAVE_ENVS+WAVE_LFOS;
 function newFxState(fs){
   // the delay's 2 s lines are made the first time a patch turns its delay on
   return {held:[0,0],hc:0,cb:[new Float32Array(4096),new Float32Array(4096)],cw:0,cph:0,db:null,dw:0,dlp:[0,0],
-    eq:[[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]],eqKey:'',eqc:null,env:0};
+    eq:[[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]],eqKey:'',eqc:null,env:0,
+    hb:[new Float32Array(4096),new Float32Array(4096)],hw:0,hph:new Float64Array(7),fb_:[new Float32Array(1024),new Float32Array(1024)],fw:0,fph:0,fz:[0,0],
+    ap:new Float64Array(12),pph:0,pz:[0,0],pa:[0,0]};
 }
-const fxTail=cp=>cp.fxOn[2]?2+12*cp.val[FXI['delay.fb']]:cp.fxOn[1]?.1:0;
+const fxTail=cp=>cp.fxOn.delay?2+12*cp.val[FXI['delay.fb']]:Object.values(cp.fxOn).some(Boolean)?.3:0;
 // RBJ shelving biquad coefficients
 function shelf(f,db,fs,high){const A=Math.pow(10,db/40),w=TAU*f/fs,cs=Math.cos(w),sn=Math.sin(w),al=sn/2*Math.SQRT2,sq=2*Math.sqrt(A)*al;
   let b0,b1,b2,a0,a1,a2;
@@ -76,6 +78,52 @@ function shelf(f,db,fs,high){const A=Math.pow(10,db/40),w=TAU*f/fs,cs=Math.cos(w
   return [b0/a0,b1/a0,b2/a0,a1/a0,a2/a0];
 }
 function biquad(c,z,x){const y=c[0]*x+c[1]*z[0]+c[2]*z[1]-c[3]*z[2]-c[4]*z[3];z[1]=z[0];z[0]=x;z[3]=z[2];z[2]=y;return y}
+const FX_RUN={
+  dist(cp,v,st,L,R,n,bpm,fs){const dr=v[FXI['dist.drive']],mix=v[FXI['dist.mix']],g=1+dr*30,inv=1/Math.sqrt(g),mode=cp.distMode,q=Math.pow(2,16-dr*14),hold=1+Math.floor(dr*16);
+    for(let s=0;s<n;s++)for(let c=0;c<2;c++){const B=c?R:L,x=B[s];let y;
+      if(mode===0)y=Math.tanh(x*g)*inv;else if(mode===1)y=Math.max(-1,Math.min(1,x*g))*inv;else if(mode===2)y=Math.sin(x*g)*inv;
+      else{if(c===0&&++st.hc>=hold)st.hc=0;if(st.hc===0)st.held[c]=Math.round(x*q)/q;y=st.held[c]}
+      B[s]=x+(y-x)*mix}},
+  chorus(cp,v,st,L,R,n,bpm,fs){const rate=v[FXI['chorus.rate']],dep=v[FXI['chorus.depth']]*.006*fs,mix=v[FXI['chorus.mix']],base=.012*fs,M=4095;
+    for(let s=0;s<n;s++){st.cph=(st.cph+rate/fs)%1;
+      for(let c=0;c<2;c++){const B=c?R:L,b=st.cb[c],x=B[s];b[st.cw&M]=x;const d=base+dep*(.5+.5*Math.sin(TAU*(st.cph+c*.25))),p=st.cw-d,i=Math.floor(p),f=p-i,w=b[i&M]+(b[(i+1)&M]-b[i&M])*f;
+        B[s]=x*(1-mix*.5)+w*mix}
+      st.cw++}},
+  delay(cp,v,st,L,R,n,bpm,fs){if(!st.db){const N=Math.ceil(fs*2.1);st.db=[new Float32Array(N),new Float32Array(N)]}const D=st.db[0].length,T=Math.min(D-2,Math.max(1,(cp.delaySync?60/bpm*cp.delaySync:v[FXI['delay.time']])*fs)),fb=v[FXI['delay.fb']],mix=v[FXI['delay.mix']],
+      tc=1-Math.exp(-TAU*Math.min(.45*fs,400*Math.pow(2,v[FXI['delay.tone']]*5.5))/fs),bl=st.db[0],br=st.db[1],ping=cp.ping;
+    for(let s=0;s<n;s++){let p=st.dw-T;if(p<0)p+=D;const i=Math.floor(p),f=p-i,j=(i+1)%D,dl=bl[i]+(bl[j]-bl[i])*f,dr=br[i]+(br[j]-br[i])*f;
+      st.dlp[0]+=(dl-st.dlp[0])*tc;st.dlp[1]+=(dr-st.dlp[1])*tc;const xl=L[s],xr=R[s];
+      if(ping){bl[st.dw]=(xl+xr)*.5+fb*st.dlp[1];br[st.dw]=fb*st.dlp[0]}else{bl[st.dw]=xl+fb*st.dlp[0];br[st.dw]=xr+fb*st.dlp[1]}
+      L[s]=xl+dl*mix;R[s]=xr+dr*mix;st.dw=(st.dw+1)%D}},
+  eq(cp,v,st,L,R,n,bpm,fs){const lo=v[FXI['eq.low']],hi=v[FXI['eq.high']],key=lo.toFixed(2)+'/'+hi.toFixed(2);
+    if(key!==st.eqKey){st.eqKey=key;st.eqc=[shelf(200,lo,fs,false),shelf(4000,hi,fs,true)]}
+    for(let s=0;s<n;s++){L[s]=biquad(st.eqc[1],st.eq[2],biquad(st.eqc[0],st.eq[0],L[s]));R[s]=biquad(st.eqc[1],st.eq[3],biquad(st.eqc[0],st.eq[1],R[s]))}},
+  comp(cp,v,st,L,R,n,bpm,fs){const th=v[FXI['comp.thresh']],ra=v[FXI['comp.ratio']],mk=Math.pow(10,v[FXI['comp.gain']]/20),at=Math.exp(-1/(.005*fs)),re=Math.exp(-1/(.12*fs));
+    let e=st.env;for(let s=0;s<n;s++){const x=Math.max(Math.abs(L[s]),Math.abs(R[s]));e=x>e?x+(e-x)*at:x+(e-x)*re;
+      const db=20*Math.log10(e+1e-9),over=db-th,g=(over>0?Math.pow(10,-over*(1-1/ra)/20):1)*mk;L[s]*=g;R[s]*=g}st.env=e},
+  // Hyper: up to 7 micro-delay voices drifting sharp and flat; Dimension: cross-fed short delays for width
+  hyper(cp,v,st,L,R,n,bpm,fs){const nv=Math.max(1,Math.round(v[FXI['hyper.voices']])),rate=v[FXI['hyper.rate']],dep=v[FXI['hyper.detune']]*.004*fs,mix=v[FXI['hyper.mix']],dim=v[FXI['hyper.dim']],M=4095,b=st.hb,g=1/Math.sqrt(nv);
+    for(let s=0;s<n;s++){const xl=L[s],xr=R[s];b[0][st.hw&M]=xl;b[1][st.hw&M]=xr;let wl=0,wr=0;
+      for(let j=0;j<nv;j++){st.hph[j]=(st.hph[j]+rate*(1+j*.13)/fs)%1;const d=(.006+.0025*j)*fs+dep*(.5+.5*Math.sin(TAU*(st.hph[j]+j/nv))),c=j&1,p=st.hw-d,i=Math.floor(p),f=p-i,B=b[c],w=B[i&M]+(B[(i+1)&M]-B[i&M])*f;
+        if(c)wr+=w;else wl+=w}
+      // wet voices added over the dry, not crossfaded: a short-delay crossfade would comb-cancel the dry
+      let ol=xl*(1-mix*.3)+wl*g*mix,or=xr*(1-mix*.3)+wr*g*mix;
+      if(dim>0){const il=Math.floor(st.hw-(.011+.012*dim)*fs),ir=Math.floor(st.hw-(.017+.015*dim)*fs);ol+=dim*.45*b[1][il&M];or+=dim*.45*b[0][ir&M]}
+      L[s]=ol;R[s]=or;st.hw++}},
+  // Flanger: a 0.3-6 ms delay swept by an LFO, fed back
+  flanger(cp,v,st,L,R,n,bpm,fs){const rate=v[FXI['flanger.rate']],dep=v[FXI['flanger.depth']],fb=v[FXI['flanger.fb']],mix=v[FXI['flanger.mix']],sp=v[FXI['flanger.spread']],M=1023,b=st.fb_;
+    for(let s=0;s<n;s++){st.fph=(st.fph+rate/fs)%1;
+      for(let c=0;c<2;c++){const B=c?R:L,x=B[s],d=(.0003+.0057*dep*(.5+.5*Math.sin(TAU*(st.fph+c*sp*.5))))*fs,p=st.fw-d,i=Math.floor(p),f=p-i,bb=b[c],w=bb[i&M]+(bb[(i+1)&M]-bb[i&M])*f;
+        bb[st.fw&M]=x+fb*w;B[s]=x*(1-mix*.5)+w*mix}
+      st.fw++}},
+  // Phaser: six allpass stages per side swept around a centre frequency, with feedback and a stereo phase offset
+  phaser(cp,v,st,L,R,n,bpm,fs){const rate=v[FXI['phaser.rate']],dep=v[FXI['phaser.depth']],f0=v[FXI['phaser.freq']],fb=v[FXI['phaser.fb']],mix=v[FXI['phaser.mix']],sp=v[FXI['phaser.spread']],ap=st.ap;
+    for(let s=0;s<n;s++){st.pph=(st.pph+rate/fs)%1;
+      if((s&7)===0)for(let c=0;c<2;c++){const fc=Math.min(.45*fs,f0*Math.pow(2,dep*3*Math.sin(TAU*(st.pph+c*sp*.5)))),t=Math.tan(Math.PI*fc/fs);st.pa[c]=(t-1)/(t+1)}
+      for(let c=0;c<2;c++){const B=c?R:L,x=B[s],a=st.pa[c];let y=x+fb*st.pz[c];
+        for(let k=0;k<6;k++){const z=c*6+k,o=a*y+ap[z];ap[z]=y-a*o;y=o}
+        st.pz[c]=y;B[s]=x*(1-mix*.5)+y*mix}}},
+};
 function runFx(cp,L,R,n,bpm){
   const fs=sampleRate,v=cp.fxv,st=cp.fxs;
   // FX knobs take the macros' routes (a rack is shared by every voice, so per-note sources do not reach it)
@@ -83,28 +131,7 @@ function runFx(cp,L,R,n,bpm){
   for(const[s,d,amt,bi,ax,ai,cv]of cp.routes)if(s>=MAC0&&s<MAC0+WAVE_MACROS&&FXI[WAVE_PARAMS[d][0]]===d){const x=modCurve(cp.base[MAC_P[s-MAC0]],cv);
     const a=ax>=MAC0&&ax<MAC0+WAVE_MACROS?cp.base[MAC_P[ax-MAC0]]:1;v[d]+=(bi?x*2-1:x)*amt*(ax<0?1:ai?1-a:a)}
   for(const i of FX_IDX)v[i]=waveDenorm(WAVE_PARAMS[i],v[i]);
-  if(cp.fxOn[0]){const dr=v[FXI['dist.drive']],mix=v[FXI['dist.mix']],g=1+dr*30,inv=1/Math.sqrt(g),mode=cp.distMode,q=Math.pow(2,16-dr*14),hold=1+Math.floor(dr*16);
-    for(let s=0;s<n;s++)for(let c=0;c<2;c++){const B=c?R:L,x=B[s];let y;
-      if(mode===0)y=Math.tanh(x*g)*inv;else if(mode===1)y=Math.max(-1,Math.min(1,x*g))*inv;else if(mode===2)y=Math.sin(x*g)*inv;
-      else{if(c===0&&++st.hc>=hold)st.hc=0;if(st.hc===0)st.held[c]=Math.round(x*q)/q;y=st.held[c]}
-      B[s]=x+(y-x)*mix}}
-  if(cp.fxOn[1]){const rate=v[FXI['chorus.rate']],dep=v[FXI['chorus.depth']]*.006*fs,mix=v[FXI['chorus.mix']],base=.012*fs,M=4095;
-    for(let s=0;s<n;s++){st.cph=(st.cph+rate/fs)%1;
-      for(let c=0;c<2;c++){const B=c?R:L,b=st.cb[c],x=B[s];b[st.cw&M]=x;const d=base+dep*(.5+.5*Math.sin(TAU*(st.cph+c*.25))),p=st.cw-d,i=Math.floor(p),f=p-i,w=b[i&M]+(b[(i+1)&M]-b[i&M])*f;
-        B[s]=x*(1-mix*.5)+w*mix}
-      st.cw++}}
-  if(cp.fxOn[2]){if(!st.db){const N=Math.ceil(fs*2.1);st.db=[new Float32Array(N),new Float32Array(N)]}const D=st.db[0].length,T=Math.min(D-2,Math.max(1,(cp.delaySync?60/bpm*cp.delaySync:v[FXI['delay.time']])*fs)),fb=v[FXI['delay.fb']],mix=v[FXI['delay.mix']],
-      tc=1-Math.exp(-TAU*Math.min(.45*fs,400*Math.pow(2,v[FXI['delay.tone']]*5.5))/fs),bl=st.db[0],br=st.db[1],ping=cp.ping;
-    for(let s=0;s<n;s++){let p=st.dw-T;if(p<0)p+=D;const i=Math.floor(p),f=p-i,j=(i+1)%D,dl=bl[i]+(bl[j]-bl[i])*f,dr=br[i]+(br[j]-br[i])*f;
-      st.dlp[0]+=(dl-st.dlp[0])*tc;st.dlp[1]+=(dr-st.dlp[1])*tc;const xl=L[s],xr=R[s];
-      if(ping){bl[st.dw]=(xl+xr)*.5+fb*st.dlp[1];br[st.dw]=fb*st.dlp[0]}else{bl[st.dw]=xl+fb*st.dlp[0];br[st.dw]=xr+fb*st.dlp[1]}
-      L[s]=xl+dl*mix;R[s]=xr+dr*mix;st.dw=(st.dw+1)%D}}
-  if(cp.fxOn[3]){const lo=v[FXI['eq.low']],hi=v[FXI['eq.high']],key=lo.toFixed(2)+'/'+hi.toFixed(2);
-    if(key!==st.eqKey){st.eqKey=key;st.eqc=[shelf(200,lo,fs,false),shelf(4000,hi,fs,true)]}
-    for(let s=0;s<n;s++){L[s]=biquad(st.eqc[1],st.eq[2],biquad(st.eqc[0],st.eq[0],L[s]));R[s]=biquad(st.eqc[1],st.eq[3],biquad(st.eqc[0],st.eq[1],R[s]))}}
-  if(cp.fxOn[4]){const th=v[FXI['comp.thresh']],ra=v[FXI['comp.ratio']],mk=Math.pow(10,v[FXI['comp.gain']]/20),at=Math.exp(-1/(.005*fs)),re=Math.exp(-1/(.12*fs));
-    let e=st.env;for(let s=0;s<n;s++){const x=Math.max(Math.abs(L[s]),Math.abs(R[s]));e=x>e?x+(e-x)*at:x+(e-x)*re;
-      const db=20*Math.log10(e+1e-9),over=db-th,g=(over>0?Math.pow(10,-over*(1-1/ra)/20):1)*mk;L[s]*=g;R[s]*=g}st.env=e}
+  for(const k of cp.fxOrder)if(cp.fxOn[k])FX_RUN[k](cp,v,st,L,R,n,bpm,fs);
 }
 class WaveSynth extends AudioWorkletProcessor{
   constructor(){
@@ -134,7 +161,7 @@ class WaveSynth extends AudioWorkletProcessor{
     this.patches.set(id,{id,ver:++this.ver,base,val,routes,modded:[...modded],tabs,harmKey:p.osc.map(o=>JSON.stringify(o.harm)),
       on:p.osc.map(o=>!!o.on),ftype:p.osc.map(o=>Math.max(0,WAVE_FILTERS.indexOf(o.filter))),
       lfoShape:p.lfo.map(l=>Math.max(0,LFO_SHAPES.indexOf(l.shape))),lfoRetrig:p.lfo.map(l=>l.retrig!==false),lfoSync:p.lfo.map(l=>LFO_SYNCS[l.sync]||0),mode:Math.max(0,VOICE_MODES.indexOf(p.voicing?.mode)),always:p.voicing?.always!==false,glideScale:!!p.voicing?.scale,last:old?old.last:null,
-      fxOn:WAVE_FX.map(k=>!!(p.fx&&p.fx[k]&&p.fx[k].on)),distMode:Math.max(0,DIST_MODES.indexOf(p.fx?.dist?.mode)),delaySync:DELAY_SYNCS[p.fx?.delay?.sync]||0,ping:p.fx?.delay?.ping!==false,
+      fxOn:Object.fromEntries(WAVE_FX.map(k=>[k,!!(p.fx&&p.fx[k]&&p.fx[k].on)])),fxOrder:waveFxOrder(p.fxOrder),distMode:Math.max(0,DIST_MODES.indexOf(p.fx?.dist?.mode)),delaySync:DELAY_SYNCS[p.fx?.delay?.sync]||0,ping:p.fx?.delay?.ping!==false,
       busL:old?old.busL:new Float32Array(128),busR:old?old.busR:new Float32Array(128),fxs:old?old.fxs:newFxState(sampleRate),fxv:new Float64Array(NP),quiet:old?old.quiet:1e9,live:false});
     for(const v of this.voices)if(v.on&&v.cp&&v.cp.id===id)v.cp=this.patches.get(id);
   }

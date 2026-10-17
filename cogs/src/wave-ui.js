@@ -10,7 +10,7 @@ function waveLabel(v,path){
   let m=path.match(/^osc(\d)\.(\w+)$/);const P=WAVE_PARAMS[WAVE_INDEX.get(path)];
   if(m)return 'ABC'[+m[1]-1]+' '+P[1];
   m=path.match(/^(env|lfo)(\d)\./);if(m)return m[1].toUpperCase()+m[2]+' '+P[1];
-  m=path.match(/^(dist|chorus|delay|eq|comp)\./);if(m)return m[1]+' '+P[1];
+  m=path.match(WAVE_FX_RE);if(m)return m[1]+' '+P[1];
   m=path.match(/^m(\d)$/);if(m)return v.macroNames[+m[1]-1];
   return P[1];
 }
@@ -168,15 +168,20 @@ function waveEditor(f,owner){
         choice('sync',Object.keys(LFO_SYNCS),()=>L.sync,x=>{L.sync=x;edited()})),
         el('div',{className:'knobs'},K(`lfo${l}.rate`),K(`lfo${l}.phase`))))}
     else if(t==='FX'){
-      // the rack, in Serum's order; its knobs take macros from the matrix (the rack is shared by every note)
-      const fx=v.fx,head=(k,label,...extra)=>el('div',{className:'wave-row'},toggle(label,()=>fx[k].on,x=>{fx[k].on=x;edited()}),...extra);
-      body.append(el('p',{className:'wave-hint',textContent:'The rack runs on the patch\'s summed voices. Macros can drive its knobs; per-note sources cannot.'}),
-        el('div',{className:'wave-group'},head('dist','distortion',choice('mode',DIST_MODES,()=>fx.dist.mode,x=>{fx.dist.mode=x;edited()})),el('div',{className:'knobs'},K('dist.drive'),K('dist.mix'))),
-        el('div',{className:'wave-group'},head('chorus','chorus'),el('div',{className:'knobs'},K('chorus.rate'),K('chorus.depth'),K('chorus.mix'))),
-        el('div',{className:'wave-group'},head('delay','delay',choice('sync',Object.keys(DELAY_SYNCS),()=>fx.delay.sync,x=>{fx.delay.sync=x;edited()}),
-          toggle('ping-pong',()=>fx.delay.ping,x=>{fx.delay.ping=x;edited()})),el('div',{className:'knobs'},K('delay.time'),K('delay.fb'),K('delay.tone'),K('delay.mix'))),
-        el('div',{className:'wave-group'},head('eq','eq'),el('div',{className:'knobs'},K('eq.low'),K('eq.high'))),
-        el('div',{className:'wave-group'},head('comp','compressor'),el('div',{className:'knobs'},K('comp.thresh'),K('comp.ratio'),K('comp.gain'))));
+      // the rack, run top to bottom; ↑ ↓ move a module. Its knobs take macros from the matrix (the rack is shared by every note)
+      const fx=v.fx,order=v.fxOrder=waveFxOrder(v.fxOrder);
+      const KNOBS={hyper:['voices','rate','detune','dim','mix'],dist:['drive','mix'],flanger:['rate','depth','fb','spread','mix'],phaser:['rate','depth','freq','fb','spread','mix'],
+        chorus:['rate','depth','mix'],delay:['time','fb','tone','mix'],comp:['thresh','ratio','gain'],eq:['low','high']};
+      const NAMES={hyper:'hyper / dimension',dist:'distortion',flanger:'flanger',phaser:'phaser',chorus:'chorus',delay:'delay',comp:'compressor',eq:'eq'};
+      const extra={dist:()=>[choice('mode',DIST_MODES,()=>fx.dist.mode,x=>{fx.dist.mode=x;edited()})],
+        delay:()=>[choice('sync',Object.keys(DELAY_SYNCS),()=>fx.delay.sync,x=>{fx.delay.sync=x;edited()}),toggle('ping-pong',()=>fx.delay.ping,x=>{fx.delay.ping=x;edited()})]};
+      const move=(k,d)=>{const i=order.indexOf(k),j=i+d;if(j<0||j>=order.length)return;order.splice(i,1);order.splice(j,0,k);edited();show('FX')};
+      body.append(el('p',{className:'wave-hint',textContent:'The rack runs top to bottom on the patch\'s summed voices. Macros can drive its knobs; per-note sources cannot.'}));
+      order.forEach((k,i)=>{const sec=el('div',{className:'wave-group wave-fx'},el('div',{className:'wave-row'},toggle(NAMES[k],()=>fx[k].on,x=>{fx[k].on=x;edited();sec.classList.toggle('off',!x)}),
+          ...(extra[k]?.()||[]),el('span',{className:'wave-grow'}),
+          el('button',{textContent:'↑',ariaLabel:'move '+k+' up',disabled:i===0,onclick:()=>move(k,-1)}),el('button',{textContent:'↓',ariaLabel:'move '+k+' down',disabled:i===order.length-1,onclick:()=>move(k,1)})),
+        el('div',{className:'knobs'},...KNOBS[k].map(q=>K(k+'.'+q))));
+        sec.dataset.fx=k;sec.classList.toggle('off',!fx[k].on);body.append(sec)});
     }
     else if(t==='MACRO'){
       const ks=[];for(let m=1;m<=WAVE_MACROS;m++){const kb=K('m'+m),name=el('input',{value:v.macroNames[m-1],className:'wave-name',ariaLabel:'macro '+m+' name'});

@@ -10,7 +10,10 @@ const LFO_SHAPES=['sine','tri','saw up','saw down','square','s&h','smooth'];
 const LFO_SYNCS={off:0,'1/32':1/8,'1/16':1/4,'1/8T':1/3,'1/8':1/2,'1/4T':2/3,'1/4':1,'1/2':2,'1 bar':4,'2 bars':8,'4 bars':16};
 const DELAY_SYNCS={off:0,'1/16':1/4,'1/8T':1/3,'1/8':1/2,'1/8.':3/4,'1/4T':2/3,'1/4':1,'1/4.':3/2,'1/2':2};
 // The FX rack, after the voices of a patch are summed, in this order, as Serum's: each on or off.
-const WAVE_FX=['dist','chorus','delay','eq','comp'];
+const WAVE_FX=['hyper','dist','flanger','phaser','chorus','delay','comp','eq'];
+const WAVE_FX_RE=/^(hyper|dist|flanger|phaser|chorus|delay|eq|comp)\./;
+// A patch's rack order: its own list, any module it leaves out keeping its place at the end.
+const waveFxOrder=o=>{const a=Array.isArray(o)?o.filter((k,i)=>WAVE_FX.includes(k)&&o.indexOf(k)===i):[];return [...a,...WAVE_FX.filter(k=>!a.includes(k))]};
 const DIST_MODES=['tube','hard','fold','crush'];
 const VOICE_MODES=['poly','mono','legato'];
 // A route's source through its curve (−1 bends toward the bottom, +1 toward the top), as the matrix's curve column.
@@ -32,7 +35,10 @@ function waveParamList(){
   for(let i=1;i<=WAVE_LFOS;i++){const l='lfo'+i+'.';P.push([l+'rate','rate Hz',.02,40,2,'log'],[l+'phase','phase',0,1,0,'lin'])}
   for(let i=1;i<=WAVE_MACROS;i++)P.push(['m'+i,'macro '+i,0,1,0,'lin']);
   P.push(['vol','volume',0,1,.8,'lin'],['glide','glide',0,2,0,'time'],['gate','gate s',.02,8,.35,'time']);
-  P.push(['dist.drive','drive',0,1,.3,'lin'],['dist.mix','mix',0,1,1,'lin'],
+  P.push(['hyper.voices','voices',1,7,4,'int'],['hyper.rate','rate Hz',.05,5,.5,'log'],['hyper.detune','detune',0,1,.4,'lin'],['hyper.mix','mix',0,1,.5,'lin'],['hyper.dim','dimension',0,1,.3,'lin'],
+    ['flanger.rate','rate Hz',.05,10,.3,'log'],['flanger.depth','depth',0,1,.7,'lin'],['flanger.fb','feedback',0,.95,.5,'lin'],['flanger.spread','stereo',0,1,.25,'lin'],['flanger.mix','mix',0,1,.5,'lin'],
+    ['phaser.rate','rate Hz',.05,10,.4,'log'],['phaser.depth','depth',0,1,.7,'lin'],['phaser.freq','freq',100,8000,800,'log'],['phaser.fb','feedback',0,.9,.4,'lin'],['phaser.spread','stereo',0,1,.25,'lin'],['phaser.mix','mix',0,1,.5,'lin'],
+    ['dist.drive','drive',0,1,.3,'lin'],['dist.mix','mix',0,1,1,'lin'],
     ['chorus.rate','rate Hz',.05,5,.6,'log'],['chorus.depth','depth',0,1,.5,'lin'],['chorus.mix','mix',0,1,.5,'lin'],
     ['delay.time','time',.01,2,.3,'time'],['delay.fb','feedback',0,.95,.4,'lin'],['delay.tone','tone',0,1,.6,'lin'],['delay.mix','mix',0,1,.25,'lin'],
     ['eq.low','low dB',-15,15,0,'lin'],['eq.high','high dB',-15,15,0,'lin'],
@@ -47,7 +53,7 @@ function wavePath(p,path){
   let m=path.match(/^(osc|env|lfo)(\d)\.(\w+)$/);if(m)return [p[m[1]][+m[2]-1],m[3]];
   m=path.match(/^m(\d)$/);if(m)return [p.macro,+m[1]-1];
   m=path.match(/^(sub|noise)\.(\w+)$/);if(m)return [p[m[1]],m[2]];
-  m=path.match(/^(dist|chorus|delay|eq|comp)\.(\w+)$/);if(m)return [(p.fx||{})[m[1]],m[2]];
+  m=path.match(/^(hyper|dist|flanger|phaser|chorus|delay|eq|comp)\.(\w+)$/);if(m)return [(p.fx||{})[m[1]],m[2]];
   return [p,path];
 }
 const waveGet=(p,path)=>{const[o,k]=wavePath(p,path);return o?o[k]:undefined};

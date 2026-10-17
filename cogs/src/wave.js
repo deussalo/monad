@@ -4,7 +4,8 @@
 function waveInit(){
   const p={name:'init',osc:[],sub:{},noise:{},env:[],lfo:[],macro:[],macroNames:[],mods:[],
     voicing:{mode:'poly',always:true,scale:false},
-    fx:{dist:{on:false,mode:'tube'},chorus:{on:false},delay:{on:false,sync:'1/8.',ping:true},eq:{on:false},comp:{on:false}}};
+    fxOrder:[...WAVE_FX],
+    fx:{hyper:{on:false},flanger:{on:false},phaser:{on:false},dist:{on:false,mode:'tube'},chorus:{on:false},delay:{on:false,sync:'1/8.',ping:true},eq:{on:false},comp:{on:false}}};
   for(let i=0;i<WAVE_OSCS;i++)p.osc.push({on:i===0,table:'basic',filter:'lp24',harm:Array.from({length:WAVE_HARMS},(_,k)=>k===0?1:0)});
   for(let i=0;i<WAVE_ENVS;i++)p.env.push({});
   for(let i=0;i<WAVE_LFOS;i++)p.lfo.push({shape:'sine',retrig:true,sync:'off'});
@@ -22,6 +23,7 @@ function wavePatch(j){
     if(Array.isArray(o.harm))q.harm=Array.from({length:WAVE_HARMS},(_,k)=>Math.min(1,Math.max(0,+o.harm[k]||0)))});
   (j.lfo||[]).slice(0,WAVE_LFOS).forEach((l,i)=>{if(!l)return;if(LFO_SHAPES.includes(l.shape))p.lfo[i].shape=l.shape;p.lfo[i].retrig=l.retrig!==false;if(l.sync in LFO_SYNCS)p.lfo[i].sync=l.sync});
   const vc=j.voicing||{};if(VOICE_MODES.includes(vc.mode))p.voicing.mode=vc.mode;if('always' in vc)p.voicing.always=!!vc.always;p.voicing.scale=!!vc.scale;
+  p.fxOrder=waveFxOrder(j.fxOrder);
   const fx=j.fx||{};for(const k of WAVE_FX){const q=fx[k];if(!q)continue;p.fx[k].on=!!q.on;
     if(k==='dist'&&DIST_MODES.includes(q.mode))p.fx.dist.mode=q.mode;if(k==='delay'){if(q.sync in DELAY_SYNCS)p.fx.delay.sync=q.sync;p.fx.delay.ping=q.ping!==false}}
   (j.macroNames||[]).slice(0,WAVE_MACROS).forEach((n,i)=>{if(typeof n==='string')p.macroNames[i]=n.slice(0,16)});
