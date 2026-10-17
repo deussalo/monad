@@ -21,7 +21,7 @@ logs what landed. Sources: Xfer's [Serum 2 What's New](https://static.xferrecord
 
 ## Next, ranked
 
-1. Oscillator modes: spectral (live additive with partial modulation), and more warp modes (sync, FM from B, PWM).
+1. Oscillator modes: spectral (live additive with partial modulation); a choosable warp modulator source.
 2. Drawable LFO shapes; envelope BPM sync and segment curves.
 3. Live mod display on knobs (moving dot), mod-wheel/aftertouch-like sources (e.g. reader hit speed).
 
