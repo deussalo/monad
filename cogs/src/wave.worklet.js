@@ -2,7 +2,7 @@
 // Tables are built additively: a spectrum per frame, an inverse FFT per mip level (each level halves the harmonics, so
 // a note reads the level that stays under Nyquist). Modulation runs per 32-sample slice: sources are sampled at the
 // slice start and every routed parameter is recomputed from its knob position plus the routes, as Serum does.
-const WN=2048,WMIPS=10,WSLICE=32,WVOICES=24,WPOLY=16;
+const WN=2048,WMIPS=10,WSLICE=32,WVOICES=24,WPOLY=16,WSTREAMS=64;
 function fftInverse(re,im){
   const n=re.length;
   for(let i=1,j=0;i<n;i++){let bit=n>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;if(i<j){let t=re[i];re[i]=re[j];re[j]=t;t=im[i];im[i]=im[j];im[j]=t}}
@@ -35,6 +35,18 @@ const LFO_P=Array.from({length:WAVE_LFOS},(_,i)=>[PI_(`lfo${i+1}.rate`),PI_(`lfo
 const MAC_P=Array.from({length:WAVE_MACROS},(_,i)=>PI_('m'+(i+1)));
 const P_SUB=PI_('sub.level'),P_SUBOCT=PI_('sub.oct'),P_NOISE=PI_('noise.level'),P_COLOR=PI_('noise.color'),P_VOL=PI_('vol'),P_GLIDE=PI_('glide'),P_GATE=PI_('gate');
 const newEnv=()=>({st:0,lv:0});
+// An envelope stepped a whole slice at once, in closed form: for those that only modulate, sampled once per slice.
+function envSkip(e,c,s,n){
+  switch(e.st){
+    case 1:e.lv+=c[0]*n;if(e.lv>=1){e.lv=1;e.st=2}break;
+    case 2:e.lv=s+(e.lv-s)*Math.pow(c[1],n);if(Math.abs(e.lv-s)<1e-5){e.lv=s;e.st=s>0?3:0}break;
+    case 3:e.lv=s;break;
+    case 4:e.lv*=Math.pow(c[2],n);if(e.lv<1e-5){e.lv=0;e.st=0}break;
+  }
+  return e.lv;
+}
+// Headroom a phase warp needs above the note, for picking a mip level that stays under Nyquist.
+const warpRoom=(m,w)=>m>=1&&m<=6?1+Math.abs(w)*(m===2?7:3):1;
 // Phase warps: where in the table to read for phase q; -1 is silence (pwm's closed part). m is the modulator sine.
 function warpQ(mode,q,w,m){
   if(!w)return q;const a=Math.abs(w);
@@ -161,7 +173,7 @@ class WaveSynth extends AudioWorkletProcessor{
   constructor(){
     super();
     this.tables={};for(const n of WAVE_TABLES)if(n!=='harmonics')this.tables[n]=buildTable(waveSpectra(n));
-    this.patches=new Map();this.bpm=120;this.bws=new Float64Array(8);this.queue=[];this.offs=[];this.frame=0;this.statAt=0;this.ver=0;
+    this.patches=new Map();this.bpm=120;this.streams=0;this.uniScale=1;this.bws=new Float64Array(8);this.queue=[];this.offs=[];this.frame=0;this.statAt=0;this.ver=0;
     this.voices=Array.from({length:WVOICES},()=>this.voice());
     this.mixL=new Float32Array(WSLICE);this.mixR=new Float32Array(WSLICE);this.ol=new Float32Array(WSLICE);this.or=new Float32Array(WSLICE);
     this.port.onmessage=e=>{const m=e.data;
@@ -224,6 +236,81 @@ class WaveSynth extends AudioWorkletProcessor{
   release(v){if(v.released)return;v.released=true;for(const o of v.osc){if(o.env.st)o.env.st=4;if(o.fenv.st)o.fenv.st=4}for(const e of v.envs)if(e.st)e.st=4}
   // One voice for one slice: sources, routed values, then the oscillators through their filters.
   lfoRate(cp,vals,i){const b=cp.lfoSync[i];return b?this.bpm/60/b:vals[LFO_P[i][0]]}
+  // One oscillator of one voice for one slice, into the voice's mix; false once its envelope has finished.
+  osc(v,cp,vals,i,n,midi,fs){
+    const ol=this.ol,or=this.or;
+const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
+      envCoefs(o.ec,vals[P.a],vals[P.d],vals[P.r],fs);envCoefs(o.fc,vals[P.fa],vals[P.fd],vals[P.fr],fs);
+      if(o.env.st===0)return false;
+      const sus=vals[P.s];
+      // the filter envelope only moves the cutoff, which is set once per slice: it steps a slice at a time
+      const fenv=o.fenv.lv;envSkip(o.fenv,o.fc,vals[P.fs],n);
+      // a silent oscillator (level at 0, as B and C start) costs only its envelope
+      if(level<1e-4){envSkip(o.env,o.ec,sus,n);return true}
+      const f=440*Math.pow(2,(midi+12*vals[P.oct]+vals[P.semi]+vals[P.fine]/100-69)/12);
+      // unison under a budget: past WSTREAMS table reads per sample across all voices, every oscillator's unison thins
+      const want=Math.max(1,Math.min(8,Math.round(vals[P.uni])));this.streams+=want;
+      const nu=this.uniScale<1?Math.max(1,Math.round(want*this.uniScale)):want,span=vals[P.detune]*vals[P.detune]*1.2,tab=cp.tabs[i];
+      const wm=cp.warpMode[i],wm2=cp.warpMode2[i],warp=vals[P.warp],w2=vals[P.warp2];
+      const fmax=f*Math.pow(2,span/24)*warpRoom(wm,warp)*warpRoom(wm2,w2),lim=.45*fs/Math.max(1,fmax);
+      let mip=0;while(mip<WMIPS-1&&(1023>>mip)>lim)mip++;
+      const fp=vals[P.pos]*(tab.frames-1),f0=Math.floor(fp),ff=fp-f0,f1=Math.min(f0+1,tab.frames-1),A=tab.mips[mip][f0],B=tab.mips[mip][f1];
+      const norm=1/Math.sqrt(nu),pan0=vals[P.pan],spread=vals[P.spread],blend=vals[P.blend];
+      // the filter: cutoff from the knob, the key and the filter envelope (±6 octaves), set once per slice; a low-pass
+      // left wide open (above 18 kHz, little resonance) is skipped
+      let ft=cp.ftype[i];
+      let cut=vals[P.cut]*Math.pow(2,vals[P.key]*(midi-60)/12+vals[P.famt]*6*fenv);cut=Math.min(fs*.45,Math.max(20,cut));
+      if((ft===1||ft===2)&&cut>=18000&&vals[P.res]<.2)ft=0;
+      const g=Math.tan(Math.PI*cut/fs),k=2-1.96*vals[P.res],a1=1/(1+g*(g+k)),a2=g*a1,a3=g*a2,drive=1+vals[P.drive]*8,dn=1/Math.sqrt(drive);
+      const z=o.z;
+      // one voice of unison is mono: read, drive and filter one channel, pan at the end
+      const mono=nu===1,plain=(wm===0||wm===1&&!warp)&&(wm2===0||wm2===1&&!w2);
+      ol.fill(0,0,n);if(!mono)or.fill(0,0,n);
+      const bws=this.bws;let sw=0;for(let j=0;j<nu;j++){bws[j]=nu>1?Math.max(0,1+(blend-.5)*2*(Math.abs(j/(nu-1)-.5)*4-1)):1;sw+=bws[j]*bws[j]}
+      const bn=sw>1e-9?Math.sqrt(nu/sw):1;if(sw<=1e-9)bws.fill(1);
+      const src=OSC_P[i?0:1];
+      const minc=(wm>=6&&wm!==7&&wm!==8||wm2>=6&&wm2!==7&&wm2!==8)?440*Math.pow(2,(midi+12*vals[src.oct]+vals[src.semi]+vals[src.fine]/100-69)/12)/fs:0;let mp=o.mph||0;const mp0=mp;
+      let mgl=0,mgr=0;
+      for(let j=0;j<nu;j++){mp=mp0;
+        const off=nu>1?(j/(nu-1)-.5)*span:0,inc=f*Math.pow(2,off/12)/fs,p=Math.max(-1,Math.min(1,pan0+(nu>1?spread*(j/(nu-1)*2-1):0))),ang=(p+1)*Math.PI/4;
+        const bw=bws[j]*bn,gl_=Math.cos(ang)*norm*level*Math.SQRT2*bw,gr_=Math.sin(ang)*norm*level*Math.SQRT2*bw;let ph=o.ph[j];
+        if(mono){mgl=gl_;mgr=gr_}
+        const wl=mono?1:gl_;
+        if(plain)for(let s=0;s<n;s++){
+          const x=ph*WN,xi=x|0,xf=x-xi,a=A[xi]+(A[xi+1]-A[xi])*xf,y=a+(B[xi]+(B[xi+1]-B[xi])*xf-a)*ff;
+          ol[s]+=y*wl;if(!mono)or[s]+=y*gr_;ph+=inc;if(ph>=1)ph-=1;
+        }
+        else for(let s=0;s<n;s++){
+          const m=minc?Math.sin(TAU*mp):0;let q=warpQ(wm,ph,warp,m),y=0;if(q>=0&&wm2)q=warpQ(wm2,q,w2,m);
+          if(q>=0){const x=q*WN,xi=x|0,xf=x-xi,a=A[xi]+(A[xi+1]-A[xi])*xf,b=B[xi]+(B[xi+1]-B[xi])*xf;y=a+(b-a)*ff;
+            if(wm>=7)y=warpY(wm,y,q,warp,m);if(wm2>=7)y=warpY(wm2,y,q,w2,m)}
+          ol[s]+=y*wl;if(!mono)or[s]+=y*gr_;ph+=inc;if(ph>=1)ph-=1;mp+=minc;if(mp>=1)mp-=1;
+        }
+        o.ph[j]=ph;
+      }
+      o.mph=mp;
+      // amp envelope, drive and filter per sample, in place, then into the voice's mix
+      // the amp envelope is stepped per slice in closed form and ramped linearly across it (32 samples, 0.7 ms)
+      const chans=mono?1:2,e0=o.env.lv,e1=envSkip(o.env,o.ec,sus,n),de=(e1-e0)/n;
+      for(let s=0;s<n;s++){
+        const e=e0+de*(s+1);
+        for(let c=0;c<chans;c++){
+          let x=c?or[s]:ol[s];
+          if(drive>1)x=Math.tanh(x*drive)*dn;
+          if(ft){
+            const zb=c*4;
+            let v3=x-z[zb+1],v1=a1*z[zb]+a2*v3,v2=z[zb+1]+a2*z[zb]+a3*v3;z[zb]=2*v1-z[zb];z[zb+1]=2*v2-z[zb+1];
+            const lp=v2,bp=v1,hp=x-k*v1-v2;
+            if(ft===2||ft===4){const x2=ft===2?lp:hp;v3=x2-z[zb+3];const u1=a1*z[zb+2]+a2*v3,u2=z[zb+3]+a2*z[zb+2]+a3*v3;z[zb+2]=2*u1-z[zb+2];z[zb+3]=2*u2-z[zb+3];x=ft===2?u2:x2-k*u1-u2}
+            else x=ft===1?lp:ft===3?hp:ft===5?bp*k:ft===6?lp+hp:lp-hp;
+          }
+          if(c)or[s]=x*e;else ol[s]=x*e;
+        }
+      }
+      if(mono)for(let s=0;s<n;s++){this.mixL[s]+=ol[s]*mgl;this.mixR[s]+=ol[s]*mgr}
+      else for(let s=0;s<n;s++){this.mixL[s]+=ol[s];this.mixR[s]+=or[s]}
+          return true;
+  }
   render(v,n,L,R,at){
     const cp=v.cp,vals=v.vals,src=v.src,fs=sampleRate,now=this.frame+at;
     if(!v.released&&now>=v.offAt)this.release(v);
@@ -240,72 +327,21 @@ class WaveSynth extends AudioWorkletProcessor{
     }
     for(let i=0;i<WAVE_LFOS;i++){const l=v.lfo[i],nph=l.ph+this.lfoRate(cp,vals,i)*n/fs;if(nph>=1){l.prev=l.held;l.held=Math.random()}l.ph=nph%1}
     const midi=this.pitch(v,now);
-    const ol=this.ol,or=this.or;
     let alive=false;
-    for(let i=0;i<WAVE_OSCS;i++){
-      if(!cp.on[i])continue;const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
-      envCoefs(o.ec,vals[P.a],vals[P.d],vals[P.r],fs);envCoefs(o.fc,vals[P.fa],vals[P.fd],vals[P.fr],fs);
-      if(o.env.st===0){continue}alive=true;
-      const sus=vals[P.s],fsus=vals[P.fs];
-      const f=440*Math.pow(2,(midi+12*vals[P.oct]+vals[P.semi]+vals[P.fine]/100-69)/12);
-      const nu=Math.max(1,Math.min(8,Math.round(vals[P.uni]))),span=vals[P.detune]*vals[P.detune]*1.2,tab=cp.tabs[i];
-      const wroom=(m,w)=>m>=1&&m<=6?1+Math.abs(w)*(m===2?7:3):1,fmax=f*Math.pow(2,span/24)*wroom(cp.warpMode[i],vals[P.warp])*wroom(cp.warpMode2[i],vals[P.warp2]),lim=.45*fs/Math.max(1,fmax);
-      let mip=0;while(mip<WMIPS-1&&(1023>>mip)>lim)mip++;
-      const fp=vals[P.pos]*(tab.frames-1),f0=Math.floor(fp),ff=fp-f0,f1=Math.min(f0+1,tab.frames-1),A=tab.mips[mip][f0],B=tab.mips[mip][f1];
-      const warp=vals[P.warp],norm=1/Math.sqrt(nu),pan0=vals[P.pan],spread=vals[P.spread],blend=vals[P.blend];
-      // the filter: cutoff from the knob, the key and the filter envelope (±6 octaves), set once per slice
-      const ft=cp.ftype[i];
-      let cut=vals[P.cut]*Math.pow(2,vals[P.key]*(midi-60)/12+vals[P.famt]*6*o.fenv.lv);cut=Math.min(fs*.45,Math.max(20,cut));
-      const g=Math.tan(Math.PI*cut/fs),k=2-1.96*vals[P.res],a1=1/(1+g*(g+k)),a2=g*a1,a3=g*a2,drive=1+vals[P.drive]*8,dn=1/Math.sqrt(drive);
-      const z=o.z;ol.fill(0,0,n);or.fill(0,0,n);
-      // blend weights, kept at the same total power: 0.5 even, toward 1 the outer voices, toward 0 the centre ones
-      const bws=this.bws;let sw=0;for(let j=0;j<nu;j++){bws[j]=nu>1?Math.max(0,1+(blend-.5)*2*(Math.abs(j/(nu-1)-.5)*4-1)):1;sw+=bws[j]*bws[j]}
-      const bn=sw>1e-9?Math.sqrt(nu/sw):1;if(sw<=1e-9)bws.fill(1);
-      // the warps; FM, AM and RM read a sine at another oscillator's pitch (A from B, B and C from A)
-      const wm=cp.warpMode[i],wm2=cp.warpMode2[i],w2=vals[P.warp2],src=OSC_P[i?0:1];
-      const minc=(wm>=6&&wm!==7&&wm!==8||wm2>=6&&wm2!==7&&wm2!==8)?440*Math.pow(2,(midi+12*vals[src.oct]+vals[src.semi]+vals[src.fine]/100-69)/12)/fs:0;let mp=o.mph||0;const mp0=mp;
-      for(let j=0;j<nu;j++){mp=mp0;
-        const off=nu>1?(j/(nu-1)-.5)*span:0,inc=f*Math.pow(2,off/12)/fs,p=Math.max(-1,Math.min(1,pan0+(nu>1?spread*(j/(nu-1)*2-1):0))),ang=(p+1)*Math.PI/4;
-        const bw=bws[j]*bn,gl_=Math.cos(ang)*norm*level*Math.SQRT2*bw,gr_=Math.sin(ang)*norm*level*Math.SQRT2*bw;let ph=o.ph[j];
-        for(let s=0;s<n;s++){
-          const m=minc?Math.sin(TAU*mp):0;let q=warpQ(wm,ph,warp,m),y=0;if(q>=0&&wm2)q=warpQ(wm2,q,w2,m);
-          if(q>=0){const x=q*WN,xi=x|0,xf=x-xi,a=A[xi]+(A[xi+1]-A[xi])*xf,b=B[xi]+(B[xi+1]-B[xi])*xf;y=a+(b-a)*ff;
-            if(wm>=7)y=warpY(wm,y,q,warp,m);if(wm2>=7)y=warpY(wm2,y,q,w2,m)}
-          ol[s]+=y*gl_;or[s]+=y*gr_;ph+=inc;if(ph>=1)ph-=1;mp+=minc;if(mp>=1)mp-=1;
-        }
-        o.ph[j]=ph;
-      }
-      o.mph=mp;
-      // amp envelope, drive and filter per sample, in place on this oscillator's slice, then into the voice's mix
-      for(let s=0;s<n;s++){
-        const e=envTick(o.env,o.ec,sus);envTick(o.fenv,o.fc,fsus);
-        let xl=ol[s],xr=or[s];
-        if(drive>1){xl=Math.tanh(xl*drive)*dn;xr=Math.tanh(xr*drive)*dn}
-        if(ft){
-          for(let c=0;c<2;c++){
-            const x=c?xr:xl,zb=c*4;
-            let v3=x-z[zb+1],v1=a1*z[zb]+a2*v3,v2=z[zb+1]+a2*z[zb]+a3*v3;z[zb]=2*v1-z[zb];z[zb+1]=2*v2-z[zb+1];
-            let lp=v2,bp=v1,hp=x-k*v1-v2,y;
-            if(ft===2||ft===4){const x2=ft===2?lp:hp;v3=x2-z[zb+3];const u1=a1*z[zb+2]+a2*v3,u2=z[zb+3]+a2*z[zb+2]+a3*v3;z[zb+2]=2*u1-z[zb+2];z[zb+3]=2*u2-z[zb+3];y=ft===2?u2:x2-k*u1-u2}
-            else y=ft===1?lp:ft===3?hp:ft===5?bp*k:ft===6?lp+hp:lp-hp;
-            if(c)xr=y;else xl=y;
-          }
-        }
-        ol[s]=xl*e;or[s]=xr*e;
-      }
-      for(let s=0;s<n;s++){this.mixL[s]+=ol[s];this.mixR[s]+=or[s]}
-    }
-    // sub and noise ride ENV1
+    for(let i=0;i<WAVE_OSCS;i++)if(cp.on[i]&&this.osc(v,cp,vals,i,n,midi,fs))alive=true;
+    // sub and noise ride ENV1, sample by sample; the other envelopes only modulate, so they step a slice at a time
     const subL=vals[P_SUB],nzL=vals[P_NOISE],e1=v.envs[0];
     for(let i=0;i<WAVE_ENVS;i++){const E=ENV_P[i];envCoefs(v.ecs[i],vals[E[0]],vals[E[1]],vals[E[3]],fs)}
-    const s1=vals[ENV_P[0][2]],s2=vals[ENV_P[1][2]],s3=vals[ENV_P[2][2]];
-    const sinc=440*Math.pow(2,(midi+12*vals[P_SUBOCT]-69)/12)/fs,ca=1-Math.exp(-TAU*Math.min(.45*fs,200*Math.pow(2,vals[P_COLOR]*7))/fs);
-    let sp=v.subPh,nz=v.nz;
-    for(let s=0;s<n;s++){
-      const e=envTick(e1,v.ecs[0],s1);envTick(v.envs[1],v.ecs[1],s2);envTick(v.envs[2],v.ecs[2],s3);
-      if(subL>0||nzL>0){let y=0;if(subL>0){y+=Math.sin(TAU*sp)*subL;sp+=sinc;if(sp>=1)sp-=1}if(nzL>0){nz+=(Math.random()*2-1-nz)*ca;y+=nz*nzL*1.6}
-        this.mixL[s]+=y*e;this.mixR[s]+=y*e}
-    }
+    for(let i=1;i<WAVE_ENVS;i++)envSkip(v.envs[i],v.ecs[i],vals[ENV_P[i][2]],n);
+    const s1=vals[ENV_P[0][2]];let sp=v.subPh,nz=v.nz;
+    if(subL>0||nzL>0){
+      const sinc=440*Math.pow(2,(midi+12*vals[P_SUBOCT]-69)/12)/fs,ca=1-Math.exp(-TAU*Math.min(.45*fs,200*Math.pow(2,vals[P_COLOR]*7))/fs);
+      const q0=e1.lv,q1=envSkip(e1,v.ecs[0],s1,n),dq=(q1-q0)/n;
+      for(let s=0;s<n;s++){
+        const e=q0+dq*(s+1);let y=0;if(subL>0){y+=Math.sin(TAU*sp)*subL;sp+=sinc;if(sp>=1)sp-=1}if(nzL>0){nz+=(Math.random()*2-1-nz)*ca;y+=nz*nzL*1.6}
+        this.mixL[s]+=y*e;this.mixR[s]+=y*e;
+      }
+    }else envSkip(e1,v.ecs[0],s1,n);
     v.subPh=sp;v.nz=nz;
     if((subL>0||nzL>0)&&e1.st)alive=true;
     // the voice's level, the room's distance darkening and its place in the stereo field
@@ -322,6 +358,8 @@ class WaveSynth extends AudioWorkletProcessor{
   }
   process(inputs,outputs){
     const out=outputs[0],L=out[0],R=out[1]||out[0],n=L.length,end=currentFrame+n;this.frame=currentFrame;
+    // last block's demand sets this block's unison budget
+    {const per=this.streams/Math.max(1,n/WSLICE);this.uniScale=per>WSTREAMS?WSTREAMS/per:1;this.streams=0}
     for(let at=0;at<n;at+=WSLICE){
       const sl=Math.min(WSLICE,n-at),t=currentFrame+at+sl;
       if(this.queue.length){const keep=[];for(const m of this.queue){if(m.at<t)this.start(m);else keep.push(m)}this.queue=keep}

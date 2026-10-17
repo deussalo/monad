@@ -120,6 +120,36 @@ function curveEditor(m,edited){
   cv.ondblclick=()=>{m.curve=0;draw();edited()};
   draw();return el('label',{className:'wave-choice'},el('span',{textContent:'curve'}),cv);
 }
+// A two-octave keyboard to play the patch while shaping it: hold a key to sustain, slide to play the next,
+// several fingers play a chord; ‹ › shift the octave.
+const waveKeysAt={oct:4};
+function waveKeys(owner){
+  const cv=el('canvas',{className:'wave-keys'}),H=56,box=el('div',{className:'wave-keybar'});
+  const held=new Map(),WHITE=[0,2,4,5,7,9,11],BLACK={1:0,3:1,6:3,8:4,10:5};
+  const lab=el('span',{className:'wave-oct'});
+  const geom=()=>{const W=cv.clientWidth||300;return {W,ww:W/14}};
+  const draw=()=>{const {W,ww}=geom();if(cv.width!==Math.round(W*dpr)){cv.width=Math.round(W*dpr);cv.height=H*dpr}
+    const x=cv.getContext('2d'),cs=getComputedStyle(document.documentElement),on=new Set([...held.values()].map(h=>h.midi)),base=12*(waveKeysAt.oct+1);
+    x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
+    for(let i=0;i<14;i++){const m=base+12*Math.floor(i/7)+WHITE[i%7];x.fillStyle=on.has(m)?cs.getPropertyValue('--hot'):cs.getPropertyValue('--fg');x.fillRect(i*ww+1,0,ww-2,H)}
+    for(let o=0;o<2;o++)for(const[k,after]of Object.entries(BLACK)){const m=base+12*o+ +k,xx=(o*7+after+1)*ww-ww*.3;x.fillStyle=on.has(m)?cs.getPropertyValue('--hot'):cs.getPropertyValue('--bg');x.fillRect(xx,0,ww*.6,H*.6)}
+    lab.textContent='C'+waveKeysAt.oct};
+  const noteAt=e=>{const r=cv.getBoundingClientRect(),{ww}=geom(),px=e.clientX-r.left,py=e.clientY-r.top,base=12*(waveKeysAt.oct+1);
+    if(px<0||px>=ww*14)return null;
+    if(py<H*.6)for(let o=0;o<2;o++)for(const[k,after]of Object.entries(BLACK)){const xx=(o*7+after+1)*ww-ww*.3;if(px>=xx&&px<xx+ww*.6)return base+12*o+ +k}
+    const i=Math.floor(px/ww);return base+12*Math.floor(i/7)+WHITE[i%7]};
+  const on=(id,m)=>{if(!ac)initAudio();if(!ac||engineState!=='ready')return;const v=owner.voice,key=owner.id*128+m,shift=12*(v.octave||0)+(v.semi||0);
+    playVoice(v,m-shift,ac.currentTime+.005,.85*(v.level??.7),0,key,.8,8);held.set(id,{midi:m,key});buzz(4);draw()};
+  const off=id=>{const h=held.get(id);if(!h)return;held.delete(id);if(ac)damp(h.key,ac.currentTime);draw()};
+  cv.style.touchAction='none';
+  cv.onpointerdown=e=>{cv.setPointerCapture(e.pointerId);const m=noteAt(e);if(m!=null)on(e.pointerId,m)};
+  cv.onpointermove=e=>{const h=held.get(e.pointerId);if(!h)return;const m=noteAt(e);if(m!=null&&m!==h.midi){off(e.pointerId);on(e.pointerId,m)}};
+  cv.onpointerup=cv.onpointercancel=e=>off(e.pointerId);
+  const shift=d=>{waveKeysAt.oct=clamp(waveKeysAt.oct+d,1,7);draw()};
+  box.append(el('button',{textContent:'‹',ariaLabel:'octave down',onclick:()=>shift(-1)}),cv,el('button',{textContent:'›',ariaLabel:'octave up',onclick:()=>shift(1)}),lab);
+  requestAnimationFrame(draw);new ResizeObserver(draw).observe(cv);
+  return box;
+}
 function waveEditor(f,owner){
   const v=owner.voice,root=el('div',{className:'wave'}),body=el('div',{className:'wave-body'});
   let parts=[];
@@ -226,7 +256,14 @@ function waveEditor(f,owner){
     }
     redraw();
   };
-  root.append(el('div',{className:'wave-top'},el('b',{textContent:'synth'}),play),chips,hint,tabs,body);
+  // presets in reach without the patch tab: ◀ name ▶ steps through the factory patches, then the library
+  const browse=d=>{const lib=patchLib.all(),names=[...Object.keys(WAVE_PRESETS).map(n=>['f',n]),...Object.keys(lib).sort().map(n=>['u',n])];
+    let i=names.findIndex(([,n])=>n===v.name);i=((i<0?(d>0?-1:0):i)+d+names.length)%names.length;const[kind,n]=names[i];
+    loadPatch(v,kind==='f'?WAVE_PRESETS[n]():lib[n]);edited();pname.textContent=v.name;show(waveUi.tab);if(!ac)initAudio();audition(owner,true)};
+  const pname=el('span',{className:'wave-pname',textContent:v.name||'patch'});
+  const top=el('div',{className:'wave-top'},el('button',{textContent:'◀',ariaLabel:'previous patch',onclick:()=>browse(-1)}),pname,
+    el('button',{textContent:'▶',ariaLabel:'next patch',onclick:()=>browse(1)}),el('span',{className:'wave-grow'}),play);
+  root.append(top,chips,hint,tabs,body,waveKeys(owner));
   f.append(root);show(waveUi.tab);syncChips();
   // the sources stay in reach while the knobs scroll: they stick under the phone sheet's head, or at the panel's top
   requestAnimationFrame(()=>{const head=document.querySelector('#sheet-top');chips.style.top=(head&&head.offsetParent?head.offsetHeight:0)+'px'});

@@ -37,3 +37,22 @@ logs what landed. Sources: Xfer's [Serum 2 What's New](https://static.xferrecord
   poly/mono/legato with glide always and scaled glide; unison blend (power-kept).
 - 2026-10-17 05:00Z (beat 3): FX rack made modular and reorderable; hyper/dimension, flanger and phaser added (8 modules).
 - 2026-10-17 06:00Z (beat 4): two warp slots per oscillator with 10 modes (phase: bend, sync, pwm, asym, mirror, fm; amplitude: flip, quantize, am, rm).
+
+## Performance and UX (operator's focus from beat 4 on)
+
+CPU of the wave worklet, ms per second of audio on this box (node, min of 3; 8 held notes; 100 ms = 10% of a core):
+
+| patch | before | after beat 5 |
+|---|---|---|
+| init | 52.5 | 26.2 |
+| super saw | 145 | 112 |
+| pluck | 28.7 | 18 |
+| pad | 121 | 90 |
+| reese bass | 119 | 91 |
+| worst (3 osc × 8 unison, 16 notes) | 502 | 121 |
+
+- 2026-10-17 06:15Z (beat 5): oscillator render split into its own method (V8 optimises it), mono path for unison 1,
+  wide-open low-pass skipped, silent oscillators skipped, envelopes that only modulate stepped per slice in closed form,
+  amp envelopes ramped per slice, warp-free fast loop, a 64-stream unison budget across voices; env4 now actually runs.
+  UX: tabs in a 5×2 grid (no sideways scroll), ◀ patch ▶ browsing in the header (plays it), a sticky two-octave
+  keyboard with octave shift, multi-touch and slide.

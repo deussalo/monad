@@ -28,8 +28,9 @@ textarea{height:90px}
 .wave-src button{flex:0 0 auto;font-size:12px;padding:4px 8px;color:var(--sel);touch-action:none}
 .wave-src button.dragging{outline:1px dashed var(--sel)}
 .wave-hint{color:var(--dim);font-size:12px;margin:0}
-.wave-tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid var(--line)}
-.wave .wave-tabs button{flex:0 0 auto;border-radius:6px 6px 0 0;font-size:12px;padding:6px 9px}
+/* ten tabs in a 5 × 2 grid: all in view on a phone, no sideways scrolling */
+.wave-tabs{display:grid;grid-template-columns:repeat(5,1fr);gap:3px}
+.wave .wave-tabs button{font-size:12px;padding:6px 2px;min-width:0}
 .wave-body{display:flex;flex-direction:column;gap:8px}
 .wave-group h4,.wave h4{margin:2px 0;font-weight:normal;font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em}
 .knobs{display:flex;flex-wrap:wrap;gap:2px 4px}
@@ -51,3 +52,8 @@ textarea{height:90px}
 .wave-file{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--dim)}
 .wave-curve{background:var(--rig-surface,#000);border-radius:6px;cursor:ns-resize}
 .wave-grow{flex:1}.wave-fx.off .knobs{opacity:.45}
+.wave-pname{color:var(--hot);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 4px}
+.wave-top{gap:4px}.wave-top button{min-width:40px}
+.wave-keybar{position:sticky;bottom:0;z-index:3;display:flex;align-items:center;gap:4px;padding:6px 0;background:var(--bg);border-top:1px solid var(--line)}
+.wave-keys{flex:1;min-width:0;height:56px;border-radius:4px;touch-action:none}
+.wave-keybar button{min-width:36px;padding:0}.wave-oct{font-size:11px;color:var(--dim);width:22px}
