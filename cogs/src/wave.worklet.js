@@ -160,12 +160,20 @@ const FX_RUN={
         for(let k=0;k<6;k++){const z=c*6+k,o=a*y+ap[z];ap[z]=y-a*o;y=o}
         st.pz[c]=y;B[s]=x*(1-mix*.5)+y*mix}}},
 };
+// A motion's value at a frame: its table (64 points, wrapping) at phase ph0 + rate·(frame − f0)/sampleRate, linear or
+// stepped, mapped into lo..hi. One-pole smoothing (about 3 ms) takes the edges off a stepped shape.
+const MOTION_GLIDE=1-Math.exp(-WSLICE/(.003*sampleRate));
+function motionAt(p,frame){
+  const t=p.table,N=t.length,ph=p.ph0+p.rate*(frame-p.f0)/sampleRate,u=(ph-Math.floor(ph))*N,i=Math.floor(u)%N;
+  const y=p.step?t[i]:t[i]+(t[(i+1)%N]-t[i])*(u-Math.floor(u));
+  return p.lo+(p.hi-p.lo)*y;
+}
 function runFx(cp,L,R,n,bpm){
   const fs=sampleRate,v=cp.fxv,st=cp.fxs;
   // FX knobs take the macros' routes (a rack is shared by every voice, so per-note sources do not reach it)
   for(const i of FX_IDX)v[i]=cp.base[i];
-  for(const[s,d,amt,bi,ax,ai,cv]of cp.routes)if(s>=MAC0&&s<MAC0+WAVE_MACROS&&FXI[WAVE_PARAMS[d][0]]===d){const x=modCurve(cp.base[MAC_P[s-MAC0]],cv);
-    const a=ax>=MAC0&&ax<MAC0+WAVE_MACROS?cp.base[MAC_P[ax-MAC0]]:1;v[d]+=(bi?x*2-1:x)*amt*(ax<0?1:ai?1-a:a)}
+  for(const[s,d,amt,bi,ax,ai,cv]of cp.routes)if(s>=MAC0&&s<MAC0+WAVE_MACROS&&FXI[WAVE_PARAMS[d][0]]===d){const x=modCurve(cp.mac[s-MAC0],cv);
+    const a=ax>=MAC0&&ax<MAC0+WAVE_MACROS?cp.mac[ax-MAC0]:1;v[d]+=(bi?x*2-1:x)*amt*(ax<0?1:ai?1-a:a)}
   for(const i of FX_IDX)v[i]=waveDenorm(WAVE_PARAMS[i],v[i]);
   for(const k of cp.fxOrder)if(cp.fxOn[k])FX_RUN[k](cp,v,st,L,R,n,bpm,fs);
 }
@@ -173,11 +181,12 @@ class WaveSynth extends AudioWorkletProcessor{
   constructor(){
     super();
     this.tables={};for(const n of WAVE_TABLES)if(n!=='harmonics')this.tables[n]=buildTable(waveSpectra(n));
-    this.patches=new Map();this.bpm=120;this.streams=0;this.uniScale=1;this.bws=new Float64Array(8);this.queue=[];this.offs=[];this.frame=0;this.statAt=0;this.ver=0;
+    this.patches=new Map();this.bpm=120;this.streams=0;this.uniScale=1;this.bws=new Float64Array(8);this.queue=[];this.offs=[];this.motions=new Map();this.frame=0;this.statAt=0;this.ver=0;
     this.voices=Array.from({length:WVOICES},()=>this.voice());
     this.mixL=new Float32Array(WSLICE);this.mixR=new Float32Array(WSLICE);this.ol=new Float32Array(WSLICE);this.or=new Float32Array(WSLICE);
     this.port.onmessage=e=>{const m=e.data;
       if(m.type==='patch')this.setPatch(m.id,m.p);else if(m.type==='note')this.queue.push(m);else if(m.type==='off')this.offs.push(m);
+      else if(m.type==='motion')this.motion(m);
       else if(m.type==='tempo')this.bpm=m.bpm>0?m.bpm:120;
       else if(m.type==='panic')for(const v of this.voices)v.on=false};
   }
@@ -199,7 +208,21 @@ class WaveSynth extends AudioWorkletProcessor{
       lfoShape:p.lfo.map(l=>Math.max(0,LFO_SHAPES.indexOf(l.shape))),lfoRetrig:p.lfo.map(l=>l.retrig!==false),lfoSync:p.lfo.map(l=>LFO_SYNCS[l.sync]||0),mode:Math.max(0,VOICE_MODES.indexOf(p.voicing?.mode)),always:p.voicing?.always!==false,glideScale:!!p.voicing?.scale,last:old?old.last:null,
       fxOn:Object.fromEntries(WAVE_FX.map(k=>[k,!!(p.fx&&p.fx[k]&&p.fx[k].on)])),fxOrder:waveFxOrder(p.fxOrder),distMode:Math.max(0,DIST_MODES.indexOf(p.fx?.dist?.mode)),delaySync:DELAY_SYNCS[p.fx?.delay?.sync]||0,ping:p.fx?.delay?.ping!==false,
       busL:old?old.busL:new Float32Array(128),busR:old?old.busR:new Float32Array(128),fxs:old?old.fxs:newFxState(sampleRate),fxv:new Float64Array(NP),quiet:old?old.quiet:1e9,live:false});
-    for(const v of this.voices)if(v.on&&v.cp&&v.cp.id===id)v.cp=this.patches.get(id);
+    // the macros as they play: the knobs' values, or where a motion part (a cam) has turned them
+    const cp=this.patches.get(id);cp.mac=Float64Array.from(MAC_P,i=>cp.base[i]);
+    for(let s=0;s<WAVE_MACROS;s++){const mo=this.motions.get(id*8+s);if(mo)cp.mac[s]=mo.y}
+    for(const v of this.voices)if(v.on&&v.cp&&v.cp.id===id)v.cp=cp;
+  }
+  // A motion: a shape read at a phase that moves linearly with the frame, as a cam turns with its cog. It is posted
+  // once, when the train or the part changes, and evaluated here every slice, on the notes' own clock.
+  motion(m){
+    const k=m.id*8+m.slot;
+    if(!m.prog){this.motions.delete(k);const cp=this.patches.get(m.id);if(cp)cp.mac[m.slot]=cp.base[MAC_P[m.slot]];return}
+    const old=this.motions.get(k);this.motions.set(k,{...m.prog,id:m.id,slot:m.slot,y:old?old.y:motionAt(m.prog,this.frame)});
+  }
+  runMotions(frame){
+    for(const mo of this.motions.values()){const cp=this.patches.get(mo.id);if(!cp)continue;
+      const x=motionAt(mo,frame);mo.y+=(x-mo.y)*MOTION_GLIDE;cp.mac[mo.slot]=mo.y}
   }
   start(m){
     const cp=this.patches.get(m.id);if(!cp)return;
@@ -317,7 +340,7 @@ const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
     if(v.ver!==cp.ver){vals.set(cp.val);v.ver=cp.ver}
     for(let i=0;i<WAVE_ENVS;i++)src[i]=v.envs[i].lv;
     for(let i=0;i<WAVE_LFOS;i++){const l=v.lfo[i];let ph=l.ph;if(!cp.lfoRetrig[i])ph=now/fs*this.lfoRate(cp,vals,i);ph=(ph+vals[LFO_P[i][1]])%1;src[WAVE_ENVS+i]=lfoAt(cp.lfoShape[i],ph,l)}
-    for(let i=0;i<WAVE_MACROS;i++)src[WAVE_ENVS+WAVE_LFOS+i]=cp.base[MAC_P[i]];
+    for(let i=0;i<WAVE_MACROS;i++)src[WAVE_ENVS+WAVE_LFOS+i]=cp.mac[i];
     src[SRC_VEL]=v.vel;src[SRC_NOTE]=Math.min(1,Math.max(0,(v.midi-24)/84));src[SRC_RAND]=v.rand;
     if(cp.routes.length){
       for(const d of cp.modded)vals[d]=cp.base[d];
@@ -363,6 +386,7 @@ const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
     {const per=this.streams/Math.max(1,n/WSLICE);this.uniScale=per>WSTREAMS?WSTREAMS/per:1;this.streams=0}
     for(let at=0;at<n;at+=WSLICE){
       const sl=Math.min(WSLICE,n-at),t=currentFrame+at+sl;
+      if(this.motions.size)this.runMotions(currentFrame+at);
       if(this.queue.length){const keep=[];for(const m of this.queue){if(m.at<t)this.start(m);else keep.push(m)}this.queue=keep}
       if(this.offs.length){const keep=[];for(const m of this.offs){if(m.at<t){for(const v of this.voices)if(v.on&&v.key===m.key&&!v.released)this.release(v)}else keep.push(m)}this.offs=keep}
       for(const v of this.voices)if(v.on){const cp=v.cp;if(!cp.live){cp.live=true;cp.busL.fill(0);cp.busR.fill(0)}this.mixL.fill(0,0,sl);this.mixR.fill(0,0,sl);this.render(v,sl,cp.busL,cp.busR,at)}

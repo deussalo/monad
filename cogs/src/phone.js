@@ -66,9 +66,12 @@ function placeRoll(c,f){
     sr.querySelector('input[type=range]').remove();sr.append(box)}
   syncRollBar();
 }
-const PART_BAR_ICON={notes:rx('Piano',22),patch:rx('MixerVertical',22)};
-const editorMode=()=>sel?.type==='cog'&&sel.o.track?'notes':sel?.o.voice?'patch':'';
+const PART_BAR_ICON={notes:rx('Piano',22),patch:rx('MixerVertical',22),shape:rx('MixerVertical',22)};
+const editorMode=()=>sel?.type==='cog'&&sel.o.track?'notes':sel?.o.voice?'patch':sel?.type==='cam'?'shape':'';
 let editorOwner=null,editorOpenedAt=-Infinity;
+// Open the selection's sheet (notes, patch or a cam's shape), as the part bar's edit button does.
+function openPartEditor(){const mode=editorMode();if(panelShown()&&sheetMin()&&$('#dev').dataset.editor===mode){setSheetMin(false);return}
+  if(panelShown()&&$('#dev').dataset.editor===mode&&editorOwner===sel?.o)return;if(!mode)return;editorOwner=sel.o;editorOpenedAt=performance.now();togglePanel(true,mode);syncEditor()}
 function syncRollBar(){
   const bar=document.querySelector('.roll-sel');if(bar&&(!roll||$('#dev').dataset.editor!=='notes')){bar.remove();return}if(!bar)return;const some=rollSel.size>0;
   for(const b of bar.querySelectorAll('button')){const off=b.dataset.roll==='velocity'?false:b.dataset.roll==='paste'?!rollClip.length:!some;if(b.disabled!==off)b.disabled=off}
@@ -82,7 +85,7 @@ function syncEditor(){syncRollBar();
   const noUndo=!edits.past.length,noRedo=!edits.future.length;
   if($('#undo-all').disabled!==noUndo)$('#undo-all').disabled=$('#editor-undo').disabled=noUndo;
   if($('#redo-all').disabled!==noRedo)$('#redo-all').disabled=$('#editor-redo').disabled=noRedo;
-  if(button.dataset.mode!==mode){button.dataset.mode=mode;button.ariaLabel=mode==='notes'?'Edit notes':'Edit patch';button.innerHTML=PART_BAR_ICON[mode]}
+  if(button.dataset.mode!==mode){button.dataset.mode=mode;button.ariaLabel=mode==='notes'?'Edit notes':mode==='shape'?'Edit shape':'Edit patch';button.innerHTML=PART_BAR_ICON[mode]}
   if(!panelShown()||!$('#dev').dataset.editor)return;
   if(!mode){togglePanel(false);return}
   if(editorOwner!==sel.o){const tucked=sheetMin();editorOwner=sel.o;togglePanel(true,mode);if(tucked)setSheetMin(true)}
@@ -144,7 +147,7 @@ function mount(){
   $('#undo-all').onclick=()=>{edits.undo();buzz(6)};$('#redo-all').onclick=()=>{edits.redo();buzz(6)};
   $('#editor-undo').onclick=()=>edits.undo();$('#editor-redo').onclick=()=>edits.redo();
   sheetDrag();
-  const openEditor=()=>{const mode=editorMode();if(panelShown()&&sheetMin()&&$('#dev').dataset.editor===mode){setSheetMin(false);return}if(panelShown()||!mode)return;editorOwner=sel.o;editorOpenedAt=performance.now();togglePanel(true,mode);syncEditor()};
+  const openEditor=openPartEditor;
   $('#edit-part').onpointerup=$('#edit-part').onclick=openEditor;
   $('#delete-part').onclick=()=>removeSel();$('#to-start').onclick=()=>{toStart();buzz(10)};
 }
@@ -232,7 +235,7 @@ const ICON={
   odds:'M12 3a9 9 0 1 0 .01 0M12 3v9h9',string:'M3 19L21 5M3 19h.01M21 5h.01',quant:'M4 20V14M9 20V9M14 20V12M19 20V4',
   seal:'M12 3a9 9 0 1 0 .01 0M12 7l1.5 3.2 3.5.4-2.6 2.4.7 3.5-3.1-1.8-3.1 1.8.7-3.5L7 10.6l3.5-.4z',
   semi:'M4 14h16M4 10h16M9 5v14M15 5v14',partials:'M3 20V8M7 20V5M11 20V9M15 20V11M19 20V13M23 20v-5',even:'M3 20V8M11 20V12M19 20V15',attack:'M3 20L10 5h11',
-  range:'M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4',octave:'M4 18V6M4 12h16M20 18V6',knob:'M12 4a8 8 0 1 0 .01 0M12 12L16 6',spread:'M4 20V9M8 20V6M12 20V9M16 20V12'};
+  range:'M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4',octave:'M4 18V6M4 12h16M20 18V6',knob:'M12 4a8 8 0 1 0 .01 0M12 12L16 6',link:'M10 14a4 4 0 0 1 0-6l3-3a4 4 0 0 1 6 6l-1.5 1.5M14 10a4 4 0 0 1 0 6l-3 3a4 4 0 0 1-6-6l1.5-1.5',spread:'M4 20V9M8 20V6M12 20V9M16 20V12'};
 const icons=new Map();const iconPath=k=>{let p=icons.get(k);if(!p){p=new Path2D(ICON[k]);icons.set(k,p)}return p};
 const VOICE_ICON={note:'fork',octave:'octave',semi:'semi',tune:'fork',body:'bell',partials:'partials',bright:'bright',even:'even',bend:'bend',hard:'hard',attack:'attack',
   decay:'decay',pdecay:'pdecay',damp:'damp',sweep:'sweep',tone:'tone',cutoff:'cutoff',spread:'spread',level:'level',velSense:'vel'};
@@ -280,6 +283,11 @@ function trackSectors(c){
     stepSector('octave','octave',OCTAVES[0],OCTAVES.at(-1),()=>t.octave,x=>{t.octave=x}),stepSector('range','range',RANGES[0],RANGES.at(-1),()=>t.range,x=>{t.range=x;trim()},r=>r+' oct'),
     numSector('div','steps',t,'div',1,96,1)];
 }
+// A cam's dial: its shape, phase, the travel's window, the macro it turns, and the link to a reader.
+const camSectors=m=>[choiceSector('sweep','shape',[...Object.keys(CAM_SHAPES),'drawn'],()=>m.shape,x=>{if(x!=='drawn')m.prof=camShape(x);m.shape=x;m.ver++}),
+  numSector('odds','phase',m,'phase',0,1,.01),numSector('level','low',m,'lo',0,1,.01),numSector('level','high',m,'hi',0,1,.01),
+  stepSector('knob','macro',1,WAVE_MACROS,()=>m.macro,x=>{m.macro=x},x=>'M'+x),
+  {icon:'link',label:m.to?`linked to reader ${m.to.id}: tap to relink`:'link to a synth reader',action:()=>startLink(m)}];
 const dotSectors=d=>[numSector('odds','probability',d,'p',0,1,.01),numSector('level','velocity',d,'v',0,1,.01),numSector('div','length steps',d,'len',1,ui.dotOf.track.div,1)];
 const ROOM_ICON={wet:'wet',size:'size',decay:'tail',highMult:'air',shimmer:'shimmer'};
 function roomSectors(){
@@ -306,6 +314,7 @@ function activeBezel(){
   if(!sel){if(ui.room)b={cx:CW/2,cy:(safeTop+shelfTop())/2,R:Math.min(CW,shelfTop()-safeTop)/2-44,sectors:roomSectors(),owner:SPACE}}
   else if(sel.type==='pad')b=ring(o,o.r*S.zoom,voiceSectors(o,true));
   else if(sel.type==='reader')b=ring(mid(o),stringLen(o)*S.zoom/2,readerSectors(o));
+  else if(sel.type==='cam')b=ring(camTip(o),0,camSectors(o));
   else if(sel.type==='string')b=ring(mid(o),stringLen(o)*S.zoom/2,stringSectors(o));
   else if(sel.type==='dot')b=ring(ui.dotAt,0,dotSectors(o));
   else if(sel.type==='cog'&&o.track){

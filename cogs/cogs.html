@@ -46,9 +46,12 @@ textarea{height:90px}
 .knob canvas{cursor:ns-resize}
 .knob span{color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:62px}
 .knob b{font-weight:normal;color:var(--fg);white-space:nowrap}
+.cam-strip{display:block;width:100%;height:72px;background:var(--rig-surface,#000);border-radius:6px;margin:4px 0 8px;touch-action:none}
 .knob.pinned span{color:var(--hot)}
 .knob.pinned span::before{content:'◎ '}
 .wave-src .wave-pin{color:var(--hot)}
+.wave-src button.driven{color:var(--hot)}
+.wave-src button.driven::after{content:' ⟳'}
 .knob.armed canvas{background:radial-gradient(circle,rgba(255,204,68,.08),transparent 70%)}
 .wave-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .wave-choice{display:flex;flex-direction:column;gap:2px;font-size:10px;color:var(--dim)}
@@ -716,12 +719,20 @@ const FX_RUN={
         for(let k=0;k<6;k++){const z=c*6+k,o=a*y+ap[z];ap[z]=y-a*o;y=o}
         st.pz[c]=y;B[s]=x*(1-mix*.5)+y*mix}}},
 };
+// A motion's value at a frame: its table (64 points, wrapping) at phase ph0 + rate·(frame − f0)/sampleRate, linear or
+// stepped, mapped into lo..hi. One-pole smoothing (about 3 ms) takes the edges off a stepped shape.
+const MOTION_GLIDE=1-Math.exp(-WSLICE/(.003*sampleRate));
+function motionAt(p,frame){
+  const t=p.table,N=t.length,ph=p.ph0+p.rate*(frame-p.f0)/sampleRate,u=(ph-Math.floor(ph))*N,i=Math.floor(u)%N;
+  const y=p.step?t[i]:t[i]+(t[(i+1)%N]-t[i])*(u-Math.floor(u));
+  return p.lo+(p.hi-p.lo)*y;
+}
 function runFx(cp,L,R,n,bpm){
   const fs=sampleRate,v=cp.fxv,st=cp.fxs;
   // FX knobs take the macros' routes (a rack is shared by every voice, so per-note sources do not reach it)
   for(const i of FX_IDX)v[i]=cp.base[i];
-  for(const[s,d,amt,bi,ax,ai,cv]of cp.routes)if(s>=MAC0&&s<MAC0+WAVE_MACROS&&FXI[WAVE_PARAMS[d][0]]===d){const x=modCurve(cp.base[MAC_P[s-MAC0]],cv);
-    const a=ax>=MAC0&&ax<MAC0+WAVE_MACROS?cp.base[MAC_P[ax-MAC0]]:1;v[d]+=(bi?x*2-1:x)*amt*(ax<0?1:ai?1-a:a)}
+  for(const[s,d,amt,bi,ax,ai,cv]of cp.routes)if(s>=MAC0&&s<MAC0+WAVE_MACROS&&FXI[WAVE_PARAMS[d][0]]===d){const x=modCurve(cp.mac[s-MAC0],cv);
+    const a=ax>=MAC0&&ax<MAC0+WAVE_MACROS?cp.mac[ax-MAC0]:1;v[d]+=(bi?x*2-1:x)*amt*(ax<0?1:ai?1-a:a)}
   for(const i of FX_IDX)v[i]=waveDenorm(WAVE_PARAMS[i],v[i]);
   for(const k of cp.fxOrder)if(cp.fxOn[k])FX_RUN[k](cp,v,st,L,R,n,bpm,fs);
 }
@@ -729,11 +740,12 @@ class WaveSynth extends AudioWorkletProcessor{
   constructor(){
     super();
     this.tables={};for(const n of WAVE_TABLES)if(n!=='harmonics')this.tables[n]=buildTable(waveSpectra(n));
-    this.patches=new Map();this.bpm=120;this.streams=0;this.uniScale=1;this.bws=new Float64Array(8);this.queue=[];this.offs=[];this.frame=0;this.statAt=0;this.ver=0;
+    this.patches=new Map();this.bpm=120;this.streams=0;this.uniScale=1;this.bws=new Float64Array(8);this.queue=[];this.offs=[];this.motions=new Map();this.frame=0;this.statAt=0;this.ver=0;
     this.voices=Array.from({length:WVOICES},()=>this.voice());
     this.mixL=new Float32Array(WSLICE);this.mixR=new Float32Array(WSLICE);this.ol=new Float32Array(WSLICE);this.or=new Float32Array(WSLICE);
     this.port.onmessage=e=>{const m=e.data;
       if(m.type==='patch')this.setPatch(m.id,m.p);else if(m.type==='note')this.queue.push(m);else if(m.type==='off')this.offs.push(m);
+      else if(m.type==='motion')this.motion(m);
       else if(m.type==='tempo')this.bpm=m.bpm>0?m.bpm:120;
       else if(m.type==='panic')for(const v of this.voices)v.on=false};
   }
@@ -755,7 +767,21 @@ class WaveSynth extends AudioWorkletProcessor{
       lfoShape:p.lfo.map(l=>Math.max(0,LFO_SHAPES.indexOf(l.shape))),lfoRetrig:p.lfo.map(l=>l.retrig!==false),lfoSync:p.lfo.map(l=>LFO_SYNCS[l.sync]||0),mode:Math.max(0,VOICE_MODES.indexOf(p.voicing?.mode)),always:p.voicing?.always!==false,glideScale:!!p.voicing?.scale,last:old?old.last:null,
       fxOn:Object.fromEntries(WAVE_FX.map(k=>[k,!!(p.fx&&p.fx[k]&&p.fx[k].on)])),fxOrder:waveFxOrder(p.fxOrder),distMode:Math.max(0,DIST_MODES.indexOf(p.fx?.dist?.mode)),delaySync:DELAY_SYNCS[p.fx?.delay?.sync]||0,ping:p.fx?.delay?.ping!==false,
       busL:old?old.busL:new Float32Array(128),busR:old?old.busR:new Float32Array(128),fxs:old?old.fxs:newFxState(sampleRate),fxv:new Float64Array(NP),quiet:old?old.quiet:1e9,live:false});
-    for(const v of this.voices)if(v.on&&v.cp&&v.cp.id===id)v.cp=this.patches.get(id);
+    // the macros as they play: the knobs' values, or where a motion part (a cam) has turned them
+    const cp=this.patches.get(id);cp.mac=Float64Array.from(MAC_P,i=>cp.base[i]);
+    for(let s=0;s<WAVE_MACROS;s++){const mo=this.motions.get(id*8+s);if(mo)cp.mac[s]=mo.y}
+    for(const v of this.voices)if(v.on&&v.cp&&v.cp.id===id)v.cp=cp;
+  }
+  // A motion: a shape read at a phase that moves linearly with the frame, as a cam turns with its cog. It is posted
+  // once, when the train or the part changes, and evaluated here every slice, on the notes' own clock.
+  motion(m){
+    const k=m.id*8+m.slot;
+    if(!m.prog){this.motions.delete(k);const cp=this.patches.get(m.id);if(cp)cp.mac[m.slot]=cp.base[MAC_P[m.slot]];return}
+    const old=this.motions.get(k);this.motions.set(k,{...m.prog,id:m.id,slot:m.slot,y:old?old.y:motionAt(m.prog,this.frame)});
+  }
+  runMotions(frame){
+    for(const mo of this.motions.values()){const cp=this.patches.get(mo.id);if(!cp)continue;
+      const x=motionAt(mo,frame);mo.y+=(x-mo.y)*MOTION_GLIDE;cp.mac[mo.slot]=mo.y}
   }
   start(m){
     const cp=this.patches.get(m.id);if(!cp)return;
@@ -873,7 +899,7 @@ const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
     if(v.ver!==cp.ver){vals.set(cp.val);v.ver=cp.ver}
     for(let i=0;i<WAVE_ENVS;i++)src[i]=v.envs[i].lv;
     for(let i=0;i<WAVE_LFOS;i++){const l=v.lfo[i];let ph=l.ph;if(!cp.lfoRetrig[i])ph=now/fs*this.lfoRate(cp,vals,i);ph=(ph+vals[LFO_P[i][1]])%1;src[WAVE_ENVS+i]=lfoAt(cp.lfoShape[i],ph,l)}
-    for(let i=0;i<WAVE_MACROS;i++)src[WAVE_ENVS+WAVE_LFOS+i]=cp.base[MAC_P[i]];
+    for(let i=0;i<WAVE_MACROS;i++)src[WAVE_ENVS+WAVE_LFOS+i]=cp.mac[i];
     src[SRC_VEL]=v.vel;src[SRC_NOTE]=Math.min(1,Math.max(0,(v.midi-24)/84));src[SRC_RAND]=v.rand;
     if(cp.routes.length){
       for(const d of cp.modded)vals[d]=cp.base[d];
@@ -919,6 +945,7 @@ const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
     {const per=this.streams/Math.max(1,n/WSLICE);this.uniScale=per>WSTREAMS?WSTREAMS/per:1;this.streams=0}
     for(let at=0;at<n;at+=WSLICE){
       const sl=Math.min(WSLICE,n-at),t=currentFrame+at+sl;
+      if(this.motions.size)this.runMotions(currentFrame+at);
       if(this.queue.length){const keep=[];for(const m of this.queue){if(m.at<t)this.start(m);else keep.push(m)}this.queue=keep}
       if(this.offs.length){const keep=[];for(const m of this.offs){if(m.at<t){for(const v of this.voices)if(v.on&&v.key===m.key&&!v.released)this.release(v)}else keep.push(m)}this.offs=keep}
       for(const v of this.voices)if(v.on){const cp=v.cp;if(!cp.live){cp.live=true;cp.busL.fill(0);cp.busR.fill(0)}this.mixL.fill(0,0,sl);this.mixR.fill(0,0,sl);this.render(v,sl,cp.busL,cp.busR,at)}
@@ -1011,7 +1038,7 @@ const LOOKAHEAD_MIN=.12;
 const S_DEFAULT={...S},SPACE_DEFAULT={...SPACE};
 
 /* ---------- world ---------- */
-const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],next:1};
+const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],cams:[],next:1};
 let simT=0,sel=null,group=[],marquee=null;
 const view={x:0,y:0};
 const stats={events:0,late:0,skipped:0,steps:0,stepsTick:0,log:[]};
@@ -1365,7 +1392,8 @@ function serialize(){
     pads:W.pads.map(p=>({id:p.id,x:p.x,y:p.y,r:p.r,voice:p.voice})),
     readers:W.readers.map(r=>({id:r.id,on:r.on?r.on.id:null,x1:r.x1,y1:r.y1,x2:r.x2,y2:r.y2,voice:r.voice,tines:r.tines,combBase:r.combBase,combScale:r.combScale})),
     belts:W.belts.map(b=>({id:b.id,a:b.a.id,b:b.b.id,cross:b.cross})),
-    strings:W.strings.map(({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})=>({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense}))};
+    strings:W.strings.map(({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})=>({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})),
+    cams:W.cams.map(m=>({id:m.id,cog:m.cog.id,ang:m.ang,phase:m.phase,shape:m.shape,prof:[...m.prof],to:m.to?m.to.id:null,macro:m.macro,lo:m.lo,hi:m.hi}))};
 }
 // Every part is built and checked before any of the live world is replaced.
 function deserialize(j){
@@ -1387,6 +1415,10 @@ function deserialize(j){
     strings:j.strings.map(s=>({...s,hits:0,lastV:0})),
     pads:j.pads.map(p=>({...p,voice:importedVoice(p),hits:0,lastV:0})),
     readers:j.readers.map(r=>({tines:0,combBase:60,combScale:'major',...r,on:null,voice:importedVoice(r),hits:0,lastV:0}))};
+  // cams: one on a missing cog is dropped, a link to a missing reader comes loose; neither stops the load
+  next.cams=(j.cams||[]).filter(m=>byId.has(m.cog)).map(m=>{const o={...newCam(m.id),...m,cog:byId.get(m.cog),ver:0};
+    o.prof=Array.isArray(m.prof)&&m.prof.length===CAM_N?m.prof.map(x=>clamp(+x||0,0,1)):camShape(CAM_SHAPES[m.shape]?m.shape:'sine');
+    o.macro=clamp(m.macro|0,1,WAVE_MACROS);o.to=next.readers.find(r=>r.id===m.to)||null;return o});
   // A save from before seats: a reader lying wholly on a disc is seated on it.
   for(const[i,r]of next.readers.entries()){
     const on=j.readers[i].on,c=on!==undefined?(on===null?null:cog(on,'reader '+r.id)):
@@ -1426,6 +1458,8 @@ const DEFAULT_WORLD=
 "belts":[
   ],
 "strings":[
+  ],
+"cams":[
   ]}
 ;
 function demo(){deserialize(structuredClone(DEFAULT_WORLD));const f=fitTarget();Object.assign(view,{x:f.x,y:f.y});S.zoom=f.z}
@@ -1770,10 +1804,12 @@ function draw(){
   for(const r of W.readers)drawReader(r);
   for(const p of W.pads)drawPad(p);
   for(const a of W.arms)drawArm(a);
+  for(const m of W.cams)drawCam(m);
+  for(const m of W.cams)drawCamLink(m);
   if(ui.carry&&ui.carry.band){const{a,p}=ui.carry.band;cx.setLineDash([6*PX,5*PX]);strokes(a.x,a.y,p.x,p.y,[[2*PX,DIM]]);cx.setLineDash([])}
   if(sel){const o=sel.o;
     if(sel.type==='cog')halo(o.x,o.y,radius(o)+3.2);else if(sel.type==='pad')halo(o.x,o.y,o.r+2.4);
-    else if(sel.type==='arm'){const t=armTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='reader'||sel.type==='string'){halo(o.x1,o.y1,3.8);halo(o.x2,o.y2,3.8)}}
+    else if(sel.type==='arm'){const t=armTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='cam'){const t=camTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='reader'||sel.type==='string'){halo(o.x1,o.y1,3.8);halo(o.x2,o.y2,3.8)}}
   if(S.ids){cx.fillStyle=DIM;cx.font=`${10*PX}px monospace`;
     for(const c of W.cogs)cx.fillText('c'+c.id,c.x+4*PX,c.y-4*PX);
     for(const p of W.pads)cx.fillText('p'+p.id,p.x+p.r+2*PX,p.y);
@@ -1788,7 +1824,7 @@ function drawGhost(s){
   drawArm({cog:{x:-24,y:0,th:0,w:0},a:0,r0:0,len:24});cx.restore();cx.globalAlpha=1;
 }
 // Two readers: the note reader plays a disc's rings as its notes, the comb plays them on its own tines.
-const PART_KEYS={m:'motor',c:'cog',d:'disc',a:'arm',b:'belt',p:'pad',t:'string',r:'reader',k:'comb'},KEY_OF=Object.fromEntries(Object.entries(PART_KEYS).map(([k,v])=>[v,k]));
+const PART_KEYS={m:'motor',c:'cog',d:'disc',a:'arm',b:'belt',p:'pad',t:'string',r:'reader',k:'comb',e:'cam'},KEY_OF=Object.fromEntries(Object.entries(PART_KEYS).map(([k,v])=>[v,k]));
 const PARTS=Object.values(PART_KEYS);
 const MODEL={
   motor:{n:12,x:0,y:0,th:.13,w:1,layer:0,motor:{rpm:30,revs:0},track:null},
@@ -1799,6 +1835,7 @@ const MODEL={
 function drawPartIcon(kind){
   if(MODEL[kind])drawCog(MODEL[kind]);
   else if(kind==='arm')drawArm({cog:{x:-14,y:14,th:0,w:0},a:-Math.PI/4,r0:0,len:40});
+  else if(kind==='cam'){const c={x:0,y:4,n:12,th:0,w:0},m={...newCam(0),cog:c,ang:-Math.PI/2,shape:'ramp up',prof:camShape('ramp up')};drawCog(c);drawCam(m)}
   else if(kind==='pad')drawPad({x:0,y:0,r:11,voice:{kind:'kick'}});
   else if(kind==='belt'){cx.strokeStyle=DIM;cx.lineWidth=PX;circle(-12,0,9);circle(14,0,6);cx.setLineDash([3,3]);strokes(-12,-9,14,-6,[[1.5,DIM]]);strokes(-12,9,14,6,[[1.5,DIM]]);cx.setLineDash([])}
   else if(kind==='string')drawString({x1:-20,y1:14,x2:20,y2:-14,kind:'string'});
@@ -1877,7 +1914,8 @@ function focus(type,o,s){
 }
 function choose(type,o,play){select(type,o);if(play)audition(o,true);reveal()}
 function removeObj(type,o){
-  if(type==='cog'){W.cogs=W.cogs.filter(c=>c!==o);W.arms=W.arms.filter(a=>a.cog!==o);W.belts=W.belts.filter(b=>b.a!==o&&b.b!==o)}
+  if(type==='cog'){W.cogs=W.cogs.filter(c=>c!==o);W.arms=W.arms.filter(a=>a.cog!==o);W.cams=W.cams.filter(m=>m.cog!==o);W.belts=W.belts.filter(b=>b.a!==o&&b.b!==o)}
+  else if(type==='reader'){W.readers=W.readers.filter(x=>x!==o);for(const m of W.cams)if(m.to===o)m.to=null}
   else if(type==='dot')setDot(ui.dotOf.track,o,false);
   else W[type+'s']=W[type+'s'].filter(x=>x!==o);
   if(sel&&sel.o===o)select(null);
@@ -1887,14 +1925,14 @@ function removeSel(){
   const items=group.length?group:sel?[sel]:[];group=[];
   for(const{type,o}of items)if(type!=='belt'||W.belts.includes(o))removeObj(type,o);
 }
-const PART_LISTS=['cog','arm','pad','reader','string','belt'],UNSEAT_PX=36;
+const PART_LISTS=['cog','arm','pad','reader','string','belt','cam'],UNSEAT_PX=36;
 // A copied cog takes its arms; a belt comes when both its cogs do.
 let partClip=null;
 function copyParts(){
   const items=group.length?group:sel&&sel.type!=='dot'?[sel]:[];if(!items.length)return false;
   const ids=new Set(items.map(x=>x.o.id)),j=serialize(),own=o=>ids.has(o.id);
   partClip={cogs:j.cogs.filter(own),arms:j.arms.filter(a=>own(a)||ids.has(a.cog)),pads:j.pads.filter(own),readers:j.readers.filter(own),
-    strings:j.strings.filter(own),belts:j.belts.filter(b=>ids.has(b.a)&&ids.has(b.b))};
+    strings:j.strings.filter(own),belts:j.belts.filter(b=>ids.has(b.a)&&ids.has(b.b)),cams:j.cams.filter(m=>own(m)||ids.has(m.cog))};
   return true;
 }
 // Paste lands centred under the pointer, or a step down-right of the original when the pointer is off the stage.
@@ -1910,6 +1948,8 @@ function pasteParts(){
   c.arms=c.arms.filter(a=>id.has(a.cog)||j.cogs.some(o=>o.id===a.cog));
   for(const a of c.arms){if(id.has(a.cog))a.cog=id.get(a.cog);else a.a+=.4;a.id=fresh(a)}
   for(const b of c.belts){b.a=id.get(b.a);b.b=id.get(b.b);b.id=fresh(b)}
+  c.cams=(c.cams||[]).filter(m=>id.has(m.cog)||j.cogs.some(o=>o.id===m.cog));
+  for(const m of c.cams){if(id.has(m.cog))m.cog=id.get(m.cog);else m.ang+=.4;if(id.has(m.to))m.to=id.get(m.to);m.id=fresh(m)}
   for(const k of Object.keys(c))j[k].push(...c[k]);
   reload(j);
   const made=new Set(id.values()),pasted=PART_LISTS.flatMap(type=>W[type+'s'].filter(o=>made.has(o.id)).map(o=>({type,o})));
@@ -1923,6 +1963,7 @@ function boxSelect(a,b){
   for(const o of W.pads)if(inside(o))g.push({type:'pad',o});
   for(const type of ['reader','string'])for(const o of W[type+'s'])if(inside(mid(o)))g.push({type,o});
   for(const o of W.arms)if(inside(armTip(o)))g.push({type:'arm',o});
+  for(const o of W.cams)if(inside(camTip(o)))g.push({type:'cam',o});
   for(const o of W.belts)if(g.some(x=>x.o===o.a)&&g.some(x=>x.o===o.b))g.push({type:'belt',o});
   return g;
 }
@@ -1934,6 +1975,7 @@ function drawGroup(){
   for(const{type,o}of group){
     if(type==='cog'||type==='pad'){const s=toScreen(o);circle(s.x,s.y,(type==='cog'?radius(o):o.r)*S.zoom+5)}
     else if(type==='arm'){const s=toScreen(armTip(o));circle(s.x,s.y,7)}
+    else if(type==='cam'){const s=toScreen(camTip(o));circle(s.x,s.y,7)}
     else if(type!=='belt'){const a=toScreen({x:o.x1,y:o.y1}),b=toScreen({x:o.x2,y:o.y2});circle(a.x,a.y,6);circle(b.x,b.y,6);line(a.x,a.y,b.x,b.y)}
   }
 }
@@ -1988,6 +2030,7 @@ function newPart(kind,p){
   // a new reader plays the wave synth's pluck; its patch sheet changes the sound
   if(kind==='reader'||kind==='comb')return {type:'reader',o:{id,x1:0,y1:0,x2:0,y2:0,voice:readerVoice(),tines:kind==='comb'?12:0,combBase:60,combScale:'major',hits:0,lastV:0}};
   if(kind==='string')return {type:'string',o:{id,x1:0,y1:0,x2:0,y2:0,...STRING_DEFAULT,hits:0,lastV:0}};
+  if(kind==='cam')return {type:'cam',o:newCam(id)};
   return {type:'arm',o:{id,cog:null,a:0,r0:0,len:4,flex:.5}};
 }
 function placePart(type,o,p){
@@ -1998,6 +2041,8 @@ function placePart(type,o,p){
     if(d){const a=Math.atan2(p.y-d.y,p.x-d.x),r0=ringR(d,0)-6,r1=ringR(d,trackRings(d.track)-1)+6;
       Object.assign(o,{x1:d.x+Math.cos(a)*r0,y1:d.y+Math.sin(a)*r0,x2:d.x+Math.cos(a)*r1,y2:d.y+Math.sin(a)*r1});seatReader(o,d)}
     else{Object.assign(o,{x1:p.x-30,y1:p.y,x2:p.x+30,y2:p.y});o.on=null}}
+  // a cam rides the cog it is dropped on; its follower stands where it was let go
+  else if(type==='cam'){const c=pickCog(p);o.cog=c;if(c)o.ang=Math.atan2(p.y-c.y,p.x-c.x)}
   else{const c=pickCog(p);o.cog=c;if(c){o.a=wrap(Math.atan2(p.y-c.y,p.x-c.x)-renderTh(c));o.len=Math.max(4,Math.hypot(p.x-c.x,p.y-c.y))}}
 }
 
@@ -2037,13 +2082,19 @@ const G={
         const p=screenToWorld(s);
         if(offStage(s)){out();carry.ghost=null;return}
         made=made||newPart(kind,p);placePart(made.type,made.o,p);
-        const live=made.type!=='arm'||made.o.cog;
+        const live=made.type!=='arm'&&made.type!=='cam'||made.o.cog;
         if(live&&!present()){list().push(made.o);if(made.type==='cog')solve();buzz(6)}else if(!live)out();
         carry.ghost=live?null:s;
       },
       up(s){done();if(!present())return;if(offStage(s)){out();return}select(made.type,made.o);changed(true);buzz(10);reveal()},
       cancel(){done();out()},tap:done,
     };
+  },
+  // A cam's follower: drag it round the axle to move where it rides; tap for its dial, double tap to focus.
+  cam(m){
+    return {o:m,readout:()=>`cam ${m.id} lift: ${Math.round(camLift(m)*100)}%`,
+      move(s){trackScrap(s);const q=screenToWorld(s),c=m.cog;m.ang=Math.atan2(q.y-c.y,q.x-c.x)},
+      up(){endScrap('cam',m)},tap(){choose('cam',m)},dbl(s){focus('cog',m.cog,s)}};
   },
   arm(a){
     return {o:a,move(s){trackScrap(s);const q=screenToWorld(s),c=a.cog;a.a=wrap(Math.atan2(q.y-c.y,q.x-c.x)-renderTh(c));a.len=Math.max(4,Math.hypot(q.x-c.x,q.y-c.y)-a.r0)},
@@ -2144,6 +2195,7 @@ function begin(s){
   // The nearest small part under the finger wins: a hammer sweeping past a pad must not steal the tap.
   let best=null;const near=(d,reach,make)=>{if(d<=reach&&(!best||d<best.d))best={d,make}};
   for(const a of W.arms)near(dist(armTip(a))-3.3*Z,20,()=>G.arm(a));
+  for(const m of W.cams)near(dist(camTip(m))-3*Z,20,()=>G.cam(m));
   for(const o of W.pads){const d=dist(o),r=o.r*Z;near(d-r,Math.max(8,22-r),()=>G.pad(o,s,r>=18&&d>=r-8))}
   for(const[type,list]of [['reader',W.readers],['string',W.strings]])for(const o of list){
     near(dist({x:o.x1,y:o.y1}),22,()=>G.span(type,o,s,1));near(dist({x:o.x2,y:o.y2}),22,()=>G.span(type,o,s,2));
@@ -2160,6 +2212,7 @@ function begin(s){
 
 function pointerGesture(e,s){
   if(e.ctrlKey||e.metaKey)return G.marquee(s);
+  if(ui.linking&&!offStage(s))return linkGesture(s);
   if(ui.armed&&!offStage(s))return G.armed(ui.armed,s);
   const g=begin(s);
   if(group.length>1&&g.o&&group.some(x=>x.o===g.o)){g.cancel?.();return G.group(s)}
@@ -2619,7 +2672,7 @@ function section(title,parent=panel){const f=el('fieldset',{},el('legend',{textC
 function numRow(parent,label,min,max,step,get,set,def){
   if(min===0&&max===1&&step===1)return toggleRow(parent,label,get,set);
   const range=el('input',{type:'range',min,max,step}),num=el('input',{type:'number',min,max,step});
-  const sync=()=>{const v=get(),shown=+(+v).toFixed(4);if(+range.value!==+v)range.value=v;if(+num.value!==shown)num.value=shown};
+  const sync=()=>{const v=get(),shown=+(+v).toFixed(4);if(+range.value!==+v)range.value=v;if(num.value===""||+num.value!==shown)num.value=shown};
   const put=v=>{if(!Number.isFinite(v))return;set(clamp(+(Math.round(v/step)*step).toFixed(6),min,max));sync()};
   range.oninput=()=>put(+range.value);num.oninput=()=>{const v=+num.value;if(Number.isFinite(v)){set(clamp(v,min,max));sync()}};num.onchange=sync;
   const coarse=Math.max(1,Math.round((max-min)/100/step))*step;
@@ -2737,7 +2790,7 @@ function voiceRows(f,owner,withNote){
 function buildInspector(){
   if(!inspector)return;
   rows.length=panelRows;readouts.length=panelReadouts;
-  roll=null;
+  roll=null;camStrips=[];
   const o=sel&&sel.o,f=inspector,cogKind=c=>c.track?'disc':c.motor?'motor':'cog';
   inspector.replaceChildren(el('legend',{textContent:sel?`${sel.type==='cog'?cogKind(o):sel.type} ${sel.o.id}`:'selection'}));
   if(sel&&sel.type==='cog'){
@@ -2763,6 +2816,8 @@ function buildInspector(){
       f.append(el('button',{textContent:'clear pins',onclick:()=>{t.dots=[];changed()}}),
         el('button',{textContent:'drop track',onclick:()=>{o.track=null;buildInspector();changed()}}));
     }else if(!o.motor)f.append(el('button',{textContent:'add track',onclick:()=>{o.track=newTrack();buildInspector();changed()}}));
+  }else if(sel&&sel.type==='cam'){
+    camRows(f,o);
   }else if(sel&&sel.type==='arm'){
     numRow(f,'angle deg',0,360,.1,()=>o.a*180/Math.PI,v=>{o.a=v*Math.PI/180;changed()});
     numRow(f,'r0',0,500,.5,...bind(o,'r0',changed));
@@ -2828,11 +2883,138 @@ function frame(ts){
   stepCamera();if(!worldCovered()||++coveredSkip>=4){coveredSkip=0;draw();drawGroup()}else syncEditor();listen();
   const now=performance.now();
   if(roll&&roll.cv.offsetParent)drawRoll();
+  postMotions();if(inspectorLive()){if(camStrips.length)camDrawStrips();for(const d of waveLive)d()}
   if(panelShown()&&now-roAt>250){roAt=now;readPalette();for(const[b,fn]of readouts)b.textContent=fn()}
   requestAnimationFrame(frame);
 }
 // Show or hide the velocity lane under the strip.
 function setRollVel(on){rollVel=on;if(roll?.laneRow)roll.laneRow.style.display=on?'flex':'none'}
+/* ---------- motion parts: the cam ---------- */
+// A cam rides a cog's axle and turns with it; a follower fixed in the world rides its edge. The follower's lift is a
+// value from 0 to 1, one cycle per turn of the cog, in the shape of the cam's outline, so the shape on screen is the
+// shape the sound takes. Linked to a synth reader, the cam turns one of its macros: the patch's own routes from that
+// macro carry it to cutoff, wavetable position, FX mix or anything else. The worklet computes the motion itself
+// (motionAt in wave.worklet.js) from a program posted only when the train or the cam changes.
+const CAM_N=64;
+const camSay=(read,held)=>{if(typeof showInteraction==='function')showInteraction(read,held)};
+const CAM_SHAPES={
+  sine:u=>.5-.5*Math.cos(TAU*u),'ramp up':u=>u,'ramp down':u=>1-u,triangle:u=>1-Math.abs(2*u-1),
+  square:u=>u<.5?1:0,'steps 4':u=>Math.floor(u*4)/3,'steps 8':u=>Math.floor(u*8)/7,
+  random:u=>{const k=Math.floor(u*8);const x=Math.sin(k*12.9898+78.233)*43758.5453;return x-Math.floor(x)}};
+const CAM_STEPPED=new Set(['square','steps 4','steps 8','random']);
+const camShape=name=>Array.from({length:CAM_N},(_,i)=>+CAM_SHAPES[name](i/CAM_N).toFixed(3));
+const newCam=id=>({id,cog:null,ang:0,phase:0,shape:'sine',prof:camShape('sine'),to:null,macro:1,lo:0,hi:1,ver:0});
+// The cam's lift where the follower rides, at the cog's angle th: u is the fraction of a turn under the follower.
+const camU=(m,th)=>{const u=(m.ang-th)/TAU-m.phase;return u-Math.floor(u)};
+function camAt(m,u){const t=m.prof,x=u*CAM_N,i=Math.floor(x)%CAM_N;return m.shape!=='drawn'&&CAM_STEPPED.has(m.shape)?t[i]:t[i]+(t[(i+1)%CAM_N]-t[i])*(x-Math.floor(x))}
+const camLift=m=>camAt(m,camU(m,renderTh(m.cog)));
+// Its picture: the plate's outline at radius rb·(0.45 + 0.55·lift), the follower a pushrod on the line at angle ang.
+const camRb=m=>Math.max(8,radius(m.cog)*.78);
+const camRoll=(m,y)=>camRb(m)*(.45+.55*y);
+function camTip(m){const c=m.cog,r=camRoll(m,camLift(m))+14;return {x:c.x+Math.cos(m.ang)*r,y:c.y+Math.sin(m.ang)*r}}
+function drawCam(m){
+  const c=m.cog,th=renderTh(c),rb=camRb(m);
+  cx.lineWidth=1.5*PX;cx.strokeStyle=HOT;cx.globalAlpha=.85;cx.beginPath();
+  // the plate point at fraction u of a turn lies at world angle th + 2π(u + phase): the point under the follower is camU
+  for(let i=0;i<=CAM_N;i++){const u=i/CAM_N,w=th+TAU*(u+m.phase),r=camRoll(m,camAt(m,u%1)),x=c.x+Math.cos(w)*r,y=c.y+Math.sin(w)*r;i?cx.lineTo(x,y):cx.moveTo(x,y)}
+  cx.closePath();cx.stroke();cx.globalAlpha=1;
+  // the low point's flare, so the phase reads at a glance
+  let lo=0;for(let i=1;i<CAM_N;i++)if(m.prof[i]<m.prof[lo])lo=i;
+  {const w=th+TAU*(lo/CAM_N+m.phase),r=camRoll(m,m.prof[lo]);cx.fillStyle=HOT;circle(c.x+Math.cos(w)*r,c.y+Math.sin(w)*r,1.8*PX,true)}
+  // the follower: a roller on the edge and a rod out along its line
+  const y=camLift(m),r=camRoll(m,y),ca=Math.cos(m.ang),sa=Math.sin(m.ang);
+  cx.strokeStyle=FG;cx.lineWidth=2*PX;line(c.x+ca*r,c.y+sa*r,c.x+ca*(r+14),c.y+sa*(r+14));
+  cx.lineWidth=PX;circle(c.x+ca*r,c.y+sa*r,2.2*PX);cx.fillStyle=FG;circle(c.x+ca*(r+14),c.y+sa*(r+14),2.6*PX,true);
+  // its guide: a short fixed sleeve where the rod slides, marked with the travel's range
+  const g0=camRoll(m,0)+14,g1=camRoll(m,1)+14;cx.strokeStyle=DIM;cx.lineWidth=PX;
+  line(c.x+ca*g0-sa*4*PX,c.y+sa*g0+ca*4*PX,c.x+ca*g1-sa*4*PX,c.y+sa*g1+ca*4*PX);
+  line(c.x+ca*g0+sa*4*PX,c.y+sa*g0-ca*4*PX,c.x+ca*g1+sa*4*PX,c.y+sa*g1-ca*4*PX);
+}
+// The link: a thin rod from the follower to the reader it turns, dashed while the reader is not a synth.
+function drawCamLink(m){
+  if(!m.to)return;const a=camTip(m),b=mid(m.to),live=m.to.voice.kind==='wave';
+  cx.strokeStyle=SEL;cx.lineWidth=PX;cx.globalAlpha=live?.7:.3;cx.setLineDash([2*PX,3*PX]);line(a.x,a.y,b.x,b.y);cx.setLineDash([]);cx.globalAlpha=1;
+  cx.fillStyle=SEL;circle(b.x,b.y,2*PX,true);
+}
+
+// The worklet's programs: one per linked cam, keyed by patch id and macro slot; posted again only when it changed.
+const motionPosted=new Map();
+function camProgram(m){
+  const c=m.cog,sr=ac.sampleRate,table=m.prof,step=m.shape!=='drawn'&&CAM_STEPPED.has(m.shape);
+  if(clock.paused||!c.w)return {table,step,f0:0,ph0:camU(m,renderTh(c)),rate:0,lo:m.lo,hi:m.hi};
+  // anchored at the sim's own time, mapped to audio frames as fire() maps strikes, so it lines up with the notes
+  return {table,step,f0:(simT+clock.off-clock.shift)*sr,ph0:camU(m,c.th),rate:-c.w/TAU,lo:m.lo,hi:m.hi};
+}
+function postMotions(){
+  if(!waveNode||!ac||!W.cams.length&&!motionPosted.size)return;
+  const seen=new Set();
+  for(const m of W.cams){
+    if(!m.to||!m.cog||m.to.voice.kind!=='wave'||!W.readers.includes(m.to))continue;
+    const v=m.to.voice,id=waveIdOf.get(v)||wavePost(v);if(!id)continue;
+    const key=id*8+m.macro-1;seen.add(key);
+    const p=camProgram(m),old=motionPosted.get(key);
+    if(old&&old.cam===m&&old.ver===m.ver&&old.rate===p.rate&&old.lo===p.lo&&old.hi===p.hi&&old.step===p.step){
+      const at=old.ph0+old.rate*(p.f0-old.f0)/ac.sampleRate,d=at-p.ph0;if(Math.abs(d-Math.round(d))<1e-4)continue}
+    motionPosted.set(key,{...p,cam:m,ver:m.ver});
+    waveNode.port.postMessage({type:'motion',id,slot:m.macro-1,prog:{...p,table:Float32Array.from(p.table)}});
+  }
+  for(const key of motionPosted.keys())if(!seen.has(key)){motionPosted.delete(key);waveNode.port.postMessage({type:'motion',id:Math.floor(key/8),slot:key%8,prog:null})}
+}
+// Which macros a cam drives on a voice: the synth editor marks them.
+const camsOn=v=>W.cams.filter(m=>m.to&&m.to.voice===v);
+
+// Link a cam to a synth reader: it takes the reader's first free macro (no routes, knob at 0), and the reader's
+// patch sheet opens with that macro armed, so one drag on a knob finishes the connection.
+function linkCam(m,rd){
+  if(rd.voice.kind!=='wave'){camSay(()=>'link: that reader is not a synth');return false}
+  const v=rd.voice,used=new Set(camsOn(v).filter(o=>o!==m).map(o=>o.macro));
+  let slot=v.macro.findIndex((x,i)=>!used.has(i+1)&&!x&&!v.mods.some(r=>r.src==='m'+(i+1)||r.aux==='m'+(i+1)));
+  if(slot<0)slot=[...Array(WAVE_MACROS).keys()].find(i=>!used.has(i+1))??0;
+  m.to=rd;m.macro=slot+1;buzz(12);changed(true);
+  waveUi.arm='m'+m.macro;waveUi.pin=false;if(['MATRIX','PATCH','MACRO'].includes(waveUi.tab))waveUi.tab='A';
+  select('reader',rd);if(typeof openPartEditor==='function')openPartEditor();
+  camSay(()=>`cam ${m.id} turns M${m.macro}: drag a knob to set how far`);
+  return true;
+}
+// Linking: the next tap on a reader takes the link; anywhere else cancels it.
+function startLink(m){ui.linking=m;buzz(6);camSay(()=>`cam ${m.id}: tap a synth reader to link it`,true)}
+function linkGesture(s){
+  const m=ui.linking;ui.linking=null;const p=screenToWorld(s);
+  const rd=W.readers.map(r=>[r,segDist(p,r.x1,r.y1,r.x2,r.y2)*S.zoom]).filter(([,d])=>d<24).sort((a,b)=>a[1]-b[1])[0]?.[0];
+  if(rd)linkCam(m,rd);else camSay(()=>'link: cancelled');
+  return {o:null,move(){},up(){},tap(){},cancel(){}};
+}
+
+// The profile strip: one turn unrolled left to right; drag to draw the lift. It turns the cam's shape to 'drawn'.
+function camStrip(m,f){
+  const cv=el('canvas',{className:'cam-strip',width:280*dpr,height:72*dpr}),H=72;
+  const draw=()=>{const W_=cv.clientWidth||280;if(cv.width!==Math.round(W_*dpr)){cv.width=Math.round(W_*dpr);cv.height=H*dpr}
+    const x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W_,H);
+    x.strokeStyle=css('--line')||'#333';x.lineWidth=1;for(let k=1;k<4;k++){x.beginPath();x.moveTo(W_*k/4,0);x.lineTo(W_*k/4,H);x.stroke()}
+    x.strokeStyle=css('--hot');x.lineWidth=2;x.beginPath();
+    for(let i=0;i<=CAM_N;i++){const u=i/CAM_N,y=H-4-camAt(m,u%1)*(H-8);i?x.lineTo(u*W_,y):x.moveTo(0,y)}x.stroke();
+    if(m.cog){const u=camU(m,renderTh(m.cog));x.fillStyle=css('--fg');x.fillRect(u*W_-1,0,2,H)}};
+  let last=null;
+  const paint=e=>{const r=cv.getBoundingClientRect(),i=clamp(Math.floor((e.clientX-r.left)/r.width*CAM_N),0,CAM_N-1),y=+clamp(1-(e.clientY-r.top-4)/(H-8),0,1).toFixed(3);
+    const a=last??i;for(let k=Math.min(a,i);k<=Math.max(a,i);k++)m.prof[k]=y;last=i;m.shape='drawn';m.ver++;draw()};
+  cv.onpointerdown=e=>{cv.setPointerCapture(e.pointerId);last=null;paint(e)};
+  cv.onpointermove=e=>{if(e.buttons||e.pointerType==='touch')if(last!==null)paint(e)};
+  cv.onpointerup=cv.onpointercancel=()=>{if(last!==null){last=null;changed()}};
+  f.append(cv);requestAnimationFrame(draw);camStrips.push(draw);
+}
+let camStrips=[];
+function camRows(f,m){
+  camStrips=[];camStrip(m,f);
+  selRow(f,'shape',[...Object.keys(CAM_SHAPES),'drawn'],()=>m.shape,x=>{if(x!=='drawn'){m.prof=camShape(x)}m.shape=x;m.ver++;changed()});
+  numRow(f,'phase',0,1,.01,()=>m.phase,x=>{m.phase=x;changed()},0);
+  numRow(f,'low',0,1,.01,()=>m.lo,x=>{m.lo=x;changed()},0);
+  numRow(f,'high',0,1,.01,()=>m.hi,x=>{m.hi=x;changed()},1);
+  const synths=()=>W.readers.filter(r=>r.voice.kind==='wave');
+  selRow(f,'turns',['none',...synths().map(r=>String(r.id))],()=>m.to?String(m.to.id):'none',x=>{if(x==='none'){m.to=null;changed(true)}else{const r=W.readers.find(r=>String(r.id)===x);if(r)linkCam(m,r)}},x=>x==='none'?'nothing':'reader '+x);
+  selRow(f,'macro',['1','2','3','4','5','6','7','8'],()=>String(m.macro),x=>{m.macro=+x;changed(true)},x=>'M'+x);
+  roRow(f,'travel',()=>m.cog?Math.round(camLift(m)*100)+'%':'no cog');
+}
+const camDrawStrips=()=>{for(const d of camStrips)d()};
 /* ---------- wave synth editor: knobs in tabs, the mod sources, the matrix and the patch library ---------- */
 // Serum's way to modulate: pick a source (tap its chip to arm it, or drag the chip onto a knob), then drag a knob to
 // set how far that source moves it; the knob shows each route as a blue arc beside its value. Double tap resets a
@@ -2866,13 +3048,16 @@ const routesTo=(v,path)=>v.mods.filter(m=>m.dst===path);
 let wavePalAt=-1,wavePalMap=null;
 const wavePal=k=>{const t=performance.now();if(!wavePalMap||t-wavePalAt>250){wavePalAt=t;wavePalMap=new Map();wavePalMap.cs=getComputedStyle(document.documentElement)}
   let c=wavePalMap.get(k);if(c===undefined){c=wavePalMap.cs.getPropertyValue(k).trim()||'#888';wavePalMap.set(k,c)}return c};
+// Macro knobs a cam turns: they show where it has them, live, while the sheet is open.
+const waveLive=new Set();
+const camDriver=(v,path)=>{const m=path.match(/^m(\d)$/);return m&&W.cams.length?camsOn(v).find(c=>c.macro===+m[1]&&c.cog):null};
 function waveKnob(v,path,edited){
   const P=WAVE_PARAMS[WAVE_INDEX.get(path)],S_=52,cv=el('canvas'),val=el('b'),name=el('span',{textContent:P[1]});
   const box=el('div',{className:'knob'},cv,name,val);box.dataset.path=path;
   cv.width=cv.height=S_*dpr;cv.style.width=cv.style.height=S_+'px';
   const A0=Math.PI*.75,SW=Math.PI*1.5;
   const draw=()=>{
-    const x=cv.getContext('2d'),c=S_/2,n=waveNorm(P,waveGet(v,path)),col=wavePal;
+    const cam=camDriver(v,path),x=cv.getContext('2d'),c=S_/2,n=cam?cam.lo+(cam.hi-cam.lo)*camLift(cam):waveNorm(P,waveGet(v,path)),col=wavePal;
     x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,S_,S_);x.lineCap='round';
     x.lineWidth=4;x.strokeStyle=col('--line');x.beginPath();x.arc(c,c,c-6,A0,A0+SW);x.stroke();
     const z=P[2]<0&&P[3]>0?waveNorm(P,0):0;
@@ -2886,7 +3071,7 @@ function waveKnob(v,path,edited){
     x.globalAlpha=1;
     const a=A0+SW*n;x.strokeStyle=col('--fg');x.lineWidth=2;x.beginPath();x.moveTo(c+Math.cos(a)*(c-16),c+Math.sin(a)*(c-16));x.lineTo(c+Math.cos(a)*(c-4),c+Math.sin(a)*(c-4));x.stroke();
     const rt=waveUi.arm&&routesTo(v,path).find(m=>m.src===waveUi.arm);
-    val.textContent=rt?`${srcLabel(rt.src)} ${rt.amt>0?'+':''}${Math.round(rt.amt*100)}`:waveText(P,waveGet(v,path));
+    val.textContent=cam?`cam ${cam.id} ${Math.round(n*100)}%`:rt?`${srcLabel(rt.src)} ${rt.amt>0?'+':''}${Math.round(rt.amt*100)}`:waveText(P,waveGet(v,path));
     box.classList.toggle('armed',!!waveUi.arm||waveUi.pin);box.classList.toggle('pinned',!!v.dial?.includes(path));box.classList.toggle('routed',routesTo(v,path).length>0);
   };
   let drag=null,lastTap=0;
@@ -2919,6 +3104,7 @@ function waveKnob(v,path,edited){
   };
   // a chip dropped here routes its source at half depth
   box.addEventListener('wave-drop',e=>{const src=e.detail;if(!routesTo(v,path).some(m=>m.src===src))v.mods.push({src,dst:path,amt:.5,bi:src.startsWith('lfo'),off:false});edited()});
+  if(/^m\d$/.test(path))waveLive.add(()=>{if(camDriver(v,path)&&box.isConnected)draw()});
   return {box,draw};
 }
 const choice=(label,options,get,set,fmt=o=>o)=>{
@@ -3004,7 +3190,7 @@ function waveEditor(f,owner){
   // sources: tap to arm, drag onto a knob to route
   const chips=el('div',{className:'wave-src'});
   const hint=el('div',{className:'wave-hint'});
-  const syncChips=()=>{for(const c of chips.children)c.ariaPressed=String(c.dataset.src?c.dataset.src===waveUi.arm:waveUi.pin);
+  const syncChips=()=>{for(const c of chips.children){c.ariaPressed=String(c.dataset.src?c.dataset.src===waveUi.arm:waveUi.pin);const d=c.dataset.src&&camDriver(v,c.dataset.src);c.classList.toggle('driven',!!d);c.title=d?`turned by cam ${d.id}`:''}
     hint.toggleAttribute('data-armed',!!waveUi.arm||waveUi.pin);hint.textContent=waveUi.pin?`Tap knobs to put them on the part's dial, or take them off: ${(v.dial||[]).length} of ${WAVE_DIAL}. Tap DIAL to finish.`:waveUi.arm?`${srcLabel(waveUi.arm)} armed: drag a knob to set its depth, double tap to remove. Tap ${srcLabel(waveUi.arm)} to finish.`:'Tap a source, or drag it onto a knob, to modulate.';redraw()};
   // the dial chip: armed, a tap on a knob pins it to the dial that opens when the part is tapped
   chips.append(el('button',{className:'wave-pin',textContent:'◎ DIAL',onclick:()=>{waveUi.pin=!waveUi.pin;waveUi.arm=null;syncChips()}}));
@@ -3024,7 +3210,7 @@ function waveEditor(f,owner){
   const group=(title,...kids)=>el('div',{className:'wave-group'},el('h4',{textContent:title}),el('div',{className:'knobs'},...kids));
   const K=path=>{const k=waveKnob(v,path,edited);parts.push(k);return k.box};
   const show=t=>{
-    parts=[];body.replaceChildren();for(const b of tabs.children)b.ariaPressed=String(b.dataset.tab===t);
+    parts=[];waveLive.clear();body.replaceChildren();for(const b of tabs.children)b.ariaPressed=String(b.dataset.tab===t);
     const i='ABC'.indexOf(t);
     if(i>=0){
       const o=v.osc[i],O=k=>K(`osc${i+1}.${k}`),pv=wavePreview(v,i);parts.push(pv);
@@ -3184,9 +3370,12 @@ function placeRoll(c,f){
     sr.querySelector('input[type=range]').remove();sr.append(box)}
   syncRollBar();
 }
-const PART_BAR_ICON={notes:rx('Piano',22),patch:rx('MixerVertical',22)};
-const editorMode=()=>sel?.type==='cog'&&sel.o.track?'notes':sel?.o.voice?'patch':'';
+const PART_BAR_ICON={notes:rx('Piano',22),patch:rx('MixerVertical',22),shape:rx('MixerVertical',22)};
+const editorMode=()=>sel?.type==='cog'&&sel.o.track?'notes':sel?.o.voice?'patch':sel?.type==='cam'?'shape':'';
 let editorOwner=null,editorOpenedAt=-Infinity;
+// Open the selection's sheet (notes, patch or a cam's shape), as the part bar's edit button does.
+function openPartEditor(){const mode=editorMode();if(panelShown()&&sheetMin()&&$('#dev').dataset.editor===mode){setSheetMin(false);return}
+  if(panelShown()&&$('#dev').dataset.editor===mode&&editorOwner===sel?.o)return;if(!mode)return;editorOwner=sel.o;editorOpenedAt=performance.now();togglePanel(true,mode);syncEditor()}
 function syncRollBar(){
   const bar=document.querySelector('.roll-sel');if(bar&&(!roll||$('#dev').dataset.editor!=='notes')){bar.remove();return}if(!bar)return;const some=rollSel.size>0;
   for(const b of bar.querySelectorAll('button')){const off=b.dataset.roll==='velocity'?false:b.dataset.roll==='paste'?!rollClip.length:!some;if(b.disabled!==off)b.disabled=off}
@@ -3200,7 +3389,7 @@ function syncEditor(){syncRollBar();
   const noUndo=!edits.past.length,noRedo=!edits.future.length;
   if($('#undo-all').disabled!==noUndo)$('#undo-all').disabled=$('#editor-undo').disabled=noUndo;
   if($('#redo-all').disabled!==noRedo)$('#redo-all').disabled=$('#editor-redo').disabled=noRedo;
-  if(button.dataset.mode!==mode){button.dataset.mode=mode;button.ariaLabel=mode==='notes'?'Edit notes':'Edit patch';button.innerHTML=PART_BAR_ICON[mode]}
+  if(button.dataset.mode!==mode){button.dataset.mode=mode;button.ariaLabel=mode==='notes'?'Edit notes':mode==='shape'?'Edit shape':'Edit patch';button.innerHTML=PART_BAR_ICON[mode]}
   if(!panelShown()||!$('#dev').dataset.editor)return;
   if(!mode){togglePanel(false);return}
   if(editorOwner!==sel.o){const tucked=sheetMin();editorOwner=sel.o;togglePanel(true,mode);if(tucked)setSheetMin(true)}
@@ -3262,7 +3451,7 @@ function mount(){
   $('#undo-all').onclick=()=>{edits.undo();buzz(6)};$('#redo-all').onclick=()=>{edits.redo();buzz(6)};
   $('#editor-undo').onclick=()=>edits.undo();$('#editor-redo').onclick=()=>edits.redo();
   sheetDrag();
-  const openEditor=()=>{const mode=editorMode();if(panelShown()&&sheetMin()&&$('#dev').dataset.editor===mode){setSheetMin(false);return}if(panelShown()||!mode)return;editorOwner=sel.o;editorOpenedAt=performance.now();togglePanel(true,mode);syncEditor()};
+  const openEditor=openPartEditor;
   $('#edit-part').onpointerup=$('#edit-part').onclick=openEditor;
   $('#delete-part').onclick=()=>removeSel();$('#to-start').onclick=()=>{toStart();buzz(10)};
 }
@@ -3350,7 +3539,7 @@ const ICON={
   odds:'M12 3a9 9 0 1 0 .01 0M12 3v9h9',string:'M3 19L21 5M3 19h.01M21 5h.01',quant:'M4 20V14M9 20V9M14 20V12M19 20V4',
   seal:'M12 3a9 9 0 1 0 .01 0M12 7l1.5 3.2 3.5.4-2.6 2.4.7 3.5-3.1-1.8-3.1 1.8.7-3.5L7 10.6l3.5-.4z',
   semi:'M4 14h16M4 10h16M9 5v14M15 5v14',partials:'M3 20V8M7 20V5M11 20V9M15 20V11M19 20V13M23 20v-5',even:'M3 20V8M11 20V12M19 20V15',attack:'M3 20L10 5h11',
-  range:'M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4',octave:'M4 18V6M4 12h16M20 18V6',knob:'M12 4a8 8 0 1 0 .01 0M12 12L16 6',spread:'M4 20V9M8 20V6M12 20V9M16 20V12'};
+  range:'M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4',octave:'M4 18V6M4 12h16M20 18V6',knob:'M12 4a8 8 0 1 0 .01 0M12 12L16 6',link:'M10 14a4 4 0 0 1 0-6l3-3a4 4 0 0 1 6 6l-1.5 1.5M14 10a4 4 0 0 1 0 6l-3 3a4 4 0 0 1-6-6l1.5-1.5',spread:'M4 20V9M8 20V6M12 20V9M16 20V12'};
 const icons=new Map();const iconPath=k=>{let p=icons.get(k);if(!p){p=new Path2D(ICON[k]);icons.set(k,p)}return p};
 const VOICE_ICON={note:'fork',octave:'octave',semi:'semi',tune:'fork',body:'bell',partials:'partials',bright:'bright',even:'even',bend:'bend',hard:'hard',attack:'attack',
   decay:'decay',pdecay:'pdecay',damp:'damp',sweep:'sweep',tone:'tone',cutoff:'cutoff',spread:'spread',level:'level',velSense:'vel'};
@@ -3398,6 +3587,11 @@ function trackSectors(c){
     stepSector('octave','octave',OCTAVES[0],OCTAVES.at(-1),()=>t.octave,x=>{t.octave=x}),stepSector('range','range',RANGES[0],RANGES.at(-1),()=>t.range,x=>{t.range=x;trim()},r=>r+' oct'),
     numSector('div','steps',t,'div',1,96,1)];
 }
+// A cam's dial: its shape, phase, the travel's window, the macro it turns, and the link to a reader.
+const camSectors=m=>[choiceSector('sweep','shape',[...Object.keys(CAM_SHAPES),'drawn'],()=>m.shape,x=>{if(x!=='drawn')m.prof=camShape(x);m.shape=x;m.ver++}),
+  numSector('odds','phase',m,'phase',0,1,.01),numSector('level','low',m,'lo',0,1,.01),numSector('level','high',m,'hi',0,1,.01),
+  stepSector('knob','macro',1,WAVE_MACROS,()=>m.macro,x=>{m.macro=x},x=>'M'+x),
+  {icon:'link',label:m.to?`linked to reader ${m.to.id}: tap to relink`:'link to a synth reader',action:()=>startLink(m)}];
 const dotSectors=d=>[numSector('odds','probability',d,'p',0,1,.01),numSector('level','velocity',d,'v',0,1,.01),numSector('div','length steps',d,'len',1,ui.dotOf.track.div,1)];
 const ROOM_ICON={wet:'wet',size:'size',decay:'tail',highMult:'air',shimmer:'shimmer'};
 function roomSectors(){
@@ -3424,6 +3618,7 @@ function activeBezel(){
   if(!sel){if(ui.room)b={cx:CW/2,cy:(safeTop+shelfTop())/2,R:Math.min(CW,shelfTop()-safeTop)/2-44,sectors:roomSectors(),owner:SPACE}}
   else if(sel.type==='pad')b=ring(o,o.r*S.zoom,voiceSectors(o,true));
   else if(sel.type==='reader')b=ring(mid(o),stringLen(o)*S.zoom/2,readerSectors(o));
+  else if(sel.type==='cam')b=ring(camTip(o),0,camSectors(o));
   else if(sel.type==='string')b=ring(mid(o),stringLen(o)*S.zoom/2,stringSectors(o));
   else if(sel.type==='dot')b=ring(ui.dotAt,0,dotSectors(o));
   else if(sel.type==='cog'&&o.track){

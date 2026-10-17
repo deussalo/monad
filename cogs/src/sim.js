@@ -71,7 +71,7 @@ const LOOKAHEAD_MIN=.12;
 const S_DEFAULT={...S},SPACE_DEFAULT={...SPACE};
 
 /* ---------- world ---------- */
-const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],next:1};
+const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],cams:[],next:1};
 let simT=0,sel=null,group=[],marquee=null;
 const view={x:0,y:0};
 const stats={events:0,late:0,skipped:0,steps:0,stepsTick:0,log:[]};
@@ -425,7 +425,8 @@ function serialize(){
     pads:W.pads.map(p=>({id:p.id,x:p.x,y:p.y,r:p.r,voice:p.voice})),
     readers:W.readers.map(r=>({id:r.id,on:r.on?r.on.id:null,x1:r.x1,y1:r.y1,x2:r.x2,y2:r.y2,voice:r.voice,tines:r.tines,combBase:r.combBase,combScale:r.combScale})),
     belts:W.belts.map(b=>({id:b.id,a:b.a.id,b:b.b.id,cross:b.cross})),
-    strings:W.strings.map(({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})=>({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense}))};
+    strings:W.strings.map(({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})=>({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})),
+    cams:W.cams.map(m=>({id:m.id,cog:m.cog.id,ang:m.ang,phase:m.phase,shape:m.shape,prof:[...m.prof],to:m.to?m.to.id:null,macro:m.macro,lo:m.lo,hi:m.hi}))};
 }
 // Every part is built and checked before any of the live world is replaced.
 function deserialize(j){
@@ -447,6 +448,10 @@ function deserialize(j){
     strings:j.strings.map(s=>({...s,hits:0,lastV:0})),
     pads:j.pads.map(p=>({...p,voice:importedVoice(p),hits:0,lastV:0})),
     readers:j.readers.map(r=>({tines:0,combBase:60,combScale:'major',...r,on:null,voice:importedVoice(r),hits:0,lastV:0}))};
+  // cams: one on a missing cog is dropped, a link to a missing reader comes loose; neither stops the load
+  next.cams=(j.cams||[]).filter(m=>byId.has(m.cog)).map(m=>{const o={...newCam(m.id),...m,cog:byId.get(m.cog),ver:0};
+    o.prof=Array.isArray(m.prof)&&m.prof.length===CAM_N?m.prof.map(x=>clamp(+x||0,0,1)):camShape(CAM_SHAPES[m.shape]?m.shape:'sine');
+    o.macro=clamp(m.macro|0,1,WAVE_MACROS);o.to=next.readers.find(r=>r.id===m.to)||null;return o});
   // A save from before seats: a reader lying wholly on a disc is seated on it.
   for(const[i,r]of next.readers.entries()){
     const on=j.readers[i].on,c=on!==undefined?(on===null?null:cog(on,'reader '+r.id)):

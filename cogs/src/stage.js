@@ -123,10 +123,12 @@ function draw(){
   for(const r of W.readers)drawReader(r);
   for(const p of W.pads)drawPad(p);
   for(const a of W.arms)drawArm(a);
+  for(const m of W.cams)drawCam(m);
+  for(const m of W.cams)drawCamLink(m);
   if(ui.carry&&ui.carry.band){const{a,p}=ui.carry.band;cx.setLineDash([6*PX,5*PX]);strokes(a.x,a.y,p.x,p.y,[[2*PX,DIM]]);cx.setLineDash([])}
   if(sel){const o=sel.o;
     if(sel.type==='cog')halo(o.x,o.y,radius(o)+3.2);else if(sel.type==='pad')halo(o.x,o.y,o.r+2.4);
-    else if(sel.type==='arm'){const t=armTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='reader'||sel.type==='string'){halo(o.x1,o.y1,3.8);halo(o.x2,o.y2,3.8)}}
+    else if(sel.type==='arm'){const t=armTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='cam'){const t=camTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='reader'||sel.type==='string'){halo(o.x1,o.y1,3.8);halo(o.x2,o.y2,3.8)}}
   if(S.ids){cx.fillStyle=DIM;cx.font=`${10*PX}px monospace`;
     for(const c of W.cogs)cx.fillText('c'+c.id,c.x+4*PX,c.y-4*PX);
     for(const p of W.pads)cx.fillText('p'+p.id,p.x+p.r+2*PX,p.y);
@@ -141,7 +143,7 @@ function drawGhost(s){
   drawArm({cog:{x:-24,y:0,th:0,w:0},a:0,r0:0,len:24});cx.restore();cx.globalAlpha=1;
 }
 // Two readers: the note reader plays a disc's rings as its notes, the comb plays them on its own tines.
-const PART_KEYS={m:'motor',c:'cog',d:'disc',a:'arm',b:'belt',p:'pad',t:'string',r:'reader',k:'comb'},KEY_OF=Object.fromEntries(Object.entries(PART_KEYS).map(([k,v])=>[v,k]));
+const PART_KEYS={m:'motor',c:'cog',d:'disc',a:'arm',b:'belt',p:'pad',t:'string',r:'reader',k:'comb',e:'cam'},KEY_OF=Object.fromEntries(Object.entries(PART_KEYS).map(([k,v])=>[v,k]));
 const PARTS=Object.values(PART_KEYS);
 const MODEL={
   motor:{n:12,x:0,y:0,th:.13,w:1,layer:0,motor:{rpm:30,revs:0},track:null},
@@ -152,6 +154,7 @@ const MODEL={
 function drawPartIcon(kind){
   if(MODEL[kind])drawCog(MODEL[kind]);
   else if(kind==='arm')drawArm({cog:{x:-14,y:14,th:0,w:0},a:-Math.PI/4,r0:0,len:40});
+  else if(kind==='cam'){const c={x:0,y:4,n:12,th:0,w:0},m={...newCam(0),cog:c,ang:-Math.PI/2,shape:'ramp up',prof:camShape('ramp up')};drawCog(c);drawCam(m)}
   else if(kind==='pad')drawPad({x:0,y:0,r:11,voice:{kind:'kick'}});
   else if(kind==='belt'){cx.strokeStyle=DIM;cx.lineWidth=PX;circle(-12,0,9);circle(14,0,6);cx.setLineDash([3,3]);strokes(-12,-9,14,-6,[[1.5,DIM]]);strokes(-12,9,14,6,[[1.5,DIM]]);cx.setLineDash([])}
   else if(kind==='string')drawString({x1:-20,y1:14,x2:20,y2:-14,kind:'string'});
@@ -230,7 +233,8 @@ function focus(type,o,s){
 }
 function choose(type,o,play){select(type,o);if(play)audition(o,true);reveal()}
 function removeObj(type,o){
-  if(type==='cog'){W.cogs=W.cogs.filter(c=>c!==o);W.arms=W.arms.filter(a=>a.cog!==o);W.belts=W.belts.filter(b=>b.a!==o&&b.b!==o)}
+  if(type==='cog'){W.cogs=W.cogs.filter(c=>c!==o);W.arms=W.arms.filter(a=>a.cog!==o);W.cams=W.cams.filter(m=>m.cog!==o);W.belts=W.belts.filter(b=>b.a!==o&&b.b!==o)}
+  else if(type==='reader'){W.readers=W.readers.filter(x=>x!==o);for(const m of W.cams)if(m.to===o)m.to=null}
   else if(type==='dot')setDot(ui.dotOf.track,o,false);
   else W[type+'s']=W[type+'s'].filter(x=>x!==o);
   if(sel&&sel.o===o)select(null);
@@ -240,14 +244,14 @@ function removeSel(){
   const items=group.length?group:sel?[sel]:[];group=[];
   for(const{type,o}of items)if(type!=='belt'||W.belts.includes(o))removeObj(type,o);
 }
-const PART_LISTS=['cog','arm','pad','reader','string','belt'],UNSEAT_PX=36;
+const PART_LISTS=['cog','arm','pad','reader','string','belt','cam'],UNSEAT_PX=36;
 // A copied cog takes its arms; a belt comes when both its cogs do.
 let partClip=null;
 function copyParts(){
   const items=group.length?group:sel&&sel.type!=='dot'?[sel]:[];if(!items.length)return false;
   const ids=new Set(items.map(x=>x.o.id)),j=serialize(),own=o=>ids.has(o.id);
   partClip={cogs:j.cogs.filter(own),arms:j.arms.filter(a=>own(a)||ids.has(a.cog)),pads:j.pads.filter(own),readers:j.readers.filter(own),
-    strings:j.strings.filter(own),belts:j.belts.filter(b=>ids.has(b.a)&&ids.has(b.b))};
+    strings:j.strings.filter(own),belts:j.belts.filter(b=>ids.has(b.a)&&ids.has(b.b)),cams:j.cams.filter(m=>own(m)||ids.has(m.cog))};
   return true;
 }
 // Paste lands centred under the pointer, or a step down-right of the original when the pointer is off the stage.
@@ -263,6 +267,8 @@ function pasteParts(){
   c.arms=c.arms.filter(a=>id.has(a.cog)||j.cogs.some(o=>o.id===a.cog));
   for(const a of c.arms){if(id.has(a.cog))a.cog=id.get(a.cog);else a.a+=.4;a.id=fresh(a)}
   for(const b of c.belts){b.a=id.get(b.a);b.b=id.get(b.b);b.id=fresh(b)}
+  c.cams=(c.cams||[]).filter(m=>id.has(m.cog)||j.cogs.some(o=>o.id===m.cog));
+  for(const m of c.cams){if(id.has(m.cog))m.cog=id.get(m.cog);else m.ang+=.4;if(id.has(m.to))m.to=id.get(m.to);m.id=fresh(m)}
   for(const k of Object.keys(c))j[k].push(...c[k]);
   reload(j);
   const made=new Set(id.values()),pasted=PART_LISTS.flatMap(type=>W[type+'s'].filter(o=>made.has(o.id)).map(o=>({type,o})));
@@ -276,6 +282,7 @@ function boxSelect(a,b){
   for(const o of W.pads)if(inside(o))g.push({type:'pad',o});
   for(const type of ['reader','string'])for(const o of W[type+'s'])if(inside(mid(o)))g.push({type,o});
   for(const o of W.arms)if(inside(armTip(o)))g.push({type:'arm',o});
+  for(const o of W.cams)if(inside(camTip(o)))g.push({type:'cam',o});
   for(const o of W.belts)if(g.some(x=>x.o===o.a)&&g.some(x=>x.o===o.b))g.push({type:'belt',o});
   return g;
 }
@@ -287,6 +294,7 @@ function drawGroup(){
   for(const{type,o}of group){
     if(type==='cog'||type==='pad'){const s=toScreen(o);circle(s.x,s.y,(type==='cog'?radius(o):o.r)*S.zoom+5)}
     else if(type==='arm'){const s=toScreen(armTip(o));circle(s.x,s.y,7)}
+    else if(type==='cam'){const s=toScreen(camTip(o));circle(s.x,s.y,7)}
     else if(type!=='belt'){const a=toScreen({x:o.x1,y:o.y1}),b=toScreen({x:o.x2,y:o.y2});circle(a.x,a.y,6);circle(b.x,b.y,6);line(a.x,a.y,b.x,b.y)}
   }
 }
@@ -341,6 +349,7 @@ function newPart(kind,p){
   // a new reader plays the wave synth's pluck; its patch sheet changes the sound
   if(kind==='reader'||kind==='comb')return {type:'reader',o:{id,x1:0,y1:0,x2:0,y2:0,voice:readerVoice(),tines:kind==='comb'?12:0,combBase:60,combScale:'major',hits:0,lastV:0}};
   if(kind==='string')return {type:'string',o:{id,x1:0,y1:0,x2:0,y2:0,...STRING_DEFAULT,hits:0,lastV:0}};
+  if(kind==='cam')return {type:'cam',o:newCam(id)};
   return {type:'arm',o:{id,cog:null,a:0,r0:0,len:4,flex:.5}};
 }
 function placePart(type,o,p){
@@ -351,6 +360,8 @@ function placePart(type,o,p){
     if(d){const a=Math.atan2(p.y-d.y,p.x-d.x),r0=ringR(d,0)-6,r1=ringR(d,trackRings(d.track)-1)+6;
       Object.assign(o,{x1:d.x+Math.cos(a)*r0,y1:d.y+Math.sin(a)*r0,x2:d.x+Math.cos(a)*r1,y2:d.y+Math.sin(a)*r1});seatReader(o,d)}
     else{Object.assign(o,{x1:p.x-30,y1:p.y,x2:p.x+30,y2:p.y});o.on=null}}
+  // a cam rides the cog it is dropped on; its follower stands where it was let go
+  else if(type==='cam'){const c=pickCog(p);o.cog=c;if(c)o.ang=Math.atan2(p.y-c.y,p.x-c.x)}
   else{const c=pickCog(p);o.cog=c;if(c){o.a=wrap(Math.atan2(p.y-c.y,p.x-c.x)-renderTh(c));o.len=Math.max(4,Math.hypot(p.x-c.x,p.y-c.y))}}
 }
 
@@ -390,13 +401,19 @@ const G={
         const p=screenToWorld(s);
         if(offStage(s)){out();carry.ghost=null;return}
         made=made||newPart(kind,p);placePart(made.type,made.o,p);
-        const live=made.type!=='arm'||made.o.cog;
+        const live=made.type!=='arm'&&made.type!=='cam'||made.o.cog;
         if(live&&!present()){list().push(made.o);if(made.type==='cog')solve();buzz(6)}else if(!live)out();
         carry.ghost=live?null:s;
       },
       up(s){done();if(!present())return;if(offStage(s)){out();return}select(made.type,made.o);changed(true);buzz(10);reveal()},
       cancel(){done();out()},tap:done,
     };
+  },
+  // A cam's follower: drag it round the axle to move where it rides; tap for its dial, double tap to focus.
+  cam(m){
+    return {o:m,readout:()=>`cam ${m.id} lift: ${Math.round(camLift(m)*100)}%`,
+      move(s){trackScrap(s);const q=screenToWorld(s),c=m.cog;m.ang=Math.atan2(q.y-c.y,q.x-c.x)},
+      up(){endScrap('cam',m)},tap(){choose('cam',m)},dbl(s){focus('cog',m.cog,s)}};
   },
   arm(a){
     return {o:a,move(s){trackScrap(s);const q=screenToWorld(s),c=a.cog;a.a=wrap(Math.atan2(q.y-c.y,q.x-c.x)-renderTh(c));a.len=Math.max(4,Math.hypot(q.x-c.x,q.y-c.y)-a.r0)},
@@ -497,6 +514,7 @@ function begin(s){
   // The nearest small part under the finger wins: a hammer sweeping past a pad must not steal the tap.
   let best=null;const near=(d,reach,make)=>{if(d<=reach&&(!best||d<best.d))best={d,make}};
   for(const a of W.arms)near(dist(armTip(a))-3.3*Z,20,()=>G.arm(a));
+  for(const m of W.cams)near(dist(camTip(m))-3*Z,20,()=>G.cam(m));
   for(const o of W.pads){const d=dist(o),r=o.r*Z;near(d-r,Math.max(8,22-r),()=>G.pad(o,s,r>=18&&d>=r-8))}
   for(const[type,list]of [['reader',W.readers],['string',W.strings]])for(const o of list){
     near(dist({x:o.x1,y:o.y1}),22,()=>G.span(type,o,s,1));near(dist({x:o.x2,y:o.y2}),22,()=>G.span(type,o,s,2));
@@ -513,6 +531,7 @@ function begin(s){
 
 function pointerGesture(e,s){
   if(e.ctrlKey||e.metaKey)return G.marquee(s);
+  if(ui.linking&&!offStage(s))return linkGesture(s);
   if(ui.armed&&!offStage(s))return G.armed(ui.armed,s);
   const g=begin(s);
   if(group.length>1&&g.o&&group.some(x=>x.o===g.o)){g.cancel?.();return G.group(s)}
@@ -972,7 +991,7 @@ function section(title,parent=panel){const f=el('fieldset',{},el('legend',{textC
 function numRow(parent,label,min,max,step,get,set,def){
   if(min===0&&max===1&&step===1)return toggleRow(parent,label,get,set);
   const range=el('input',{type:'range',min,max,step}),num=el('input',{type:'number',min,max,step});
-  const sync=()=>{const v=get(),shown=+(+v).toFixed(4);if(+range.value!==+v)range.value=v;if(+num.value!==shown)num.value=shown};
+  const sync=()=>{const v=get(),shown=+(+v).toFixed(4);if(+range.value!==+v)range.value=v;if(num.value===""||+num.value!==shown)num.value=shown};
   const put=v=>{if(!Number.isFinite(v))return;set(clamp(+(Math.round(v/step)*step).toFixed(6),min,max));sync()};
   range.oninput=()=>put(+range.value);num.oninput=()=>{const v=+num.value;if(Number.isFinite(v)){set(clamp(v,min,max));sync()}};num.onchange=sync;
   const coarse=Math.max(1,Math.round((max-min)/100/step))*step;
@@ -1090,7 +1109,7 @@ function voiceRows(f,owner,withNote){
 function buildInspector(){
   if(!inspector)return;
   rows.length=panelRows;readouts.length=panelReadouts;
-  roll=null;
+  roll=null;camStrips=[];
   const o=sel&&sel.o,f=inspector,cogKind=c=>c.track?'disc':c.motor?'motor':'cog';
   inspector.replaceChildren(el('legend',{textContent:sel?`${sel.type==='cog'?cogKind(o):sel.type} ${sel.o.id}`:'selection'}));
   if(sel&&sel.type==='cog'){
@@ -1116,6 +1135,8 @@ function buildInspector(){
       f.append(el('button',{textContent:'clear pins',onclick:()=>{t.dots=[];changed()}}),
         el('button',{textContent:'drop track',onclick:()=>{o.track=null;buildInspector();changed()}}));
     }else if(!o.motor)f.append(el('button',{textContent:'add track',onclick:()=>{o.track=newTrack();buildInspector();changed()}}));
+  }else if(sel&&sel.type==='cam'){
+    camRows(f,o);
   }else if(sel&&sel.type==='arm'){
     numRow(f,'angle deg',0,360,.1,()=>o.a*180/Math.PI,v=>{o.a=v*Math.PI/180;changed()});
     numRow(f,'r0',0,500,.5,...bind(o,'r0',changed));
@@ -1181,6 +1202,7 @@ function frame(ts){
   stepCamera();if(!worldCovered()||++coveredSkip>=4){coveredSkip=0;draw();drawGroup()}else syncEditor();listen();
   const now=performance.now();
   if(roll&&roll.cv.offsetParent)drawRoll();
+  postMotions();if(inspectorLive()){if(camStrips.length)camDrawStrips();for(const d of waveLive)d()}
   if(panelShown()&&now-roAt>250){roAt=now;readPalette();for(const[b,fn]of readouts)b.textContent=fn()}
   requestAnimationFrame(frame);
 }

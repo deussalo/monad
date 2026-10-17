@@ -590,6 +590,24 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const here = counts(await probe(() => __cogs.serialize())), there = counts(await sp.evaluate(() => __cogs.serialize()));
   check('shared url rebuilds the same world', JSON.stringify(here) === JSON.stringify(there), [here, there]);
 
+  console.log('CAM');
+  await m.dev(false);
+  await probe(() => { const j = __cogs.serialize(); j.cogs = [{ id: 1, x: 0, y: 0, n: 36, motor: { rpm: 30, revs: 1 }, layer: 0, th: 0, track: null }]; j.arms = []; j.belts = []; j.strings = []; j.pads = []; j.cams = [];
+    j.readers = [{ id: 2, on: null, x1: 60, y1: 90, x2: 120, y2: 90, voice: { kind: 'wave', preset: 'pluck', note: 60, level: .7, velSense: .7 }, tines: 0, combBase: 60, combScale: 'major' }]; j.view = { x: 40, y: 30 }; j.S.zoom = 2; __cogs.deserialize(j); });
+  await wait(200);
+  await m.fromShelf('cam', [0, -40], [0, -30]);
+  const pc = await probe(() => __cogs.serialize().cams);
+  check('drag a cam from the shelf onto a cog: it rides it, its follower up where it was dropped', pc.length === 1 && pc[0].cog === 1 && Math.abs(pc[0].ang + Math.PI / 2) < .05, pc.map(m => [m.cog, +m.ang.toFixed(3)]));
+  await m.tap(await m.empty());
+  await m.tap(await probe(() => { const s = __cogs.toScreen(camTip(W.cams[0])); return [s.x, s.y]; }));
+  const cb = await probe(() => { const b = __cogs.activeBezel(); return b && { cx: b.cx, cy: b.cy, R: b.R, n: b.sectors.length, labels: b.sectors.map(s => s.label), sel: __cogs.sel?.type }; });
+  is('tap its follower: the cam\'s dial: shape, phase, low, high, macro, link', cb && [cb.sel, cb.labels], ['cam', ['shape', 'phase', 'low', 'high', 'macro', 'link to a synth reader']]);
+  await m.tap(sector(cb, 5, .5));
+  await m.tap(await probe(() => { const s = __cogs.toScreen({ x: 90, y: 90 }); return [s.x, s.y]; })); await wait(300);
+  const pl = await probe(() => ({ cam: __cogs.serialize().cams[0], sel: __cogs.sel, sheet: document.querySelector('#dev').dataset.editor, open: !document.querySelector('#dev').hidden, arm: waveUi.arm }));
+  check('link, then tap the reader: linked on macro 1, and the reader\'s patch sheet opens with M1 armed', pl.cam.to === 2 && pl.cam.macro === 1 && pl.sel.type === 'reader' && pl.open && pl.sheet === 'patch' && pl.arm === 'm1', [pl.cam.to, pl.cam.macro, pl.sel, pl.sheet, pl.open, pl.arm]);
+  await probe(() => { waveUi.arm = null; }); await p.tap('#editor-close'); await wait(200);
+
   console.log('DESKTOP: KEYS, MARQUEE, GROUP, WHEEL');
   const dk = await b.newContext({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: SHOTS ? 2 : 1 });
   const d = await dk.newPage(), derrs = [];

@@ -31,13 +31,16 @@ const routesTo=(v,path)=>v.mods.filter(m=>m.dst===path);
 let wavePalAt=-1,wavePalMap=null;
 const wavePal=k=>{const t=performance.now();if(!wavePalMap||t-wavePalAt>250){wavePalAt=t;wavePalMap=new Map();wavePalMap.cs=getComputedStyle(document.documentElement)}
   let c=wavePalMap.get(k);if(c===undefined){c=wavePalMap.cs.getPropertyValue(k).trim()||'#888';wavePalMap.set(k,c)}return c};
+// Macro knobs a cam turns: they show where it has them, live, while the sheet is open.
+const waveLive=new Set();
+const camDriver=(v,path)=>{const m=path.match(/^m(\d)$/);return m&&W.cams.length?camsOn(v).find(c=>c.macro===+m[1]&&c.cog):null};
 function waveKnob(v,path,edited){
   const P=WAVE_PARAMS[WAVE_INDEX.get(path)],S_=52,cv=el('canvas'),val=el('b'),name=el('span',{textContent:P[1]});
   const box=el('div',{className:'knob'},cv,name,val);box.dataset.path=path;
   cv.width=cv.height=S_*dpr;cv.style.width=cv.style.height=S_+'px';
   const A0=Math.PI*.75,SW=Math.PI*1.5;
   const draw=()=>{
-    const x=cv.getContext('2d'),c=S_/2,n=waveNorm(P,waveGet(v,path)),col=wavePal;
+    const cam=camDriver(v,path),x=cv.getContext('2d'),c=S_/2,n=cam?cam.lo+(cam.hi-cam.lo)*camLift(cam):waveNorm(P,waveGet(v,path)),col=wavePal;
     x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,S_,S_);x.lineCap='round';
     x.lineWidth=4;x.strokeStyle=col('--line');x.beginPath();x.arc(c,c,c-6,A0,A0+SW);x.stroke();
     const z=P[2]<0&&P[3]>0?waveNorm(P,0):0;
@@ -51,7 +54,7 @@ function waveKnob(v,path,edited){
     x.globalAlpha=1;
     const a=A0+SW*n;x.strokeStyle=col('--fg');x.lineWidth=2;x.beginPath();x.moveTo(c+Math.cos(a)*(c-16),c+Math.sin(a)*(c-16));x.lineTo(c+Math.cos(a)*(c-4),c+Math.sin(a)*(c-4));x.stroke();
     const rt=waveUi.arm&&routesTo(v,path).find(m=>m.src===waveUi.arm);
-    val.textContent=rt?`${srcLabel(rt.src)} ${rt.amt>0?'+':''}${Math.round(rt.amt*100)}`:waveText(P,waveGet(v,path));
+    val.textContent=cam?`cam ${cam.id} ${Math.round(n*100)}%`:rt?`${srcLabel(rt.src)} ${rt.amt>0?'+':''}${Math.round(rt.amt*100)}`:waveText(P,waveGet(v,path));
     box.classList.toggle('armed',!!waveUi.arm||waveUi.pin);box.classList.toggle('pinned',!!v.dial?.includes(path));box.classList.toggle('routed',routesTo(v,path).length>0);
   };
   let drag=null,lastTap=0;
@@ -84,6 +87,7 @@ function waveKnob(v,path,edited){
   };
   // a chip dropped here routes its source at half depth
   box.addEventListener('wave-drop',e=>{const src=e.detail;if(!routesTo(v,path).some(m=>m.src===src))v.mods.push({src,dst:path,amt:.5,bi:src.startsWith('lfo'),off:false});edited()});
+  if(/^m\d$/.test(path))waveLive.add(()=>{if(camDriver(v,path)&&box.isConnected)draw()});
   return {box,draw};
 }
 const choice=(label,options,get,set,fmt=o=>o)=>{
@@ -169,7 +173,7 @@ function waveEditor(f,owner){
   // sources: tap to arm, drag onto a knob to route
   const chips=el('div',{className:'wave-src'});
   const hint=el('div',{className:'wave-hint'});
-  const syncChips=()=>{for(const c of chips.children)c.ariaPressed=String(c.dataset.src?c.dataset.src===waveUi.arm:waveUi.pin);
+  const syncChips=()=>{for(const c of chips.children){c.ariaPressed=String(c.dataset.src?c.dataset.src===waveUi.arm:waveUi.pin);const d=c.dataset.src&&camDriver(v,c.dataset.src);c.classList.toggle('driven',!!d);c.title=d?`turned by cam ${d.id}`:''}
     hint.toggleAttribute('data-armed',!!waveUi.arm||waveUi.pin);hint.textContent=waveUi.pin?`Tap knobs to put them on the part's dial, or take them off: ${(v.dial||[]).length} of ${WAVE_DIAL}. Tap DIAL to finish.`:waveUi.arm?`${srcLabel(waveUi.arm)} armed: drag a knob to set its depth, double tap to remove. Tap ${srcLabel(waveUi.arm)} to finish.`:'Tap a source, or drag it onto a knob, to modulate.';redraw()};
   // the dial chip: armed, a tap on a knob pins it to the dial that opens when the part is tapped
   chips.append(el('button',{className:'wave-pin',textContent:'◎ DIAL',onclick:()=>{waveUi.pin=!waveUi.pin;waveUi.arm=null;syncChips()}}));
@@ -189,7 +193,7 @@ function waveEditor(f,owner){
   const group=(title,...kids)=>el('div',{className:'wave-group'},el('h4',{textContent:title}),el('div',{className:'knobs'},...kids));
   const K=path=>{const k=waveKnob(v,path,edited);parts.push(k);return k.box};
   const show=t=>{
-    parts=[];body.replaceChildren();for(const b of tabs.children)b.ariaPressed=String(b.dataset.tab===t);
+    parts=[];waveLive.clear();body.replaceChildren();for(const b of tabs.children)b.ariaPressed=String(b.dataset.tab===t);
     const i='ABC'.indexOf(t);
     if(i>=0){
       const o=v.osc[i],O=k=>K(`osc${i+1}.${k}`),pv=wavePreview(v,i);parts.push(pv);
