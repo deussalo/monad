@@ -1495,10 +1495,10 @@ const colAngle=(c,col)=>wrap(-rollDir(c)*col*TAU/c.track.div);
 const rollCol=(c,d)=>Math.round(rollU(c,d.a)*c.track.div)%c.track.div;
 // Snap, as FL Studio's menu: none, fractions of a step (a roll column), and note values. A note value needs the
 // disc's steps per beat: with a bpm lock, from the disc's real speed; without one, a revolution counts as a bar.
-// A beat is a quarter note, so a whole note is four beats and a bar is beats/bar of them.
-const SNAPS=[['none',0,'s'],['1/6 step',1/6,'s'],['1/4 step',1/4,'s'],['1/3 step',1/3,'s'],['1/2 step',1/2,'s'],['step',1,'s'],
-  ['1/32',1/32,'n'],['1/16 triplet',1/24,'n'],['1/16',1/16,'n'],['1/8 triplet',1/12,'n'],['1/8',1/8,'n'],['1/4 triplet',1/6,'n'],
-  ['1/4 (beat)',1/4,'n'],['1/2 triplet',1/3,'n'],['1/2',1/2,'n'],['whole',1,'n'],['bar',1,'bar']];
+// Each has a short label for the picker (T for triplet). A beat is a quarter note, so a whole note is four beats and a bar is beats/bar of them.
+const SNAPS=[['none',0,'s','off'],['1/6 step',1/6,'s','step/6'],['1/4 step',1/4,'s','step/4'],['1/3 step',1/3,'s','step/3'],['1/2 step',1/2,'s','step/2'],['step',1,'s','step'],
+  ['1/32',1/32,'n','1/32'],['1/16 triplet',1/24,'n','1/16T'],['1/16',1/16,'n','1/16'],['1/8 triplet',1/12,'n','1/8T'],['1/8',1/8,'n','1/8'],['1/4 triplet',1/6,'n','1/4T'],
+  ['1/4 (beat)',1/4,'n','1/4'],['1/2 triplet',1/3,'n','1/2T'],['1/2',1/2,'n','1/2'],['whole',1,'n','1/1'],['bar',1,'bar','bar']];
 let rollSnap='step',rollVel=false;
 const tidy=x=>Math.round(x*1e6)/1e6;
 function stepsPerBeat(c){const rpm=Math.abs(c.w*60/TAU);return S.bpm&&rpm>1e-6?c.track.div*rpm/S.bpm:c.track.div/S.beats}
@@ -1837,7 +1837,7 @@ function rollSection(c,{strip,tools,row,label,minCell=6}){
   }
   const shift=k=>()=>{const s=rollDir(c)*TAU/t.div;for(const d of t.dots)d.a=wrap(d.a-k*s);changed()};
   strip.append(box);
-  roll.snapRow=selRow(tools,'snap',SNAPS.map(s=>s[0]),()=>rollSnap,v=>{rollSnap=v});
+  roll.snapRow=selRow(tools,'snap',SNAPS.map(s=>s[0]),()=>rollSnap,v=>{rollSnap=v},v=>SNAPS.find(s=>s[0]===v)[3]);
   tools.append(el('button',{textContent:'shift <',onclick:shift(-1)}),el('button',{textContent:'shift >',onclick:shift(1)}));
   numRow(tools,'brush p',0,1,.01,...bind(brush,'p',()=>brushSel(t,'p')),BRUSH_DEFAULT.p);
   numRow(tools,'brush vel',0,1,.01,...bind(brush,'v',()=>brushSel(t,'v')),BRUSH_DEFAULT.v);
@@ -1987,7 +1987,7 @@ function buildInspector(){
       const t=o.track,retune=()=>{trimDots(t);changed()};
       selRow(f,'root',NOTE_NAMES.map((_,i)=>String(i)),()=>String(t.root),x=>{t.root=+x;retune()},i=>NOTE_NAMES[i]);
       selRow(f,'octave',OCTAVES.map(String),()=>String(t.octave),x=>{t.octave=+x;retune()});
-      selRow(f,'range',RANGES.map(String),()=>String(t.range),x=>{t.range=+x;retune()},r=>`${r} octave${r>1?'s':''} · ${r*SCALES[t.scale].length} lanes`);
+      selRow(f,'range',RANGES.map(String),()=>String(t.range),x=>{t.range=+x;retune()},r=>`${r} oct · ${r*SCALES[t.scale].length} lanes`);
       selRow(f,'scale',Object.keys(SCALES),()=>t.scale,v=>{t.scale=v;retune()});
       numRow(f,'steps',1,96,1,...bind(t,'div',changed),TRACK_DEFAULT.div);
       roRow(f,'lanes',()=>`${trackRings(t)} · ${noteName(trackBase(t))} to ${noteName(ringNote(t,trackRings(t)-1))} · ${t.dots.length} pins`);

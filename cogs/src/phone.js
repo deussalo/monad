@@ -22,7 +22,7 @@ function setSheetMin(min){
 function sheetDrag(){
   const dev=$('#dev'),top=$('#sheet-top');let g=null;
   top.onpointerdown=e=>{
-    if(e.target.closest('button'))return;
+    if(e.target.closest('button,select'))return;
     top.setPointerCapture(e.pointerId);const r=dev.getBoundingClientRect();
     g={y0:e.clientY,t0:performance.now(),base:sheetMin()?r.height-top.offsetHeight-safeBot:0,h:r.height,dy:0,v:0,lt:performance.now(),ly:e.clientY};
     dev.classList.add('dragging');
@@ -52,15 +52,25 @@ function placeRoll(c,f){
     act('Clipboard','paste',()=>pasteClip(c0)),act('Trash','delete notes',()=>deleteSel(c0.track)));
   // The velocity lane stays tucked away until this toggle shows it; the choice holds for every disc.
   const vel=act('Velocity','velocity',()=>{setRollVel(!rollVel);vel.ariaPressed=String(rollVel)});vel.ariaPressed=String(rollVel);bar.prepend(vel);
-  // The snap picker rides the bar, left of the actions, so it stays in thumb reach above the strip.
+  // The snap picker rides the bar, left of the actions: just the division, tap it to choose another.
   const snap=roll.snapRow.querySelector('select');snap.ariaLabel='snap';snap.className='roll-snap';bar.prepend(snap);roll.snapRow.remove();
-  f.prepend(bar,roll.box);syncRollBar();
+  // The bar takes the sheet head's row, in place of the title, beside undo, redo and close: one row of tools.
+  const head=$('#editor-head');head.querySelector('.roll-sel')?.remove();head.insertBefore(bar,$('#editor-undo'));
+  f.prepend(roll.box);
+  // The disc's tuning as compact chips under the strip, not full-width form rows; steps gets − and + beside its number.
+  const fields=el('div',{className:'disc-fields'},...['root','octave','range','scale','steps'].map(k=>f.querySelector(`:scope>.row[data-k="${k}"]`)).filter(Boolean));
+  roll.box.after(fields);
+  const sr=fields.querySelector('[data-k="steps"]');
+  if(sr){const num=sr.querySelector('input[type=number]'),bump=d=>()=>{num.value=+num.value+d;num.dispatchEvent(new Event('input'));buzz(4)};
+    const box=el('div',{className:'stepper'},el('button',{textContent:'−',ariaLabel:'fewer steps',onclick:bump(-1)}),num,el('button',{textContent:'+',ariaLabel:'more steps',onclick:bump(1)}));
+    sr.querySelector('input[type=range]').remove();sr.append(box)}
+  syncRollBar();
 }
 const PART_BAR_ICON={notes:rx('Piano',22),patch:rx('MixerVertical',22)};
 const editorMode=()=>sel?.type==='cog'&&sel.o.track?'notes':sel?.o.voice?'patch':'';
 let editorOwner=null,editorOpenedAt=-Infinity;
 function syncRollBar(){
-  const bar=document.querySelector('.roll-sel');if(!bar||!roll)return;const some=rollSel.size>0;
+  const bar=document.querySelector('.roll-sel');if(bar&&(!roll||$('#dev').dataset.editor!=='notes')){bar.remove();return}if(!bar)return;const some=rollSel.size>0;
   for(const b of bar.querySelectorAll('button')){const off=b.dataset.roll==='velocity'?false:b.dataset.roll==='paste'?!rollClip.length:!some;if(b.disabled!==off)b.disabled=off}
 }
 function syncEditor(){syncRollBar();

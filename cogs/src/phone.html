@@ -45,7 +45,21 @@ body.sheet-min #interaction{bottom:var(--peek,80px);border-bottom:1px solid var(
 #dev[data-editor="notes"] #inspector>:is([data-k="teeth"],[data-k="rpm"],[data-k="revs/bar"],[data-k="layer"],[data-k="phase deg"],.ro){display:none}
 .roll-sel{display:flex;justify-content:flex-end;gap:var(--space-1,4px)}
 #dev .roll-sel button{min-width:44px;min-height:44px;padding:0;border:0;background:none;display:grid;place-items:center;color:var(--fg)}
-#dev .roll-sel .roll-snap{width:auto;margin-right:auto;padding:0 8px;border:1px solid var(--line)}
+#dev[data-editor="notes"] #editor-title{display:none}
+#editor-head .roll-sel{flex:1;min-width:0;gap:0}
+#dev #editor-head button{min-width:0;flex:0 1 44px}
+#dev .roll-sel .roll-snap{-webkit-appearance:none;appearance:none;width:auto;min-width:52px;margin-right:auto;padding:0 6px;border:0;background:none;color:var(--hot);font-size:15px;text-align:center}
+#dev[data-editor="notes"] #inspector>button{background:var(--pad);border-radius:8px;padding:0 14px;margin:2px 4px 2px 0}
+/* The disc's tuning: compact chips that wrap, a small label over each value. */
+.disc-fields{display:flex;flex-wrap:wrap;gap:var(--space-2,8px);margin:var(--space-2,8px) 0}
+#dev .disc-fields .row{display:flex;flex-direction:column;align-items:stretch;gap:2px;margin:0;min-height:0;flex:1 1 auto}
+.disc-fields .row>span:first-child{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+.disc-fields .row>span:empty{display:none}
+#dev .disc-fields select,#dev .disc-fields input[type=number]{-webkit-appearance:none;appearance:none;-moz-appearance:textfield;background:var(--pad);border-radius:8px;padding:0 12px;min-height:40px;text-align:center}
+.disc-fields input[type=number]::-webkit-inner-spin-button,.disc-fields input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.disc-fields .stepper{display:flex;align-items:center;gap:2px}
+#dev .disc-fields .stepper input{width:48px;padding:0}
+#dev .disc-fields .stepper button{min-width:40px;min-height:40px;background:var(--pad);border-radius:8px;font-size:18px}
 #dev .roll-sel button[aria-pressed=true]{color:var(--hot)}
 #dev .roll-sel button:disabled{color:var(--faint,#555);opacity:.5}
 #interaction{position:fixed;left:0;right:0;bottom:0;z-index:30;padding:var(--space-2,8px) var(--space-3,12px) calc(env(safe-area-inset-bottom,0px) + var(--space-2,8px));background:var(--bg);border-top:1px solid var(--line);color:var(--hot);font-size:14px;text-align:center;pointer-events:none}
