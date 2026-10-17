@@ -28,13 +28,37 @@ function buildTable(spectra){
 }
 const NP=WAVE_PARAMS.length,NS=WAVE_SOURCES.length,SRC_VEL=WAVE_SOURCES.indexOf('vel'),SRC_NOTE=WAVE_SOURCES.indexOf('note'),SRC_RAND=WAVE_SOURCES.indexOf('rand');
 const PI_=(path)=>WAVE_INDEX.get(path);
-const OSC_KEYS=['pos','oct','semi','fine','level','pan','uni','detune','blend','spread','phase','warp','a','d','s','r','cut','res','drive','key','famt','fa','fd','fs','fr'];
+const OSC_KEYS=['pos','oct','semi','fine','level','pan','uni','detune','blend','spread','phase','warp','warp2','a','d','s','r','cut','res','drive','key','famt','fa','fd','fs','fr'];
 const OSC_P=Array.from({length:WAVE_OSCS},(_,i)=>Object.fromEntries(OSC_KEYS.map(k=>[k,PI_(`osc${i+1}.${k}`)])));
 const ENV_P=Array.from({length:WAVE_ENVS},(_,i)=>['a','d','s','r'].map(k=>PI_(`env${i+1}.${k}`)));
 const LFO_P=Array.from({length:WAVE_LFOS},(_,i)=>[PI_(`lfo${i+1}.rate`),PI_(`lfo${i+1}.phase`)]);
 const MAC_P=Array.from({length:WAVE_MACROS},(_,i)=>PI_('m'+(i+1)));
 const P_SUB=PI_('sub.level'),P_SUBOCT=PI_('sub.oct'),P_NOISE=PI_('noise.level'),P_COLOR=PI_('noise.color'),P_VOL=PI_('vol'),P_GLIDE=PI_('glide'),P_GATE=PI_('gate');
 const newEnv=()=>({st:0,lv:0});
+// Phase warps: where in the table to read for phase q; -1 is silence (pwm's closed part). m is the modulator sine.
+function warpQ(mode,q,w,m){
+  if(!w)return q;const a=Math.abs(w);
+  switch(mode){
+    case 1:return w>0?Math.pow(q,1+3*w):1-Math.pow(1-q,1-3*w);
+    case 2:return (q*(1+a*7))%1;
+    case 3:{const d=1-.95*a;return q<d?q/d:-1}
+    case 4:{const d=.5+.45*w;return q<d?q*.5/d:.5+(q-d)*.5/(1-d)}
+    case 5:return q+a*((q<.5?q:1-q)-q);
+    case 6:{const r=(q+a*1.5*m)%1;return r<0?r+1:r}
+    default:return q;
+  }
+}
+// Amplitude warps on the value read
+function warpY(mode,y,q,w,m){
+  const a=Math.abs(w);if(!a)return y;
+  switch(mode){
+    case 7:return q>1-a*.5?-y:y;
+    case 8:{const L=Math.pow(2,1+(1-a)*7);return Math.round(y*L)/L}
+    case 9:return y*(1-a*(.5-.5*m));
+    case 10:return y*(1-a+a*m);
+    default:return y;
+  }
+}
 // ADSR: linear attack, exponential decay and release, each reaching ~1% in its time.
 function envCoefs(c,a,d,r,fs){c[0]=1/(Math.max(a,.0005)*fs);c[1]=Math.exp(-4.6/(Math.max(d,.001)*fs));c[2]=Math.exp(-4.6/(Math.max(r,.001)*fs))}
 function envTick(e,c,s){
@@ -159,7 +183,7 @@ class WaveSynth extends AudioWorkletProcessor{
     for(const m of p.mods||[]){const s=WAVE_SOURCES.indexOf(m.src),d=WAVE_INDEX.get(m.dst);if(s<0||d===undefined||!m.amt||m.off)continue;routes.push([s,d,+m.amt,m.bi?1:0,WAVE_SOURCES.indexOf(m.aux),m.auxInv?1:0,+m.curve||0]);modded.add(d)}
     const tabs=p.osc.map((o,i)=>o.table==='harmonics'?(old&&old.harmKey[i]===JSON.stringify(o.harm)?old.tabs[i]:buildTable(waveSpectra('harmonics',o.harm))):this.tables[o.table]||this.tables.basic);
     this.patches.set(id,{id,ver:++this.ver,base,val,routes,modded:[...modded],tabs,harmKey:p.osc.map(o=>JSON.stringify(o.harm)),
-      on:p.osc.map(o=>!!o.on),ftype:p.osc.map(o=>Math.max(0,WAVE_FILTERS.indexOf(o.filter))),
+      on:p.osc.map(o=>!!o.on),warpMode:p.osc.map(o=>Math.max(0,WARP_MODES.indexOf(o.warpMode??'bend'))),warpMode2:p.osc.map(o=>Math.max(0,WARP_MODES.indexOf(o.warp2Mode??'off'))),ftype:p.osc.map(o=>Math.max(0,WAVE_FILTERS.indexOf(o.filter))),
       lfoShape:p.lfo.map(l=>Math.max(0,LFO_SHAPES.indexOf(l.shape))),lfoRetrig:p.lfo.map(l=>l.retrig!==false),lfoSync:p.lfo.map(l=>LFO_SYNCS[l.sync]||0),mode:Math.max(0,VOICE_MODES.indexOf(p.voicing?.mode)),always:p.voicing?.always!==false,glideScale:!!p.voicing?.scale,last:old?old.last:null,
       fxOn:Object.fromEntries(WAVE_FX.map(k=>[k,!!(p.fx&&p.fx[k]&&p.fx[k].on)])),fxOrder:waveFxOrder(p.fxOrder),distMode:Math.max(0,DIST_MODES.indexOf(p.fx?.dist?.mode)),delaySync:DELAY_SYNCS[p.fx?.delay?.sync]||0,ping:p.fx?.delay?.ping!==false,
       busL:old?old.busL:new Float32Array(128),busR:old?old.busR:new Float32Array(128),fxs:old?old.fxs:newFxState(sampleRate),fxv:new Float64Array(NP),quiet:old?old.quiet:1e9,live:false});
@@ -225,7 +249,7 @@ class WaveSynth extends AudioWorkletProcessor{
       const sus=vals[P.s],fsus=vals[P.fs];
       const f=440*Math.pow(2,(midi+12*vals[P.oct]+vals[P.semi]+vals[P.fine]/100-69)/12);
       const nu=Math.max(1,Math.min(8,Math.round(vals[P.uni]))),span=vals[P.detune]*vals[P.detune]*1.2,tab=cp.tabs[i];
-      const fmax=f*Math.pow(2,span/24)*(1+Math.abs(vals[P.warp])*3),lim=.45*fs/Math.max(1,fmax);
+      const wroom=(m,w)=>m>=1&&m<=6?1+Math.abs(w)*(m===2?7:3):1,fmax=f*Math.pow(2,span/24)*wroom(cp.warpMode[i],vals[P.warp])*wroom(cp.warpMode2[i],vals[P.warp2]),lim=.45*fs/Math.max(1,fmax);
       let mip=0;while(mip<WMIPS-1&&(1023>>mip)>lim)mip++;
       const fp=vals[P.pos]*(tab.frames-1),f0=Math.floor(fp),ff=fp-f0,f1=Math.min(f0+1,tab.frames-1),A=tab.mips[mip][f0],B=tab.mips[mip][f1];
       const warp=vals[P.warp],norm=1/Math.sqrt(nu),pan0=vals[P.pan],spread=vals[P.spread],blend=vals[P.blend];
@@ -237,16 +261,21 @@ class WaveSynth extends AudioWorkletProcessor{
       // blend weights, kept at the same total power: 0.5 even, toward 1 the outer voices, toward 0 the centre ones
       const bws=this.bws;let sw=0;for(let j=0;j<nu;j++){bws[j]=nu>1?Math.max(0,1+(blend-.5)*2*(Math.abs(j/(nu-1)-.5)*4-1)):1;sw+=bws[j]*bws[j]}
       const bn=sw>1e-9?Math.sqrt(nu/sw):1;if(sw<=1e-9)bws.fill(1);
-      for(let j=0;j<nu;j++){
+      // the warps; FM, AM and RM read a sine at another oscillator's pitch (A from B, B and C from A)
+      const wm=cp.warpMode[i],wm2=cp.warpMode2[i],w2=vals[P.warp2],src=OSC_P[i?0:1];
+      const minc=(wm>=6&&wm!==7&&wm!==8||wm2>=6&&wm2!==7&&wm2!==8)?440*Math.pow(2,(midi+12*vals[src.oct]+vals[src.semi]+vals[src.fine]/100-69)/12)/fs:0;let mp=o.mph||0;const mp0=mp;
+      for(let j=0;j<nu;j++){mp=mp0;
         const off=nu>1?(j/(nu-1)-.5)*span:0,inc=f*Math.pow(2,off/12)/fs,p=Math.max(-1,Math.min(1,pan0+(nu>1?spread*(j/(nu-1)*2-1):0))),ang=(p+1)*Math.PI/4;
         const bw=bws[j]*bn,gl_=Math.cos(ang)*norm*level*Math.SQRT2*bw,gr_=Math.sin(ang)*norm*level*Math.SQRT2*bw;let ph=o.ph[j];
         for(let s=0;s<n;s++){
-          let q=ph;if(warp)q=warp>0?Math.pow(q,1+3*warp):1-Math.pow(1-q,1-3*warp);
-          const x=q*WN,xi=x|0,xf=x-xi,a=A[xi]+(A[xi+1]-A[xi])*xf,b=B[xi]+(B[xi+1]-B[xi])*xf,y=a+(b-a)*ff;
-          ol[s]+=y*gl_;or[s]+=y*gr_;ph+=inc;if(ph>=1)ph-=1;
+          const m=minc?Math.sin(TAU*mp):0;let q=warpQ(wm,ph,warp,m),y=0;if(q>=0&&wm2)q=warpQ(wm2,q,w2,m);
+          if(q>=0){const x=q*WN,xi=x|0,xf=x-xi,a=A[xi]+(A[xi+1]-A[xi])*xf,b=B[xi]+(B[xi+1]-B[xi])*xf;y=a+(b-a)*ff;
+            if(wm>=7)y=warpY(wm,y,q,warp,m);if(wm2>=7)y=warpY(wm2,y,q,w2,m)}
+          ol[s]+=y*gl_;or[s]+=y*gr_;ph+=inc;if(ph>=1)ph-=1;mp+=minc;if(mp>=1)mp-=1;
         }
         o.ph[j]=ph;
       }
+      o.mph=mp;
       // amp envelope, drive and filter per sample, in place on this oscillator's slice, then into the voice's mix
       for(let s=0;s<n;s++){
         const e=envTick(o.env,o.ec,sus);envTick(o.fenv,o.fc,fsus);

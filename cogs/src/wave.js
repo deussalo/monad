@@ -6,7 +6,7 @@ function waveInit(){
     voicing:{mode:'poly',always:true,scale:false},
     fxOrder:[...WAVE_FX],
     fx:{hyper:{on:false},flanger:{on:false},phaser:{on:false},dist:{on:false,mode:'tube'},chorus:{on:false},delay:{on:false,sync:'1/8.',ping:true},eq:{on:false},comp:{on:false}}};
-  for(let i=0;i<WAVE_OSCS;i++)p.osc.push({on:i===0,table:'basic',filter:'lp24',harm:Array.from({length:WAVE_HARMS},(_,k)=>k===0?1:0)});
+  for(let i=0;i<WAVE_OSCS;i++)p.osc.push({on:i===0,table:'basic',filter:'lp24',warpMode:'bend',warp2Mode:'off',harm:Array.from({length:WAVE_HARMS},(_,k)=>k===0?1:0)});
   for(let i=0;i<WAVE_ENVS;i++)p.env.push({});
   for(let i=0;i<WAVE_LFOS;i++)p.lfo.push({shape:'sine',retrig:true,sync:'off'});
   for(let i=0;i<WAVE_MACROS;i++){p.macro.push(0);p.macroNames.push('macro '+(i+1))}
@@ -19,7 +19,7 @@ function wavePatch(j){
   const p=waveInit();if(!j||typeof j!=='object')return p;
   if(typeof j.name==='string')p.name=j.name.slice(0,40);
   for(const P of WAVE_PARAMS){let x;try{x=+waveGet(j,P[0])}catch(e){continue}if(Number.isFinite(x))waveSet(p,P[0],Math.min(P[3],Math.max(P[2],x)))}
-  (j.osc||[]).slice(0,WAVE_OSCS).forEach((o,i)=>{if(!o)return;const q=p.osc[i];q.on=!!o.on;if(WAVE_TABLES.includes(o.table))q.table=o.table;if(WAVE_FILTERS.includes(o.filter))q.filter=o.filter;
+  (j.osc||[]).slice(0,WAVE_OSCS).forEach((o,i)=>{if(!o)return;const q=p.osc[i];q.on=!!o.on;if(WAVE_TABLES.includes(o.table))q.table=o.table;if(WAVE_FILTERS.includes(o.filter))q.filter=o.filter;if(WARP_MODES.includes(o.warpMode))q.warpMode=o.warpMode;if(WARP_MODES.includes(o.warp2Mode))q.warp2Mode=o.warp2Mode;
     if(Array.isArray(o.harm))q.harm=Array.from({length:WAVE_HARMS},(_,k)=>Math.min(1,Math.max(0,+o.harm[k]||0)))});
   (j.lfo||[]).slice(0,WAVE_LFOS).forEach((l,i)=>{if(!l)return;if(LFO_SHAPES.includes(l.shape))p.lfo[i].shape=l.shape;p.lfo[i].retrig=l.retrig!==false;if(l.sync in LFO_SYNCS)p.lfo[i].sync=l.sync});
   const vc=j.voicing||{};if(VOICE_MODES.includes(vc.mode))p.voicing.mode=vc.mode;if('always' in vc)p.voicing.always=!!vc.always;p.voicing.scale=!!vc.scale;

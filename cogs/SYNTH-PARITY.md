@@ -9,7 +9,7 @@ logs what landed. Sources: Xfer's [Serum 2 What's New](https://static.xferrecord
 | Area | Serum 2 | Wave synth now | Gap |
 |---|---|---|---|
 | Oscillators | 3 main (wavetable, sample, multisample, granular, spectral) + sub + noise | 3 wavetable oscs built additively (basic, harmonics, sweep, pulse, vocal, organ) + sub + noise | sample/granular/spectral modes, warp modes (only bend), wavetable import/editor |
-| Per-osc | unison up to 16, detune, blend, stack, warp ×2 | unison 8, detune, blend, stereo, bend, phase, pan, per-osc amp ADSR, per-osc filter + filter ADSR | unison stack modes, second warp, random phase knob |
+| Per-osc | unison up to 16, detune, blend, stack, dual warp | unison 8, detune, blend, stereo, phase, pan; two warp slots (bend, sync, pwm, asym, mirror, fm, flip, quantize, am, rm; FM/AM/RM from another osc); per-osc amp ADSR, filter + filter ADSR | unison stack modes, random phase knob, warp modulator choice |
 | Filters | 2 filters, series/parallel, many types, drive | per-osc SVF: lp12/24, hp12/24, bp, notch, peak; drive, key track | global filters with routing, comb/formant/ladder types |
 | Envelopes | 4 (ENV1 = amp), BPM sync, curves | 4 global mod envs (ENV1 also amp for sub/noise) + per-osc amp and filter envs | segment curve shaping, BPM sync |
 | LFOs | up to 10, path/2D/chaos/S&H, BPM sync, drawable | 4: sine, tri, saw up/down, square, S&H, smooth; retrig or free; rate or tempo sync (1/32 to 4 bars), phase | drawable shapes, envelope/one-shot mode, chaos, more LFOs |
@@ -21,7 +21,7 @@ logs what landed. Sources: Xfer's [Serum 2 What's New](https://static.xferrecord
 
 ## Next, ranked
 
-1. More oscillator modes: spectral (live additive with partial modulation), and more warp modes (sync, FM from B, PWM).
+1. Oscillator modes: spectral (live additive with partial modulation), and more warp modes (sync, FM from B, PWM).
 2. Drawable LFO shapes; envelope BPM sync and segment curves.
 3. Live mod display on knobs (moving dot), mod-wheel/aftertouch-like sources (e.g. reader hit speed).
 
@@ -36,3 +36,4 @@ logs what landed. Sources: Xfer's [Serum 2 What's New](https://static.xferrecord
 - 2026-10-17 04:30Z (beat 2): matrix aux source (with invert) and a drawn curve per route; a 4th envelope; voicing modes
   poly/mono/legato with glide always and scaled glide; unison blend (power-kept).
 - 2026-10-17 05:00Z (beat 3): FX rack made modular and reorderable; hyper/dimension, flanger and phaser added (8 modules).
+- 2026-10-17 06:00Z (beat 4): two warp slots per oscillator with 10 modes (phase: bend, sync, pwm, asym, mirror, fm; amplitude: flip, quantize, am, rm).

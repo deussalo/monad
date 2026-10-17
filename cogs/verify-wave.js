@@ -76,6 +76,12 @@ const SHOTS = process.env.COGS_SHOTS || '';
     // order matters: a 110 Hz sine cut 15 dB by the low shelf before distortion drives it less than cutting after it
     const ord = o => fxp('dist', q => { q.fx.dist.drive = .8; q.fx.eq.on = true; q.fx.eq.low = -15; q.fxOrder = o; });
     out.order = [await render(ord(['dist', 'eq']), [[0, 45, .2]], .3), await render(ord(['eq', 'dist']), [[0, 45, .2]], .3)];
+    // every warp mode, at 0.7 in slot 1 and slot 2, on a saw: each changes the sound and stays finite
+    out.warps = {};
+    for (const wm of WARP_MODES) for (const slot of [1, 2]) { const q = base(); q.osc[0].filter = 'off';
+      if (slot === 1) { q.osc[0].warpMode = wm; q.osc[0].warp = .7; } else { q.osc[0].warpMode = 'off'; q.osc[0].warp2Mode = wm; q.osc[0].warp2 = .7; }
+      const r = await render(q, [[0, 57, .2]], .25); out.warps[wm + slot] = [+r.rms.toFixed(4), +r.bright.toFixed(4), r.finite]; }
+    { const q = base(); q.osc[0].filter = 'off'; out.warps.none = (r => [+r.rms.toFixed(4), +r.bright.toFixed(4), r.finite])(await render(q, [[0, 57, .2]], .25)); }
     out.presets = {}; for (const [k, f] of Object.entries(WAVE_PRESETS)) out.presets[k] = +(await render(waveVoice(f()), [[0, 57, .3]], .4)).rms.toFixed(4);
     return out;
   });
@@ -111,6 +117,9 @@ const SHOTS = process.env.COGS_SHOTS || '';
   check('aux source: macro 1 at 0 holds the LFO route shut, at 1 lets it swing', swing(sw1) > swing(sw0) * 1.5, [+swing(sw0).toFixed(2), +swing(sw1).toFixed(2)]);
   check('unison blend changes the sound, at the same loudness', Math.abs(off.blend[0].bright - off.blend[1].bright) > .01 || Math.abs(off.blend[0].side - off.blend[1].side) > 1e-3, off.blend.map(r => [+r.rms.toFixed(3), +r.side.toFixed(4)]));
   is('route curves: straight at 0, +1 bows up, -1 bows down, ends fixed', off.curve.map(x => +x.toFixed(3)), [.5, .938, .063, 0, 1]);
+  const wn = off.warps.none, wv = Object.entries(off.warps).filter(([k]) => k !== 'none' && !k.startsWith('off'));
+  check('every warp mode, in either slot, sounds and changes the saw', wv.every(([, r]) => r[2] && r[0] > .003 && (Math.abs(r[1] - wn[1]) > .002 || Math.abs(r[0] - wn[0]) > .002)), Object.fromEntries(wv));
+  check('warp off leaves it as it was', off.warps.off1[1] === wn[1] && off.warps.off2[1] === wn[1], [off.warps.off1, off.warps.off2, wn]);
   check('every factory preset sounds', Object.values(off.presets).every(r => r > .003), off.presets);
 
   console.log('WAVE EDITOR');

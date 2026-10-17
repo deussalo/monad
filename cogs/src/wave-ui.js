@@ -152,9 +152,10 @@ function waveEditor(f,owner){
     if(i>=0){
       const o=v.osc[i],O=k=>K(`osc${i+1}.${k}`),pv=wavePreview(v,i);parts.push(pv);
       body.append(el('div',{className:'wave-row'},toggle(`osc ${t}`,()=>o.on,x=>{o.on=x;edited()}),
-        choice('table',WAVE_TABLES,()=>o.table,x=>{o.table=x;edited();rebuild()}),choice('filter',WAVE_FILTERS,()=>o.filter,x=>{o.filter=x;edited()})),pv.box);
+        choice('table',WAVE_TABLES,()=>o.table,x=>{o.table=x;edited();rebuild()}),choice('filter',WAVE_FILTERS,()=>o.filter,x=>{o.filter=x;edited()}),
+        choice('warp',WARP_MODES,()=>o.warpMode,x=>{o.warpMode=x;edited()}),choice('warp 2',WARP_MODES,()=>o.warp2Mode,x=>{o.warp2Mode=x;edited()})),pv.box);
       if(o.table==='harmonics'){const h=harmEditor(v,i,edited);parts.push(h);body.append(h.box)}
-      body.append(group('wave',O('pos'),O('warp'),O('phase'),O('level'),O('pan')),group('pitch',O('oct'),O('semi'),O('fine')),
+      body.append(group('wave',O('pos'),O('warp'),O('warp2'),O('phase'),O('level'),O('pan')),group('pitch',O('oct'),O('semi'),O('fine')),
         group('unison',O('uni'),O('detune'),O('blend'),O('spread')),group('amp envelope',O('a'),O('d'),O('s'),O('r')),
         group('filter',O('cut'),O('res'),O('drive'),O('key')),group('filter envelope',O('famt'),O('fa'),O('fd'),O('fs'),O('fr')));
     }else if(t==='SUB')body.append(group('sub (on ENV1)',K('sub.level'),K('sub.oct')),group('noise (on ENV1)',K('noise.level'),K('noise.color')),group('voice',K('vol'),K('glide'),K('gate')),

@@ -16,6 +16,10 @@ const WAVE_FX_RE=/^(hyper|dist|flanger|phaser|chorus|delay|eq|comp)\./;
 const waveFxOrder=o=>{const a=Array.isArray(o)?o.filter((k,i)=>WAVE_FX.includes(k)&&o.indexOf(k)===i):[];return [...a,...WAVE_FX.filter(k=>!a.includes(k))]};
 const DIST_MODES=['tube','hard','fold','crush'];
 const VOICE_MODES=['poly','mono','legato'];
+// Warp modes, two per oscillator as in Serum 2: phase warps (bend, sync, pwm, asym, mirror, fm) bend where the table is read,
+// amplitude warps (flip, quantize, am, rm) reshape what it reads. FM, AM and RM take a sine at the pitch of another
+// oscillator: A takes B's, B and C take A's.
+const WARP_MODES=['off','bend','sync','pwm','asym','mirror','fm','flip','quantize','am','rm'];
 // A route's source through its curve (−1 bends toward the bottom, +1 toward the top), as the matrix's curve column.
 const modCurve=(x,c)=>!c?x:c>0?1-Math.pow(1-x,1+3*c):Math.pow(x,1-3*c);
 const WAVE_SOURCES=[...Array.from({length:WAVE_ENVS},(_,i)=>'env'+(i+1)),...Array.from({length:WAVE_LFOS},(_,i)=>'lfo'+(i+1)),
@@ -26,7 +30,7 @@ function waveParamList(){
   for(let i=1;i<=WAVE_OSCS;i++){const o='osc'+i+'.';P.push(
     [o+'pos','wt pos',0,1,0,'lin'],[o+'oct','octave',-4,4,0,'int'],[o+'semi','semi',-12,12,0,'int'],[o+'fine','fine ct',-100,100,0,'lin'],
     [o+'level','level',0,1,i===1?.75:0,'lin'],[o+'pan','pan',-1,1,0,'lin'],[o+'uni','unison',1,8,1,'int'],[o+'detune','detune',0,1,.25,'lin'],[o+'blend','blend',0,1,.5,'lin'],
-    [o+'spread','stereo',0,1,.8,'lin'],[o+'phase','phase',0,1,0,'lin'],[o+'warp','bend',-1,1,0,'lin'],
+    [o+'spread','stereo',0,1,.8,'lin'],[o+'phase','phase',0,1,0,'lin'],[o+'warp','warp',-1,1,0,'lin'],[o+'warp2','warp 2',-1,1,0,'lin'],
     [o+'a','attack',0,8,.003,'time'],[o+'d','decay',0,8,.8,'time'],[o+'s','sustain',0,1,.7,'lin'],[o+'r','release',0,8,.3,'time'],
     [o+'cut','cutoff',20,20000,20000,'log'],[o+'res','res',0,1,.1,'lin'],[o+'drive','drive',0,1,0,'lin'],[o+'key','key track',0,1,0,'lin'],
     [o+'famt','env amt',-1,1,0,'lin'],[o+'fa','f attack',0,8,.003,'time'],[o+'fd','f decay',0,8,.5,'time'],[o+'fs','f sustain',0,1,0,'lin'],[o+'fr','f release',0,8,.3,'time'])}
