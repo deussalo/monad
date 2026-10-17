@@ -6,6 +6,12 @@ const WAVE_OSCS=3,WAVE_ENVS=3,WAVE_LFOS=4,WAVE_MACROS=8,WAVE_HARMS=32;
 const WAVE_TABLES=['basic','harmonics','sweep','pulse','vocal','organ'];
 const WAVE_FILTERS=['off','lp12','lp24','hp12','hp24','bp','notch','peak'];
 const LFO_SHAPES=['sine','tri','saw up','saw down','square','s&h','smooth'];
+// Tempo divisions, in beats: LFOs and the delay lock to the machine's bpm (120 without a bpm lock).
+const LFO_SYNCS={off:0,'1/32':1/8,'1/16':1/4,'1/8T':1/3,'1/8':1/2,'1/4T':2/3,'1/4':1,'1/2':2,'1 bar':4,'2 bars':8,'4 bars':16};
+const DELAY_SYNCS={off:0,'1/16':1/4,'1/8T':1/3,'1/8':1/2,'1/8.':3/4,'1/4T':2/3,'1/4':1,'1/4.':3/2,'1/2':2};
+// The FX rack, after the voices of a patch are summed, in this order, as Serum's: each on or off.
+const WAVE_FX=['dist','chorus','delay','eq','comp'];
+const DIST_MODES=['tube','hard','fold','crush'];
 const WAVE_SOURCES=[...Array.from({length:WAVE_ENVS},(_,i)=>'env'+(i+1)),...Array.from({length:WAVE_LFOS},(_,i)=>'lfo'+(i+1)),
   ...Array.from({length:WAVE_MACROS},(_,i)=>'m'+(i+1)),'vel','note','rand'];
 // [path, label, min, max, default, curve]: lin, log (a ratio range), time (cubic, fine at the short end), int.
@@ -23,6 +29,11 @@ function waveParamList(){
   for(let i=1;i<=WAVE_LFOS;i++){const l='lfo'+i+'.';P.push([l+'rate','rate Hz',.02,40,2,'log'],[l+'phase','phase',0,1,0,'lin'])}
   for(let i=1;i<=WAVE_MACROS;i++)P.push(['m'+i,'macro '+i,0,1,0,'lin']);
   P.push(['vol','volume',0,1,.8,'lin'],['glide','glide',0,2,0,'time'],['gate','gate s',.02,8,.35,'time']);
+  P.push(['dist.drive','drive',0,1,.3,'lin'],['dist.mix','mix',0,1,1,'lin'],
+    ['chorus.rate','rate Hz',.05,5,.6,'log'],['chorus.depth','depth',0,1,.5,'lin'],['chorus.mix','mix',0,1,.5,'lin'],
+    ['delay.time','time',.01,2,.3,'time'],['delay.fb','feedback',0,.95,.4,'lin'],['delay.tone','tone',0,1,.6,'lin'],['delay.mix','mix',0,1,.25,'lin'],
+    ['eq.low','low dB',-15,15,0,'lin'],['eq.high','high dB',-15,15,0,'lin'],
+    ['comp.thresh','threshold',-40,0,-12,'lin'],['comp.ratio','ratio',1,20,4,'log'],['comp.gain','makeup',0,18,3,'lin']);
   return P;
 }
 const WAVE_PARAMS=waveParamList(),WAVE_INDEX=new Map(WAVE_PARAMS.map((p,i)=>[p[0],i]));
@@ -33,9 +44,10 @@ function wavePath(p,path){
   let m=path.match(/^(osc|env|lfo)(\d)\.(\w+)$/);if(m)return [p[m[1]][+m[2]-1],m[3]];
   m=path.match(/^m(\d)$/);if(m)return [p.macro,+m[1]-1];
   m=path.match(/^(sub|noise)\.(\w+)$/);if(m)return [p[m[1]],m[2]];
+  m=path.match(/^(dist|chorus|delay|eq|comp)\.(\w+)$/);if(m)return [(p.fx||{})[m[1]],m[2]];
   return [p,path];
 }
-const waveGet=(p,path)=>{const[o,k]=wavePath(p,path);return o[k]};
+const waveGet=(p,path)=>{const[o,k]=wavePath(p,path);return o?o[k]:undefined};
 const waveSet=(p,path,x)=>{const[o,k]=wavePath(p,path);o[k]=x};
 // Additive spectra: harmonic amplitudes (index k is harmonic k+1) for each frame of each built-in table.
 function waveSpectra(name,user){

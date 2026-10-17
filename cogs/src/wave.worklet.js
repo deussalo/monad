@@ -57,15 +57,64 @@ function lfoAt(shape,ph,l){
     default:return .5-.5*Math.cos(TAU*ph);
   }
 }
+
+/* the FX rack: distortion, chorus, delay, EQ, compressor, run on a patch's summed voices */
+const FX_IDX=WAVE_PARAMS.map((P,i)=>/^(dist|chorus|delay|eq|comp)\./.test(P[0])?i:-1).filter(i=>i>=0);
+const FXI=Object.fromEntries(FX_IDX.map(i=>[WAVE_PARAMS[i][0],i]));
+const MAC0=WAVE_ENVS+WAVE_LFOS;
+function newFxState(fs){
+  // the delay's 2 s lines are made the first time a patch turns its delay on
+  return {held:[0,0],hc:0,cb:[new Float32Array(4096),new Float32Array(4096)],cw:0,cph:0,db:null,dw:0,dlp:[0,0],
+    eq:[[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]],eqKey:'',eqc:null,env:0};
+}
+const fxTail=cp=>cp.fxOn[2]?2+12*cp.val[FXI['delay.fb']]:cp.fxOn[1]?.1:0;
+// RBJ shelving biquad coefficients
+function shelf(f,db,fs,high){const A=Math.pow(10,db/40),w=TAU*f/fs,cs=Math.cos(w),sn=Math.sin(w),al=sn/2*Math.SQRT2,sq=2*Math.sqrt(A)*al;
+  let b0,b1,b2,a0,a1,a2;
+  if(high){b0=A*((A+1)+(A-1)*cs+sq);b1=-2*A*((A-1)+(A+1)*cs);b2=A*((A+1)+(A-1)*cs-sq);a0=(A+1)-(A-1)*cs+sq;a1=2*((A-1)-(A+1)*cs);a2=(A+1)-(A-1)*cs-sq}
+  else{b0=A*((A+1)-(A-1)*cs+sq);b1=2*A*((A-1)-(A+1)*cs);b2=A*((A+1)-(A-1)*cs-sq);a0=(A+1)+(A-1)*cs+sq;a1=-2*((A-1)+(A+1)*cs);a2=(A+1)+(A-1)*cs-sq}
+  return [b0/a0,b1/a0,b2/a0,a1/a0,a2/a0];
+}
+function biquad(c,z,x){const y=c[0]*x+c[1]*z[0]+c[2]*z[1]-c[3]*z[2]-c[4]*z[3];z[1]=z[0];z[0]=x;z[3]=z[2];z[2]=y;return y}
+function runFx(cp,L,R,n,bpm){
+  const fs=sampleRate,v=cp.fxv,st=cp.fxs;
+  // FX knobs take the macros' routes (a rack is shared by every voice, so per-note sources do not reach it)
+  for(const i of FX_IDX)v[i]=cp.base[i];
+  for(const[s,d,amt,bi]of cp.routes)if(s>=MAC0&&s<MAC0+WAVE_MACROS&&FXI[WAVE_PARAMS[d][0]]===d){const x=cp.base[MAC_P[s-MAC0]];v[d]+=(bi?x*2-1:x)*amt}
+  for(const i of FX_IDX)v[i]=waveDenorm(WAVE_PARAMS[i],v[i]);
+  if(cp.fxOn[0]){const dr=v[FXI['dist.drive']],mix=v[FXI['dist.mix']],g=1+dr*30,inv=1/Math.sqrt(g),mode=cp.distMode,q=Math.pow(2,16-dr*14),hold=1+Math.floor(dr*16);
+    for(let s=0;s<n;s++)for(let c=0;c<2;c++){const B=c?R:L,x=B[s];let y;
+      if(mode===0)y=Math.tanh(x*g)*inv;else if(mode===1)y=Math.max(-1,Math.min(1,x*g))*inv;else if(mode===2)y=Math.sin(x*g)*inv;
+      else{if(c===0&&++st.hc>=hold)st.hc=0;if(st.hc===0)st.held[c]=Math.round(x*q)/q;y=st.held[c]}
+      B[s]=x+(y-x)*mix}}
+  if(cp.fxOn[1]){const rate=v[FXI['chorus.rate']],dep=v[FXI['chorus.depth']]*.006*fs,mix=v[FXI['chorus.mix']],base=.012*fs,M=4095;
+    for(let s=0;s<n;s++){st.cph=(st.cph+rate/fs)%1;
+      for(let c=0;c<2;c++){const B=c?R:L,b=st.cb[c],x=B[s];b[st.cw&M]=x;const d=base+dep*(.5+.5*Math.sin(TAU*(st.cph+c*.25))),p=st.cw-d,i=Math.floor(p),f=p-i,w=b[i&M]+(b[(i+1)&M]-b[i&M])*f;
+        B[s]=x*(1-mix*.5)+w*mix}
+      st.cw++}}
+  if(cp.fxOn[2]){if(!st.db){const N=Math.ceil(fs*2.1);st.db=[new Float32Array(N),new Float32Array(N)]}const D=st.db[0].length,T=Math.min(D-2,Math.max(1,(cp.delaySync?60/bpm*cp.delaySync:v[FXI['delay.time']])*fs)),fb=v[FXI['delay.fb']],mix=v[FXI['delay.mix']],
+      tc=1-Math.exp(-TAU*Math.min(.45*fs,400*Math.pow(2,v[FXI['delay.tone']]*5.5))/fs),bl=st.db[0],br=st.db[1],ping=cp.ping;
+    for(let s=0;s<n;s++){let p=st.dw-T;if(p<0)p+=D;const i=Math.floor(p),f=p-i,j=(i+1)%D,dl=bl[i]+(bl[j]-bl[i])*f,dr=br[i]+(br[j]-br[i])*f;
+      st.dlp[0]+=(dl-st.dlp[0])*tc;st.dlp[1]+=(dr-st.dlp[1])*tc;const xl=L[s],xr=R[s];
+      if(ping){bl[st.dw]=(xl+xr)*.5+fb*st.dlp[1];br[st.dw]=fb*st.dlp[0]}else{bl[st.dw]=xl+fb*st.dlp[0];br[st.dw]=xr+fb*st.dlp[1]}
+      L[s]=xl+dl*mix;R[s]=xr+dr*mix;st.dw=(st.dw+1)%D}}
+  if(cp.fxOn[3]){const lo=v[FXI['eq.low']],hi=v[FXI['eq.high']],key=lo.toFixed(2)+'/'+hi.toFixed(2);
+    if(key!==st.eqKey){st.eqKey=key;st.eqc=[shelf(200,lo,fs,false),shelf(4000,hi,fs,true)]}
+    for(let s=0;s<n;s++){L[s]=biquad(st.eqc[1],st.eq[2],biquad(st.eqc[0],st.eq[0],L[s]));R[s]=biquad(st.eqc[1],st.eq[3],biquad(st.eqc[0],st.eq[1],R[s]))}}
+  if(cp.fxOn[4]){const th=v[FXI['comp.thresh']],ra=v[FXI['comp.ratio']],mk=Math.pow(10,v[FXI['comp.gain']]/20),at=Math.exp(-1/(.005*fs)),re=Math.exp(-1/(.12*fs));
+    let e=st.env;for(let s=0;s<n;s++){const x=Math.max(Math.abs(L[s]),Math.abs(R[s]));e=x>e?x+(e-x)*at:x+(e-x)*re;
+      const db=20*Math.log10(e+1e-9),over=db-th,g=(over>0?Math.pow(10,-over*(1-1/ra)/20):1)*mk;L[s]*=g;R[s]*=g}st.env=e}
+}
 class WaveSynth extends AudioWorkletProcessor{
   constructor(){
     super();
     this.tables={};for(const n of WAVE_TABLES)if(n!=='harmonics')this.tables[n]=buildTable(waveSpectra(n));
-    this.patches=new Map();this.queue=[];this.offs=[];this.frame=0;this.statAt=0;this.ver=0;
+    this.patches=new Map();this.bpm=120;this.queue=[];this.offs=[];this.frame=0;this.statAt=0;this.ver=0;
     this.voices=Array.from({length:WVOICES},()=>this.voice());
     this.mixL=new Float32Array(WSLICE);this.mixR=new Float32Array(WSLICE);this.ol=new Float32Array(WSLICE);this.or=new Float32Array(WSLICE);
     this.port.onmessage=e=>{const m=e.data;
       if(m.type==='patch')this.setPatch(m.id,m.p);else if(m.type==='note')this.queue.push(m);else if(m.type==='off')this.offs.push(m);
+      else if(m.type==='tempo')this.bpm=m.bpm>0?m.bpm:120;
       else if(m.type==='panic')for(const v of this.voices)v.on=false};
   }
   voice(){
@@ -83,7 +132,9 @@ class WaveSynth extends AudioWorkletProcessor{
     const tabs=p.osc.map((o,i)=>o.table==='harmonics'?(old&&old.harmKey[i]===JSON.stringify(o.harm)?old.tabs[i]:buildTable(waveSpectra('harmonics',o.harm))):this.tables[o.table]||this.tables.basic);
     this.patches.set(id,{id,ver:++this.ver,base,val,routes,modded:[...modded],tabs,harmKey:p.osc.map(o=>JSON.stringify(o.harm)),
       on:p.osc.map(o=>!!o.on),ftype:p.osc.map(o=>Math.max(0,WAVE_FILTERS.indexOf(o.filter))),
-      lfoShape:p.lfo.map(l=>Math.max(0,LFO_SHAPES.indexOf(l.shape))),lfoRetrig:p.lfo.map(l=>l.retrig!==false),last:old?old.last:null});
+      lfoShape:p.lfo.map(l=>Math.max(0,LFO_SHAPES.indexOf(l.shape))),lfoRetrig:p.lfo.map(l=>l.retrig!==false),lfoSync:p.lfo.map(l=>LFO_SYNCS[l.sync]||0),last:old?old.last:null,
+      fxOn:WAVE_FX.map(k=>!!(p.fx&&p.fx[k]&&p.fx[k].on)),distMode:Math.max(0,DIST_MODES.indexOf(p.fx?.dist?.mode)),delaySync:DELAY_SYNCS[p.fx?.delay?.sync]||0,ping:p.fx?.delay?.ping!==false,
+      busL:old?old.busL:new Float32Array(128),busR:old?old.busR:new Float32Array(128),fxs:old?old.fxs:newFxState(sampleRate),fxv:new Float64Array(NP),quiet:old?old.quiet:1e9,live:false});
     for(const v of this.voices)if(v.on&&v.cp&&v.cp.id===id)v.cp=this.patches.get(id);
   }
   start(m){
@@ -104,12 +155,13 @@ class WaveSynth extends AudioWorkletProcessor{
   }
   release(v){if(v.released)return;v.released=true;for(const o of v.osc){if(o.env.st)o.env.st=4;if(o.fenv.st)o.fenv.st=4}for(const e of v.envs)if(e.st)e.st=4}
   // One voice for one slice: sources, routed values, then the oscillators through their filters.
+  lfoRate(cp,vals,i){const b=cp.lfoSync[i];return b?this.bpm/60/b:vals[LFO_P[i][0]]}
   render(v,n,L,R,at){
     const cp=v.cp,vals=v.vals,src=v.src,fs=sampleRate,now=this.frame+at;
     if(!v.released&&now>=v.offAt)this.release(v);
     if(v.ver!==cp.ver){vals.set(cp.val);v.ver=cp.ver}
     for(let i=0;i<WAVE_ENVS;i++)src[i]=v.envs[i].lv;
-    for(let i=0;i<WAVE_LFOS;i++){const l=v.lfo[i];let ph=l.ph;if(!cp.lfoRetrig[i])ph=now/fs*vals[LFO_P[i][0]];ph=(ph+vals[LFO_P[i][1]])%1;src[WAVE_ENVS+i]=lfoAt(cp.lfoShape[i],ph,l)}
+    for(let i=0;i<WAVE_LFOS;i++){const l=v.lfo[i];let ph=l.ph;if(!cp.lfoRetrig[i])ph=now/fs*this.lfoRate(cp,vals,i);ph=(ph+vals[LFO_P[i][1]])%1;src[WAVE_ENVS+i]=lfoAt(cp.lfoShape[i],ph,l)}
     for(let i=0;i<WAVE_MACROS;i++)src[WAVE_ENVS+WAVE_LFOS+i]=cp.base[MAC_P[i]];
     src[SRC_VEL]=v.vel;src[SRC_NOTE]=Math.min(1,Math.max(0,(v.midi-24)/84));src[SRC_RAND]=v.rand;
     if(cp.routes.length){
@@ -117,7 +169,7 @@ class WaveSynth extends AudioWorkletProcessor{
       for(const[s,d,amt,bi]of cp.routes)vals[d]+=(bi?src[s]*2-1:src[s])*amt;
       for(const d of cp.modded)vals[d]=waveDenorm(WAVE_PARAMS[d],vals[d]);
     }
-    for(let i=0;i<WAVE_LFOS;i++){const l=v.lfo[i],nph=l.ph+vals[LFO_P[i][0]]*n/fs;if(nph>=1){l.prev=l.held;l.held=Math.random()}l.ph=nph%1}
+    for(let i=0;i<WAVE_LFOS;i++){const l=v.lfo[i],nph=l.ph+this.lfoRate(cp,vals,i)*n/fs;if(nph>=1){l.prev=l.held;l.held=Math.random()}l.ph=nph%1}
     const gl=vals[P_GLIDE],tt=(now-v.t0)/fs,midi=gl>0?v.midi+(v.from-v.midi)*Math.exp(-tt/(gl/4.6)):v.midi;
     if(gl>0&&Math.abs(v.from-v.midi)>1e-3&&tt>gl)v.from=v.midi;
     const ol=this.ol,or=this.or;
@@ -198,7 +250,14 @@ class WaveSynth extends AudioWorkletProcessor{
       const sl=Math.min(WSLICE,n-at),t=currentFrame+at+sl;
       if(this.queue.length){const keep=[];for(const m of this.queue){if(m.at<t)this.start(m);else keep.push(m)}this.queue=keep}
       if(this.offs.length){const keep=[];for(const m of this.offs){if(m.at<t){for(const v of this.voices)if(v.on&&v.key===m.key&&!v.released)this.release(v)}else keep.push(m)}this.offs=keep}
-      for(const v of this.voices)if(v.on){this.mixL.fill(0,0,sl);this.mixR.fill(0,0,sl);this.render(v,sl,L,R,at)}
+      for(const v of this.voices)if(v.on){const cp=v.cp;if(!cp.live){cp.live=true;cp.busL.fill(0);cp.busR.fill(0)}this.mixL.fill(0,0,sl);this.mixR.fill(0,0,sl);this.render(v,sl,cp.busL,cp.busR,at)}
+    }
+    // each patch's voices are summed on its bus and go through its FX rack; a rack with a tail (delay, chorus) keeps running
+    for(const cp of this.patches.values()){
+      if(cp.live)cp.quiet=0;else{if(cp.quiet>fxTail(cp)*sampleRate)continue;cp.quiet+=n;cp.busL.fill(0);cp.busR.fill(0)}
+      runFx(cp,cp.busL,cp.busR,n,this.bpm);
+      for(let s=0;s<n;s++){L[s]+=cp.busL[s];R[s]+=cp.busR[s]}
+      cp.live=false;
     }
     if(end-this.statAt>=sampleRate*.25){this.statAt=end;let nv=0;for(const v of this.voices)nv+=v.on?1:0;this.port.postMessage({type:'stats',voices:nv})}
     return true;

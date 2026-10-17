@@ -4,17 +4,20 @@
 // knob, or, armed, removes that route. The matrix tab lists every route to edit, bypass or delete.
 const waveSay=read=>{if(typeof showInteraction==='function')showInteraction(read)};
 const waveUi={tab:'A',arm:null,msg:''};
-const WAVE_TABS=['A','B','C','SUB','ENV','LFO','MACRO','MATRIX','PATCH'];
+const WAVE_TABS=['A','B','C','SUB','ENV','LFO','FX','MACRO','MATRIX','PATCH'];
 const srcLabel=s=>s.replace(/^env/,'ENV').replace(/^lfo/,'LFO').replace(/^m(\d)$/,'M$1').toUpperCase();
 function waveLabel(v,path){
   let m=path.match(/^osc(\d)\.(\w+)$/);const P=WAVE_PARAMS[WAVE_INDEX.get(path)];
   if(m)return 'ABC'[+m[1]-1]+' '+P[1];
   m=path.match(/^(env|lfo)(\d)\./);if(m)return m[1].toUpperCase()+m[2]+' '+P[1];
+  m=path.match(/^(dist|chorus|delay|eq|comp)\./);if(m)return m[1]+' '+P[1];
   m=path.match(/^m(\d)$/);if(m)return v.macroNames[+m[1]-1];
   return P[1];
 }
 function waveText(P,x){
   const c=P[5];
+  if(/^(eq\.|comp\.(thresh|gain))/.test(P[0]))return (x>0?'+':'')+x.toFixed(1)+' dB';
+  if(P[0]==='comp.ratio')return x.toFixed(1)+':1';
   if(c==='time')return x<1?Math.round(x*1000)+' ms':x.toFixed(2)+' s';
   if(c==='log')return x>=1000?(x/1000).toFixed(x>=10000?1:2)+'k':x<10?x.toFixed(2):String(Math.round(x));
   if(c==='int')return (x>0&&P[2]<0?'+':'')+x;
@@ -146,8 +149,20 @@ function waveEditor(f,owner){
     else if(t==='ENV')for(let e=1;e<=WAVE_ENVS;e++)body.append(group(`ENV${e}`+(e===1?' (also sub and noise)':''),...['a','d','s','r'].map(k=>K(`env${e}.${k}`))));
     else if(t==='LFO')for(let l=1;l<=WAVE_LFOS;l++){const L=v.lfo[l-1];
       body.append(el('div',{className:'wave-group'},el('h4',{textContent:'LFO'+l}),el('div',{className:'wave-row'},
-        choice('shape',LFO_SHAPES,()=>L.shape,x=>{L.shape=x;edited()}),toggle('retrig',()=>L.retrig,x=>{L.retrig=x;edited()})),
+        choice('shape',LFO_SHAPES,()=>L.shape,x=>{L.shape=x;edited()}),toggle('retrig',()=>L.retrig,x=>{L.retrig=x;edited()}),
+        choice('sync',Object.keys(LFO_SYNCS),()=>L.sync,x=>{L.sync=x;edited()})),
         el('div',{className:'knobs'},K(`lfo${l}.rate`),K(`lfo${l}.phase`))))}
+    else if(t==='FX'){
+      // the rack, in Serum's order; its knobs take macros from the matrix (the rack is shared by every note)
+      const fx=v.fx,head=(k,label,...extra)=>el('div',{className:'wave-row'},toggle(label,()=>fx[k].on,x=>{fx[k].on=x;edited()}),...extra);
+      body.append(el('p',{className:'wave-hint',textContent:'The rack runs on the patch\'s summed voices. Macros can drive its knobs; per-note sources cannot.'}),
+        el('div',{className:'wave-group'},head('dist','distortion',choice('mode',DIST_MODES,()=>fx.dist.mode,x=>{fx.dist.mode=x;edited()})),el('div',{className:'knobs'},K('dist.drive'),K('dist.mix'))),
+        el('div',{className:'wave-group'},head('chorus','chorus'),el('div',{className:'knobs'},K('chorus.rate'),K('chorus.depth'),K('chorus.mix'))),
+        el('div',{className:'wave-group'},head('delay','delay',choice('sync',Object.keys(DELAY_SYNCS),()=>fx.delay.sync,x=>{fx.delay.sync=x;edited()}),
+          toggle('ping-pong',()=>fx.delay.ping,x=>{fx.delay.ping=x;edited()})),el('div',{className:'knobs'},K('delay.time'),K('delay.fb'),K('delay.tone'),K('delay.mix'))),
+        el('div',{className:'wave-group'},head('eq','eq'),el('div',{className:'knobs'},K('eq.low'),K('eq.high'))),
+        el('div',{className:'wave-group'},head('comp','compressor'),el('div',{className:'knobs'},K('comp.thresh'),K('comp.ratio'),K('comp.gain'))));
+    }
     else if(t==='MACRO'){
       const ks=[];for(let m=1;m<=WAVE_MACROS;m++){const kb=K('m'+m),name=el('input',{value:v.macroNames[m-1],className:'wave-name',ariaLabel:'macro '+m+' name'});
         name.onchange=()=>{v.macroNames[m-1]=name.value.slice(0,16)||'macro '+m;kb.querySelector('span').textContent=v.macroNames[m-1];edited()};

@@ -413,6 +413,12 @@ const WAVE_OSCS=3,WAVE_ENVS=3,WAVE_LFOS=4,WAVE_MACROS=8,WAVE_HARMS=32;
 const WAVE_TABLES=['basic','harmonics','sweep','pulse','vocal','organ'];
 const WAVE_FILTERS=['off','lp12','lp24','hp12','hp24','bp','notch','peak'];
 const LFO_SHAPES=['sine','tri','saw up','saw down','square','s&h','smooth'];
+// Tempo divisions, in beats: LFOs and the delay lock to the machine's bpm (120 without a bpm lock).
+const LFO_SYNCS={off:0,'1/32':1/8,'1/16':1/4,'1/8T':1/3,'1/8':1/2,'1/4T':2/3,'1/4':1,'1/2':2,'1 bar':4,'2 bars':8,'4 bars':16};
+const DELAY_SYNCS={off:0,'1/16':1/4,'1/8T':1/3,'1/8':1/2,'1/8.':3/4,'1/4T':2/3,'1/4':1,'1/4.':3/2,'1/2':2};
+// The FX rack, after the voices of a patch are summed, in this order, as Serum's: each on or off.
+const WAVE_FX=['dist','chorus','delay','eq','comp'];
+const DIST_MODES=['tube','hard','fold','crush'];
 const WAVE_SOURCES=[...Array.from({length:WAVE_ENVS},(_,i)=>'env'+(i+1)),...Array.from({length:WAVE_LFOS},(_,i)=>'lfo'+(i+1)),
   ...Array.from({length:WAVE_MACROS},(_,i)=>'m'+(i+1)),'vel','note','rand'];
 // [path, label, min, max, default, curve]: lin, log (a ratio range), time (cubic, fine at the short end), int.
@@ -430,6 +436,11 @@ function waveParamList(){
   for(let i=1;i<=WAVE_LFOS;i++){const l='lfo'+i+'.';P.push([l+'rate','rate Hz',.02,40,2,'log'],[l+'phase','phase',0,1,0,'lin'])}
   for(let i=1;i<=WAVE_MACROS;i++)P.push(['m'+i,'macro '+i,0,1,0,'lin']);
   P.push(['vol','volume',0,1,.8,'lin'],['glide','glide',0,2,0,'time'],['gate','gate s',.02,8,.35,'time']);
+  P.push(['dist.drive','drive',0,1,.3,'lin'],['dist.mix','mix',0,1,1,'lin'],
+    ['chorus.rate','rate Hz',.05,5,.6,'log'],['chorus.depth','depth',0,1,.5,'lin'],['chorus.mix','mix',0,1,.5,'lin'],
+    ['delay.time','time',.01,2,.3,'time'],['delay.fb','feedback',0,.95,.4,'lin'],['delay.tone','tone',0,1,.6,'lin'],['delay.mix','mix',0,1,.25,'lin'],
+    ['eq.low','low dB',-15,15,0,'lin'],['eq.high','high dB',-15,15,0,'lin'],
+    ['comp.thresh','threshold',-40,0,-12,'lin'],['comp.ratio','ratio',1,20,4,'log'],['comp.gain','makeup',0,18,3,'lin']);
   return P;
 }
 const WAVE_PARAMS=waveParamList(),WAVE_INDEX=new Map(WAVE_PARAMS.map((p,i)=>[p[0],i]));
@@ -440,9 +451,10 @@ function wavePath(p,path){
   let m=path.match(/^(osc|env|lfo)(\d)\.(\w+)$/);if(m)return [p[m[1]][+m[2]-1],m[3]];
   m=path.match(/^m(\d)$/);if(m)return [p.macro,+m[1]-1];
   m=path.match(/^(sub|noise)\.(\w+)$/);if(m)return [p[m[1]],m[2]];
+  m=path.match(/^(dist|chorus|delay|eq|comp)\.(\w+)$/);if(m)return [(p.fx||{})[m[1]],m[2]];
   return [p,path];
 }
-const waveGet=(p,path)=>{const[o,k]=wavePath(p,path);return o[k]};
+const waveGet=(p,path)=>{const[o,k]=wavePath(p,path);return o?o[k]:undefined};
 const waveSet=(p,path,x)=>{const[o,k]=wavePath(p,path);o[k]=x};
 // Additive spectra: harmonic amplitudes (index k is harmonic k+1) for each frame of each built-in table.
 function waveSpectra(name,user){
@@ -517,15 +529,64 @@ function lfoAt(shape,ph,l){
     default:return .5-.5*Math.cos(TAU*ph);
   }
 }
+
+/* the FX rack: distortion, chorus, delay, EQ, compressor, run on a patch's summed voices */
+const FX_IDX=WAVE_PARAMS.map((P,i)=>/^(dist|chorus|delay|eq|comp)\./.test(P[0])?i:-1).filter(i=>i>=0);
+const FXI=Object.fromEntries(FX_IDX.map(i=>[WAVE_PARAMS[i][0],i]));
+const MAC0=WAVE_ENVS+WAVE_LFOS;
+function newFxState(fs){
+  // the delay's 2 s lines are made the first time a patch turns its delay on
+  return {held:[0,0],hc:0,cb:[new Float32Array(4096),new Float32Array(4096)],cw:0,cph:0,db:null,dw:0,dlp:[0,0],
+    eq:[[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]],eqKey:'',eqc:null,env:0};
+}
+const fxTail=cp=>cp.fxOn[2]?2+12*cp.val[FXI['delay.fb']]:cp.fxOn[1]?.1:0;
+// RBJ shelving biquad coefficients
+function shelf(f,db,fs,high){const A=Math.pow(10,db/40),w=TAU*f/fs,cs=Math.cos(w),sn=Math.sin(w),al=sn/2*Math.SQRT2,sq=2*Math.sqrt(A)*al;
+  let b0,b1,b2,a0,a1,a2;
+  if(high){b0=A*((A+1)+(A-1)*cs+sq);b1=-2*A*((A-1)+(A+1)*cs);b2=A*((A+1)+(A-1)*cs-sq);a0=(A+1)-(A-1)*cs+sq;a1=2*((A-1)-(A+1)*cs);a2=(A+1)-(A-1)*cs-sq}
+  else{b0=A*((A+1)-(A-1)*cs+sq);b1=2*A*((A-1)-(A+1)*cs);b2=A*((A+1)-(A-1)*cs-sq);a0=(A+1)+(A-1)*cs+sq;a1=-2*((A-1)+(A+1)*cs);a2=(A+1)+(A-1)*cs-sq}
+  return [b0/a0,b1/a0,b2/a0,a1/a0,a2/a0];
+}
+function biquad(c,z,x){const y=c[0]*x+c[1]*z[0]+c[2]*z[1]-c[3]*z[2]-c[4]*z[3];z[1]=z[0];z[0]=x;z[3]=z[2];z[2]=y;return y}
+function runFx(cp,L,R,n,bpm){
+  const fs=sampleRate,v=cp.fxv,st=cp.fxs;
+  // FX knobs take the macros' routes (a rack is shared by every voice, so per-note sources do not reach it)
+  for(const i of FX_IDX)v[i]=cp.base[i];
+  for(const[s,d,amt,bi]of cp.routes)if(s>=MAC0&&s<MAC0+WAVE_MACROS&&FXI[WAVE_PARAMS[d][0]]===d){const x=cp.base[MAC_P[s-MAC0]];v[d]+=(bi?x*2-1:x)*amt}
+  for(const i of FX_IDX)v[i]=waveDenorm(WAVE_PARAMS[i],v[i]);
+  if(cp.fxOn[0]){const dr=v[FXI['dist.drive']],mix=v[FXI['dist.mix']],g=1+dr*30,inv=1/Math.sqrt(g),mode=cp.distMode,q=Math.pow(2,16-dr*14),hold=1+Math.floor(dr*16);
+    for(let s=0;s<n;s++)for(let c=0;c<2;c++){const B=c?R:L,x=B[s];let y;
+      if(mode===0)y=Math.tanh(x*g)*inv;else if(mode===1)y=Math.max(-1,Math.min(1,x*g))*inv;else if(mode===2)y=Math.sin(x*g)*inv;
+      else{if(c===0&&++st.hc>=hold)st.hc=0;if(st.hc===0)st.held[c]=Math.round(x*q)/q;y=st.held[c]}
+      B[s]=x+(y-x)*mix}}
+  if(cp.fxOn[1]){const rate=v[FXI['chorus.rate']],dep=v[FXI['chorus.depth']]*.006*fs,mix=v[FXI['chorus.mix']],base=.012*fs,M=4095;
+    for(let s=0;s<n;s++){st.cph=(st.cph+rate/fs)%1;
+      for(let c=0;c<2;c++){const B=c?R:L,b=st.cb[c],x=B[s];b[st.cw&M]=x;const d=base+dep*(.5+.5*Math.sin(TAU*(st.cph+c*.25))),p=st.cw-d,i=Math.floor(p),f=p-i,w=b[i&M]+(b[(i+1)&M]-b[i&M])*f;
+        B[s]=x*(1-mix*.5)+w*mix}
+      st.cw++}}
+  if(cp.fxOn[2]){if(!st.db){const N=Math.ceil(fs*2.1);st.db=[new Float32Array(N),new Float32Array(N)]}const D=st.db[0].length,T=Math.min(D-2,Math.max(1,(cp.delaySync?60/bpm*cp.delaySync:v[FXI['delay.time']])*fs)),fb=v[FXI['delay.fb']],mix=v[FXI['delay.mix']],
+      tc=1-Math.exp(-TAU*Math.min(.45*fs,400*Math.pow(2,v[FXI['delay.tone']]*5.5))/fs),bl=st.db[0],br=st.db[1],ping=cp.ping;
+    for(let s=0;s<n;s++){let p=st.dw-T;if(p<0)p+=D;const i=Math.floor(p),f=p-i,j=(i+1)%D,dl=bl[i]+(bl[j]-bl[i])*f,dr=br[i]+(br[j]-br[i])*f;
+      st.dlp[0]+=(dl-st.dlp[0])*tc;st.dlp[1]+=(dr-st.dlp[1])*tc;const xl=L[s],xr=R[s];
+      if(ping){bl[st.dw]=(xl+xr)*.5+fb*st.dlp[1];br[st.dw]=fb*st.dlp[0]}else{bl[st.dw]=xl+fb*st.dlp[0];br[st.dw]=xr+fb*st.dlp[1]}
+      L[s]=xl+dl*mix;R[s]=xr+dr*mix;st.dw=(st.dw+1)%D}}
+  if(cp.fxOn[3]){const lo=v[FXI['eq.low']],hi=v[FXI['eq.high']],key=lo.toFixed(2)+'/'+hi.toFixed(2);
+    if(key!==st.eqKey){st.eqKey=key;st.eqc=[shelf(200,lo,fs,false),shelf(4000,hi,fs,true)]}
+    for(let s=0;s<n;s++){L[s]=biquad(st.eqc[1],st.eq[2],biquad(st.eqc[0],st.eq[0],L[s]));R[s]=biquad(st.eqc[1],st.eq[3],biquad(st.eqc[0],st.eq[1],R[s]))}}
+  if(cp.fxOn[4]){const th=v[FXI['comp.thresh']],ra=v[FXI['comp.ratio']],mk=Math.pow(10,v[FXI['comp.gain']]/20),at=Math.exp(-1/(.005*fs)),re=Math.exp(-1/(.12*fs));
+    let e=st.env;for(let s=0;s<n;s++){const x=Math.max(Math.abs(L[s]),Math.abs(R[s]));e=x>e?x+(e-x)*at:x+(e-x)*re;
+      const db=20*Math.log10(e+1e-9),over=db-th,g=(over>0?Math.pow(10,-over*(1-1/ra)/20):1)*mk;L[s]*=g;R[s]*=g}st.env=e}
+}
 class WaveSynth extends AudioWorkletProcessor{
   constructor(){
     super();
     this.tables={};for(const n of WAVE_TABLES)if(n!=='harmonics')this.tables[n]=buildTable(waveSpectra(n));
-    this.patches=new Map();this.queue=[];this.offs=[];this.frame=0;this.statAt=0;this.ver=0;
+    this.patches=new Map();this.bpm=120;this.queue=[];this.offs=[];this.frame=0;this.statAt=0;this.ver=0;
     this.voices=Array.from({length:WVOICES},()=>this.voice());
     this.mixL=new Float32Array(WSLICE);this.mixR=new Float32Array(WSLICE);this.ol=new Float32Array(WSLICE);this.or=new Float32Array(WSLICE);
     this.port.onmessage=e=>{const m=e.data;
       if(m.type==='patch')this.setPatch(m.id,m.p);else if(m.type==='note')this.queue.push(m);else if(m.type==='off')this.offs.push(m);
+      else if(m.type==='tempo')this.bpm=m.bpm>0?m.bpm:120;
       else if(m.type==='panic')for(const v of this.voices)v.on=false};
   }
   voice(){
@@ -543,7 +604,9 @@ class WaveSynth extends AudioWorkletProcessor{
     const tabs=p.osc.map((o,i)=>o.table==='harmonics'?(old&&old.harmKey[i]===JSON.stringify(o.harm)?old.tabs[i]:buildTable(waveSpectra('harmonics',o.harm))):this.tables[o.table]||this.tables.basic);
     this.patches.set(id,{id,ver:++this.ver,base,val,routes,modded:[...modded],tabs,harmKey:p.osc.map(o=>JSON.stringify(o.harm)),
       on:p.osc.map(o=>!!o.on),ftype:p.osc.map(o=>Math.max(0,WAVE_FILTERS.indexOf(o.filter))),
-      lfoShape:p.lfo.map(l=>Math.max(0,LFO_SHAPES.indexOf(l.shape))),lfoRetrig:p.lfo.map(l=>l.retrig!==false),last:old?old.last:null});
+      lfoShape:p.lfo.map(l=>Math.max(0,LFO_SHAPES.indexOf(l.shape))),lfoRetrig:p.lfo.map(l=>l.retrig!==false),lfoSync:p.lfo.map(l=>LFO_SYNCS[l.sync]||0),last:old?old.last:null,
+      fxOn:WAVE_FX.map(k=>!!(p.fx&&p.fx[k]&&p.fx[k].on)),distMode:Math.max(0,DIST_MODES.indexOf(p.fx?.dist?.mode)),delaySync:DELAY_SYNCS[p.fx?.delay?.sync]||0,ping:p.fx?.delay?.ping!==false,
+      busL:old?old.busL:new Float32Array(128),busR:old?old.busR:new Float32Array(128),fxs:old?old.fxs:newFxState(sampleRate),fxv:new Float64Array(NP),quiet:old?old.quiet:1e9,live:false});
     for(const v of this.voices)if(v.on&&v.cp&&v.cp.id===id)v.cp=this.patches.get(id);
   }
   start(m){
@@ -564,12 +627,13 @@ class WaveSynth extends AudioWorkletProcessor{
   }
   release(v){if(v.released)return;v.released=true;for(const o of v.osc){if(o.env.st)o.env.st=4;if(o.fenv.st)o.fenv.st=4}for(const e of v.envs)if(e.st)e.st=4}
   // One voice for one slice: sources, routed values, then the oscillators through their filters.
+  lfoRate(cp,vals,i){const b=cp.lfoSync[i];return b?this.bpm/60/b:vals[LFO_P[i][0]]}
   render(v,n,L,R,at){
     const cp=v.cp,vals=v.vals,src=v.src,fs=sampleRate,now=this.frame+at;
     if(!v.released&&now>=v.offAt)this.release(v);
     if(v.ver!==cp.ver){vals.set(cp.val);v.ver=cp.ver}
     for(let i=0;i<WAVE_ENVS;i++)src[i]=v.envs[i].lv;
-    for(let i=0;i<WAVE_LFOS;i++){const l=v.lfo[i];let ph=l.ph;if(!cp.lfoRetrig[i])ph=now/fs*vals[LFO_P[i][0]];ph=(ph+vals[LFO_P[i][1]])%1;src[WAVE_ENVS+i]=lfoAt(cp.lfoShape[i],ph,l)}
+    for(let i=0;i<WAVE_LFOS;i++){const l=v.lfo[i];let ph=l.ph;if(!cp.lfoRetrig[i])ph=now/fs*this.lfoRate(cp,vals,i);ph=(ph+vals[LFO_P[i][1]])%1;src[WAVE_ENVS+i]=lfoAt(cp.lfoShape[i],ph,l)}
     for(let i=0;i<WAVE_MACROS;i++)src[WAVE_ENVS+WAVE_LFOS+i]=cp.base[MAC_P[i]];
     src[SRC_VEL]=v.vel;src[SRC_NOTE]=Math.min(1,Math.max(0,(v.midi-24)/84));src[SRC_RAND]=v.rand;
     if(cp.routes.length){
@@ -577,7 +641,7 @@ class WaveSynth extends AudioWorkletProcessor{
       for(const[s,d,amt,bi]of cp.routes)vals[d]+=(bi?src[s]*2-1:src[s])*amt;
       for(const d of cp.modded)vals[d]=waveDenorm(WAVE_PARAMS[d],vals[d]);
     }
-    for(let i=0;i<WAVE_LFOS;i++){const l=v.lfo[i],nph=l.ph+vals[LFO_P[i][0]]*n/fs;if(nph>=1){l.prev=l.held;l.held=Math.random()}l.ph=nph%1}
+    for(let i=0;i<WAVE_LFOS;i++){const l=v.lfo[i],nph=l.ph+this.lfoRate(cp,vals,i)*n/fs;if(nph>=1){l.prev=l.held;l.held=Math.random()}l.ph=nph%1}
     const gl=vals[P_GLIDE],tt=(now-v.t0)/fs,midi=gl>0?v.midi+(v.from-v.midi)*Math.exp(-tt/(gl/4.6)):v.midi;
     if(gl>0&&Math.abs(v.from-v.midi)>1e-3&&tt>gl)v.from=v.midi;
     const ol=this.ol,or=this.or;
@@ -658,7 +722,14 @@ class WaveSynth extends AudioWorkletProcessor{
       const sl=Math.min(WSLICE,n-at),t=currentFrame+at+sl;
       if(this.queue.length){const keep=[];for(const m of this.queue){if(m.at<t)this.start(m);else keep.push(m)}this.queue=keep}
       if(this.offs.length){const keep=[];for(const m of this.offs){if(m.at<t){for(const v of this.voices)if(v.on&&v.key===m.key&&!v.released)this.release(v)}else keep.push(m)}this.offs=keep}
-      for(const v of this.voices)if(v.on){this.mixL.fill(0,0,sl);this.mixR.fill(0,0,sl);this.render(v,sl,L,R,at)}
+      for(const v of this.voices)if(v.on){const cp=v.cp;if(!cp.live){cp.live=true;cp.busL.fill(0);cp.busR.fill(0)}this.mixL.fill(0,0,sl);this.mixR.fill(0,0,sl);this.render(v,sl,cp.busL,cp.busR,at)}
+    }
+    // each patch's voices are summed on its bus and go through its FX rack; a rack with a tail (delay, chorus) keeps running
+    for(const cp of this.patches.values()){
+      if(cp.live)cp.quiet=0;else{if(cp.quiet>fxTail(cp)*sampleRate)continue;cp.quiet+=n;cp.busL.fill(0);cp.busR.fill(0)}
+      runFx(cp,cp.busL,cp.busR,n,this.bpm);
+      for(let s=0;s<n;s++){L[s]+=cp.busL[s];R[s]+=cp.busR[s]}
+      cp.live=false;
     }
     if(end-this.statAt>=sampleRate*.25){this.statAt=end;let nv=0;for(const v of this.voices)nv+=v.on?1:0;this.port.postMessage({type:'stats',voices:nv})}
     return true;
@@ -1193,6 +1264,12 @@ const WAVE_OSCS=3,WAVE_ENVS=3,WAVE_LFOS=4,WAVE_MACROS=8,WAVE_HARMS=32;
 const WAVE_TABLES=['basic','harmonics','sweep','pulse','vocal','organ'];
 const WAVE_FILTERS=['off','lp12','lp24','hp12','hp24','bp','notch','peak'];
 const LFO_SHAPES=['sine','tri','saw up','saw down','square','s&h','smooth'];
+// Tempo divisions, in beats: LFOs and the delay lock to the machine's bpm (120 without a bpm lock).
+const LFO_SYNCS={off:0,'1/32':1/8,'1/16':1/4,'1/8T':1/3,'1/8':1/2,'1/4T':2/3,'1/4':1,'1/2':2,'1 bar':4,'2 bars':8,'4 bars':16};
+const DELAY_SYNCS={off:0,'1/16':1/4,'1/8T':1/3,'1/8':1/2,'1/8.':3/4,'1/4T':2/3,'1/4':1,'1/4.':3/2,'1/2':2};
+// The FX rack, after the voices of a patch are summed, in this order, as Serum's: each on or off.
+const WAVE_FX=['dist','chorus','delay','eq','comp'];
+const DIST_MODES=['tube','hard','fold','crush'];
 const WAVE_SOURCES=[...Array.from({length:WAVE_ENVS},(_,i)=>'env'+(i+1)),...Array.from({length:WAVE_LFOS},(_,i)=>'lfo'+(i+1)),
   ...Array.from({length:WAVE_MACROS},(_,i)=>'m'+(i+1)),'vel','note','rand'];
 // [path, label, min, max, default, curve]: lin, log (a ratio range), time (cubic, fine at the short end), int.
@@ -1210,6 +1287,11 @@ function waveParamList(){
   for(let i=1;i<=WAVE_LFOS;i++){const l='lfo'+i+'.';P.push([l+'rate','rate Hz',.02,40,2,'log'],[l+'phase','phase',0,1,0,'lin'])}
   for(let i=1;i<=WAVE_MACROS;i++)P.push(['m'+i,'macro '+i,0,1,0,'lin']);
   P.push(['vol','volume',0,1,.8,'lin'],['glide','glide',0,2,0,'time'],['gate','gate s',.02,8,.35,'time']);
+  P.push(['dist.drive','drive',0,1,.3,'lin'],['dist.mix','mix',0,1,1,'lin'],
+    ['chorus.rate','rate Hz',.05,5,.6,'log'],['chorus.depth','depth',0,1,.5,'lin'],['chorus.mix','mix',0,1,.5,'lin'],
+    ['delay.time','time',.01,2,.3,'time'],['delay.fb','feedback',0,.95,.4,'lin'],['delay.tone','tone',0,1,.6,'lin'],['delay.mix','mix',0,1,.25,'lin'],
+    ['eq.low','low dB',-15,15,0,'lin'],['eq.high','high dB',-15,15,0,'lin'],
+    ['comp.thresh','threshold',-40,0,-12,'lin'],['comp.ratio','ratio',1,20,4,'log'],['comp.gain','makeup',0,18,3,'lin']);
   return P;
 }
 const WAVE_PARAMS=waveParamList(),WAVE_INDEX=new Map(WAVE_PARAMS.map((p,i)=>[p[0],i]));
@@ -1220,9 +1302,10 @@ function wavePath(p,path){
   let m=path.match(/^(osc|env|lfo)(\d)\.(\w+)$/);if(m)return [p[m[1]][+m[2]-1],m[3]];
   m=path.match(/^m(\d)$/);if(m)return [p.macro,+m[1]-1];
   m=path.match(/^(sub|noise)\.(\w+)$/);if(m)return [p[m[1]],m[2]];
+  m=path.match(/^(dist|chorus|delay|eq|comp)\.(\w+)$/);if(m)return [(p.fx||{})[m[1]],m[2]];
   return [p,path];
 }
-const waveGet=(p,path)=>{const[o,k]=wavePath(p,path);return o[k]};
+const waveGet=(p,path)=>{const[o,k]=wavePath(p,path);return o?o[k]:undefined};
 const waveSet=(p,path,x)=>{const[o,k]=wavePath(p,path);o[k]=x};
 // Additive spectra: harmonic amplitudes (index k is harmonic k+1) for each frame of each built-in table.
 function waveSpectra(name,user){
@@ -1242,10 +1325,11 @@ function waveSpectra(name,user){
 // A wave voice is the patch itself: {kind:'wave', note, octave, semi, level, velSense, name, osc[3], sub, noise,
 // env[3], lfo[4], macro[8], macroNames[8], mods[], vol, glide, gate}. Knob values live where wavePath puts them.
 function waveInit(){
-  const p={name:'init',osc:[],sub:{},noise:{},env:[],lfo:[],macro:[],macroNames:[],mods:[]};
+  const p={name:'init',osc:[],sub:{},noise:{},env:[],lfo:[],macro:[],macroNames:[],mods:[],
+    fx:{dist:{on:false,mode:'tube'},chorus:{on:false},delay:{on:false,sync:'1/8.',ping:true},eq:{on:false},comp:{on:false}}};
   for(let i=0;i<WAVE_OSCS;i++)p.osc.push({on:i===0,table:'basic',filter:'lp24',harm:Array.from({length:WAVE_HARMS},(_,k)=>k===0?1:0)});
   for(let i=0;i<WAVE_ENVS;i++)p.env.push({});
-  for(let i=0;i<WAVE_LFOS;i++)p.lfo.push({shape:'sine',retrig:true});
+  for(let i=0;i<WAVE_LFOS;i++)p.lfo.push({shape:'sine',retrig:true,sync:'off'});
   for(let i=0;i<WAVE_MACROS;i++){p.macro.push(0);p.macroNames.push('macro '+(i+1))}
   for(const P of WAVE_PARAMS)waveSet(p,P[0],P[4]);
   p.osc[0].pos=2/3; // a saw, as a synth's init patch starts
@@ -1258,7 +1342,9 @@ function wavePatch(j){
   for(const P of WAVE_PARAMS){let x;try{x=+waveGet(j,P[0])}catch(e){continue}if(Number.isFinite(x))waveSet(p,P[0],Math.min(P[3],Math.max(P[2],x)))}
   (j.osc||[]).slice(0,WAVE_OSCS).forEach((o,i)=>{if(!o)return;const q=p.osc[i];q.on=!!o.on;if(WAVE_TABLES.includes(o.table))q.table=o.table;if(WAVE_FILTERS.includes(o.filter))q.filter=o.filter;
     if(Array.isArray(o.harm))q.harm=Array.from({length:WAVE_HARMS},(_,k)=>Math.min(1,Math.max(0,+o.harm[k]||0)))});
-  (j.lfo||[]).slice(0,WAVE_LFOS).forEach((l,i)=>{if(!l)return;if(LFO_SHAPES.includes(l.shape))p.lfo[i].shape=l.shape;p.lfo[i].retrig=l.retrig!==false});
+  (j.lfo||[]).slice(0,WAVE_LFOS).forEach((l,i)=>{if(!l)return;if(LFO_SHAPES.includes(l.shape))p.lfo[i].shape=l.shape;p.lfo[i].retrig=l.retrig!==false;if(l.sync in LFO_SYNCS)p.lfo[i].sync=l.sync});
+  const fx=j.fx||{};for(const k of WAVE_FX){const q=fx[k];if(!q)continue;p.fx[k].on=!!q.on;
+    if(k==='dist'&&DIST_MODES.includes(q.mode))p.fx.dist.mode=q.mode;if(k==='delay'){if(q.sync in DELAY_SYNCS)p.fx.delay.sync=q.sync;p.fx.delay.ping=q.ping!==false}}
   (j.macroNames||[]).slice(0,WAVE_MACROS).forEach((n,i)=>{if(typeof n==='string')p.macroNames[i]=n.slice(0,16)});
   p.mods=(j.mods||[]).filter(m=>m&&WAVE_SOURCES.includes(m.src)&&WAVE_INDEX.has(m.dst)).map(m=>({src:m.src,dst:m.dst,amt:Math.min(1,Math.max(-1,+m.amt||0)),bi:!!m.bi,off:!!m.off}));
   return p;
@@ -1273,19 +1359,20 @@ function loadPatch(v,j){const keep={};for(const k of WAVE_VOICE_KEYS)keep[k]=v[k
 const WAVE_PRESETS={
   init:()=>waveInit(),
   'super saw':()=>{const p=waveInit();Object.assign(p.osc[0],{pos:.667,uni:7,detune:.45,spread:1,cut:6000,res:.15,famt:.25,fd:.9,fs:.4});
-    Object.assign(p.osc[1],{on:true,pos:.667,oct:-1,level:.45,uni:3,detune:.3,cut:4000});p.sub.level=.3;p.name='super saw';return p},
+    Object.assign(p.osc[1],{on:true,pos:.667,oct:-1,level:.45,uni:3,detune:.3,cut:4000});p.sub.level=.3;p.fx.chorus.on=true;p.fx.delay.on=true;p.fx.delay.mix=.18;p.name='super saw';return p},
   pluck:()=>{const p=waveInit();Object.assign(p.osc[0],{pos:.667,d:.35,s:0,r:.25,cut:400,res:.3,famt:.55,fd:.25,fs:0});
     Object.assign(p.osc[1],{on:true,pos:1,semi:12,level:.25,d:.2,s:0,r:.2,cut:900,famt:.5,fd:.15,fs:0});p.mods=[{src:'vel',dst:'osc1.cut',amt:.3,bi:false,off:false}];p.name='pluck';return p},
   pad:()=>{const p=waveInit();p.gate=1.2;Object.assign(p.osc[0],{table:'vocal',pos:.2,uni:5,detune:.35,a:.9,d:1.5,s:.8,r:2.2,cut:2500,filter:'lp12'});
     Object.assign(p.osc[1],{on:true,table:'sweep',pos:.6,oct:1,level:.3,uni:3,a:1.6,r:2.5,cut:3500});
     p.lfo[0].shape='tri';p.lfo[0].rate=.15;p.lfo[1].rate=.4;
-    p.mods=[{src:'lfo1',dst:'osc1.pos',amt:.6,bi:false,off:false},{src:'lfo2',dst:'osc2.cut',amt:.25,bi:true,off:false}];p.name='pad';return p},
+    p.mods=[{src:'lfo1',dst:'osc1.pos',amt:.6,bi:false,off:false},{src:'lfo2',dst:'osc2.cut',amt:.25,bi:true,off:false}];p.fx.chorus.on=true;p.fx.delay.on=true;p.fx.delay.sync='1/4.';p.fx.delay.fb=.55;p.name='pad';return p},
   'reese bass':()=>{const p=waveInit();Object.assign(p.osc[0],{pos:.667,oct:-1,uni:2,detune:.3,spread:.3,cut:900,res:.2,drive:.4});
     Object.assign(p.osc[1],{on:true,pos:.667,oct:-1,fine:14,level:.6,cut:900});p.sub.level=.5;p.sub.oct=-1;p.lfo[0].rate=.3;
     p.mods=[{src:'lfo1',dst:'osc1.cut',amt:.25,bi:true,off:false}];p.name='reese bass';return p},
   wobble:()=>{const p=waveInit();Object.assign(p.osc[0],{pos:.9,oct:-1,cut:250,res:.55,drive:.5});p.sub.level=.5;p.gate=.6;
     p.lfo[0].rate=3;p.lfo[0].shape='tri';p.macroNames[0]='wobble';p.macro[0]=.7;
-    p.mods=[{src:'lfo1',dst:'osc1.cut',amt:.55,bi:false,off:false},{src:'m1',dst:'lfo1.rate',amt:.4,bi:false,off:false}];p.name='wobble';return p},
+    p.lfo[0].sync='1/8';p.fx.dist.on=true;p.fx.dist.drive=.45;p.fx.comp.on=true;
+    p.mods=[{src:'lfo1',dst:'osc1.cut',amt:.55,bi:false,off:false},{src:'m1',dst:'dist.drive',amt:.5,bi:false,off:false}];p.name='wobble';return p},
   'additive bell':()=>{const p=waveInit();Object.assign(p.osc[0],{table:'harmonics',harm:[1,0,.6,0,0,.4,0,.25,0,0,.3,0,0,0,.2,0,0,0,0,.15,0,0,0,0,0,0,0,0,0,0,.1,0],
     d:2.5,s:0,r:2,filter:'off'});Object.assign(p.osc[1],{on:true,table:'organ',pos:.5,oct:2,level:.2,d:.6,s:0,r:.6,filter:'off'});p.gate=.1;p.name='additive bell';return p},
   'formant lead':()=>{const p=waveInit();Object.assign(p.osc[0],{table:'vocal',uni:3,detune:.2,cut:5000,glide:0});p.glide=.08;p.gate=.4;
@@ -1311,9 +1398,10 @@ function exportPatch(v){
 function importPatch(v,text){const j=JSON.parse(text);if(!j||typeof j!=='object'||!Array.isArray(j.osc))throw new Error('not a wave patch: no osc list');loadPatch(v,j)}
 
 /* the note path */
-let waveNode=null,waveVoices=0;const wavePosted=new WeakMap();let waveIds=0;const waveIdOf=new WeakMap();
+let waveNode=null,waveVoices=0;const wavePosted=new WeakMap();let waveBpm=0;let waveIds=0;const waveIdOf=new WeakMap();
 function wavePost(v){
   if(!waveNode)return 0;let id=waveIdOf.get(v);if(!id){id=++waveIds;waveIdOf.set(v,id)}
+  const bpm=S.bpm||120;if(bpm!==waveBpm){waveBpm=bpm;waveNode.port.postMessage({type:'tempo',bpm})}
   const s=JSON.stringify(v);if(wavePosted.get(v)!==s){wavePosted.set(v,s);waveNode.port.postMessage({type:'patch',id,p:JSON.parse(s)})}
   return id;
 }
@@ -2510,17 +2598,20 @@ function setRollVel(on){rollVel=on;if(roll?.laneRow)roll.laneRow.style.display=o
 // knob, or, armed, removes that route. The matrix tab lists every route to edit, bypass or delete.
 const waveSay=read=>{if(typeof showInteraction==='function')showInteraction(read)};
 const waveUi={tab:'A',arm:null,msg:''};
-const WAVE_TABS=['A','B','C','SUB','ENV','LFO','MACRO','MATRIX','PATCH'];
+const WAVE_TABS=['A','B','C','SUB','ENV','LFO','FX','MACRO','MATRIX','PATCH'];
 const srcLabel=s=>s.replace(/^env/,'ENV').replace(/^lfo/,'LFO').replace(/^m(\d)$/,'M$1').toUpperCase();
 function waveLabel(v,path){
   let m=path.match(/^osc(\d)\.(\w+)$/);const P=WAVE_PARAMS[WAVE_INDEX.get(path)];
   if(m)return 'ABC'[+m[1]-1]+' '+P[1];
   m=path.match(/^(env|lfo)(\d)\./);if(m)return m[1].toUpperCase()+m[2]+' '+P[1];
+  m=path.match(/^(dist|chorus|delay|eq|comp)\./);if(m)return m[1]+' '+P[1];
   m=path.match(/^m(\d)$/);if(m)return v.macroNames[+m[1]-1];
   return P[1];
 }
 function waveText(P,x){
   const c=P[5];
+  if(/^(eq\.|comp\.(thresh|gain))/.test(P[0]))return (x>0?'+':'')+x.toFixed(1)+' dB';
+  if(P[0]==='comp.ratio')return x.toFixed(1)+':1';
   if(c==='time')return x<1?Math.round(x*1000)+' ms':x.toFixed(2)+' s';
   if(c==='log')return x>=1000?(x/1000).toFixed(x>=10000?1:2)+'k':x<10?x.toFixed(2):String(Math.round(x));
   if(c==='int')return (x>0&&P[2]<0?'+':'')+x;
@@ -2652,8 +2743,20 @@ function waveEditor(f,owner){
     else if(t==='ENV')for(let e=1;e<=WAVE_ENVS;e++)body.append(group(`ENV${e}`+(e===1?' (also sub and noise)':''),...['a','d','s','r'].map(k=>K(`env${e}.${k}`))));
     else if(t==='LFO')for(let l=1;l<=WAVE_LFOS;l++){const L=v.lfo[l-1];
       body.append(el('div',{className:'wave-group'},el('h4',{textContent:'LFO'+l}),el('div',{className:'wave-row'},
-        choice('shape',LFO_SHAPES,()=>L.shape,x=>{L.shape=x;edited()}),toggle('retrig',()=>L.retrig,x=>{L.retrig=x;edited()})),
+        choice('shape',LFO_SHAPES,()=>L.shape,x=>{L.shape=x;edited()}),toggle('retrig',()=>L.retrig,x=>{L.retrig=x;edited()}),
+        choice('sync',Object.keys(LFO_SYNCS),()=>L.sync,x=>{L.sync=x;edited()})),
         el('div',{className:'knobs'},K(`lfo${l}.rate`),K(`lfo${l}.phase`))))}
+    else if(t==='FX'){
+      // the rack, in Serum's order; its knobs take macros from the matrix (the rack is shared by every note)
+      const fx=v.fx,head=(k,label,...extra)=>el('div',{className:'wave-row'},toggle(label,()=>fx[k].on,x=>{fx[k].on=x;edited()}),...extra);
+      body.append(el('p',{className:'wave-hint',textContent:'The rack runs on the patch\'s summed voices. Macros can drive its knobs; per-note sources cannot.'}),
+        el('div',{className:'wave-group'},head('dist','distortion',choice('mode',DIST_MODES,()=>fx.dist.mode,x=>{fx.dist.mode=x;edited()})),el('div',{className:'knobs'},K('dist.drive'),K('dist.mix'))),
+        el('div',{className:'wave-group'},head('chorus','chorus'),el('div',{className:'knobs'},K('chorus.rate'),K('chorus.depth'),K('chorus.mix'))),
+        el('div',{className:'wave-group'},head('delay','delay',choice('sync',Object.keys(DELAY_SYNCS),()=>fx.delay.sync,x=>{fx.delay.sync=x;edited()}),
+          toggle('ping-pong',()=>fx.delay.ping,x=>{fx.delay.ping=x;edited()})),el('div',{className:'knobs'},K('delay.time'),K('delay.fb'),K('delay.tone'),K('delay.mix'))),
+        el('div',{className:'wave-group'},head('eq','eq'),el('div',{className:'knobs'},K('eq.low'),K('eq.high'))),
+        el('div',{className:'wave-group'},head('comp','compressor'),el('div',{className:'knobs'},K('comp.thresh'),K('comp.ratio'),K('comp.gain'))));
+    }
     else if(t==='MACRO'){
       const ks=[];for(let m=1;m<=WAVE_MACROS;m++){const kb=K('m'+m),name=el('input',{value:v.macroNames[m-1],className:'wave-name',ariaLabel:'macro '+m+' name'});
         name.onchange=()=>{v.macroNames[m-1]=name.value.slice(0,16)||'macro '+m;kb.querySelector('span').textContent=v.macroNames[m-1];edited()};

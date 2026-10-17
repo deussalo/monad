@@ -2,10 +2,11 @@
 // A wave voice is the patch itself: {kind:'wave', note, octave, semi, level, velSense, name, osc[3], sub, noise,
 // env[3], lfo[4], macro[8], macroNames[8], mods[], vol, glide, gate}. Knob values live where wavePath puts them.
 function waveInit(){
-  const p={name:'init',osc:[],sub:{},noise:{},env:[],lfo:[],macro:[],macroNames:[],mods:[]};
+  const p={name:'init',osc:[],sub:{},noise:{},env:[],lfo:[],macro:[],macroNames:[],mods:[],
+    fx:{dist:{on:false,mode:'tube'},chorus:{on:false},delay:{on:false,sync:'1/8.',ping:true},eq:{on:false},comp:{on:false}}};
   for(let i=0;i<WAVE_OSCS;i++)p.osc.push({on:i===0,table:'basic',filter:'lp24',harm:Array.from({length:WAVE_HARMS},(_,k)=>k===0?1:0)});
   for(let i=0;i<WAVE_ENVS;i++)p.env.push({});
-  for(let i=0;i<WAVE_LFOS;i++)p.lfo.push({shape:'sine',retrig:true});
+  for(let i=0;i<WAVE_LFOS;i++)p.lfo.push({shape:'sine',retrig:true,sync:'off'});
   for(let i=0;i<WAVE_MACROS;i++){p.macro.push(0);p.macroNames.push('macro '+(i+1))}
   for(const P of WAVE_PARAMS)waveSet(p,P[0],P[4]);
   p.osc[0].pos=2/3; // a saw, as a synth's init patch starts
@@ -18,7 +19,9 @@ function wavePatch(j){
   for(const P of WAVE_PARAMS){let x;try{x=+waveGet(j,P[0])}catch(e){continue}if(Number.isFinite(x))waveSet(p,P[0],Math.min(P[3],Math.max(P[2],x)))}
   (j.osc||[]).slice(0,WAVE_OSCS).forEach((o,i)=>{if(!o)return;const q=p.osc[i];q.on=!!o.on;if(WAVE_TABLES.includes(o.table))q.table=o.table;if(WAVE_FILTERS.includes(o.filter))q.filter=o.filter;
     if(Array.isArray(o.harm))q.harm=Array.from({length:WAVE_HARMS},(_,k)=>Math.min(1,Math.max(0,+o.harm[k]||0)))});
-  (j.lfo||[]).slice(0,WAVE_LFOS).forEach((l,i)=>{if(!l)return;if(LFO_SHAPES.includes(l.shape))p.lfo[i].shape=l.shape;p.lfo[i].retrig=l.retrig!==false});
+  (j.lfo||[]).slice(0,WAVE_LFOS).forEach((l,i)=>{if(!l)return;if(LFO_SHAPES.includes(l.shape))p.lfo[i].shape=l.shape;p.lfo[i].retrig=l.retrig!==false;if(l.sync in LFO_SYNCS)p.lfo[i].sync=l.sync});
+  const fx=j.fx||{};for(const k of WAVE_FX){const q=fx[k];if(!q)continue;p.fx[k].on=!!q.on;
+    if(k==='dist'&&DIST_MODES.includes(q.mode))p.fx.dist.mode=q.mode;if(k==='delay'){if(q.sync in DELAY_SYNCS)p.fx.delay.sync=q.sync;p.fx.delay.ping=q.ping!==false}}
   (j.macroNames||[]).slice(0,WAVE_MACROS).forEach((n,i)=>{if(typeof n==='string')p.macroNames[i]=n.slice(0,16)});
   p.mods=(j.mods||[]).filter(m=>m&&WAVE_SOURCES.includes(m.src)&&WAVE_INDEX.has(m.dst)).map(m=>({src:m.src,dst:m.dst,amt:Math.min(1,Math.max(-1,+m.amt||0)),bi:!!m.bi,off:!!m.off}));
   return p;
@@ -33,19 +36,20 @@ function loadPatch(v,j){const keep={};for(const k of WAVE_VOICE_KEYS)keep[k]=v[k
 const WAVE_PRESETS={
   init:()=>waveInit(),
   'super saw':()=>{const p=waveInit();Object.assign(p.osc[0],{pos:.667,uni:7,detune:.45,spread:1,cut:6000,res:.15,famt:.25,fd:.9,fs:.4});
-    Object.assign(p.osc[1],{on:true,pos:.667,oct:-1,level:.45,uni:3,detune:.3,cut:4000});p.sub.level=.3;p.name='super saw';return p},
+    Object.assign(p.osc[1],{on:true,pos:.667,oct:-1,level:.45,uni:3,detune:.3,cut:4000});p.sub.level=.3;p.fx.chorus.on=true;p.fx.delay.on=true;p.fx.delay.mix=.18;p.name='super saw';return p},
   pluck:()=>{const p=waveInit();Object.assign(p.osc[0],{pos:.667,d:.35,s:0,r:.25,cut:400,res:.3,famt:.55,fd:.25,fs:0});
     Object.assign(p.osc[1],{on:true,pos:1,semi:12,level:.25,d:.2,s:0,r:.2,cut:900,famt:.5,fd:.15,fs:0});p.mods=[{src:'vel',dst:'osc1.cut',amt:.3,bi:false,off:false}];p.name='pluck';return p},
   pad:()=>{const p=waveInit();p.gate=1.2;Object.assign(p.osc[0],{table:'vocal',pos:.2,uni:5,detune:.35,a:.9,d:1.5,s:.8,r:2.2,cut:2500,filter:'lp12'});
     Object.assign(p.osc[1],{on:true,table:'sweep',pos:.6,oct:1,level:.3,uni:3,a:1.6,r:2.5,cut:3500});
     p.lfo[0].shape='tri';p.lfo[0].rate=.15;p.lfo[1].rate=.4;
-    p.mods=[{src:'lfo1',dst:'osc1.pos',amt:.6,bi:false,off:false},{src:'lfo2',dst:'osc2.cut',amt:.25,bi:true,off:false}];p.name='pad';return p},
+    p.mods=[{src:'lfo1',dst:'osc1.pos',amt:.6,bi:false,off:false},{src:'lfo2',dst:'osc2.cut',amt:.25,bi:true,off:false}];p.fx.chorus.on=true;p.fx.delay.on=true;p.fx.delay.sync='1/4.';p.fx.delay.fb=.55;p.name='pad';return p},
   'reese bass':()=>{const p=waveInit();Object.assign(p.osc[0],{pos:.667,oct:-1,uni:2,detune:.3,spread:.3,cut:900,res:.2,drive:.4});
     Object.assign(p.osc[1],{on:true,pos:.667,oct:-1,fine:14,level:.6,cut:900});p.sub.level=.5;p.sub.oct=-1;p.lfo[0].rate=.3;
     p.mods=[{src:'lfo1',dst:'osc1.cut',amt:.25,bi:true,off:false}];p.name='reese bass';return p},
   wobble:()=>{const p=waveInit();Object.assign(p.osc[0],{pos:.9,oct:-1,cut:250,res:.55,drive:.5});p.sub.level=.5;p.gate=.6;
     p.lfo[0].rate=3;p.lfo[0].shape='tri';p.macroNames[0]='wobble';p.macro[0]=.7;
-    p.mods=[{src:'lfo1',dst:'osc1.cut',amt:.55,bi:false,off:false},{src:'m1',dst:'lfo1.rate',amt:.4,bi:false,off:false}];p.name='wobble';return p},
+    p.lfo[0].sync='1/8';p.fx.dist.on=true;p.fx.dist.drive=.45;p.fx.comp.on=true;
+    p.mods=[{src:'lfo1',dst:'osc1.cut',amt:.55,bi:false,off:false},{src:'m1',dst:'dist.drive',amt:.5,bi:false,off:false}];p.name='wobble';return p},
   'additive bell':()=>{const p=waveInit();Object.assign(p.osc[0],{table:'harmonics',harm:[1,0,.6,0,0,.4,0,.25,0,0,.3,0,0,0,.2,0,0,0,0,.15,0,0,0,0,0,0,0,0,0,0,.1,0],
     d:2.5,s:0,r:2,filter:'off'});Object.assign(p.osc[1],{on:true,table:'organ',pos:.5,oct:2,level:.2,d:.6,s:0,r:.6,filter:'off'});p.gate=.1;p.name='additive bell';return p},
   'formant lead':()=>{const p=waveInit();Object.assign(p.osc[0],{table:'vocal',uni:3,detune:.2,cut:5000,glide:0});p.glide=.08;p.gate=.4;
@@ -71,9 +75,10 @@ function exportPatch(v){
 function importPatch(v,text){const j=JSON.parse(text);if(!j||typeof j!=='object'||!Array.isArray(j.osc))throw new Error('not a wave patch: no osc list');loadPatch(v,j)}
 
 /* the note path */
-let waveNode=null,waveVoices=0;const wavePosted=new WeakMap();let waveIds=0;const waveIdOf=new WeakMap();
+let waveNode=null,waveVoices=0;const wavePosted=new WeakMap();let waveBpm=0;let waveIds=0;const waveIdOf=new WeakMap();
 function wavePost(v){
   if(!waveNode)return 0;let id=waveIdOf.get(v);if(!id){id=++waveIds;waveIdOf.set(v,id)}
+  const bpm=S.bpm||120;if(bpm!==waveBpm){waveBpm=bpm;waveNode.port.postMessage({type:'tempo',bpm})}
   const s=JSON.stringify(v);if(wavePosted.get(v)!==s){wavePosted.set(v,s);waveNode.port.postMessage({type:'patch',id,p:JSON.parse(s)})}
   return id;
 }
