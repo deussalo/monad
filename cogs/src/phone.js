@@ -245,7 +245,7 @@ const numSector=(icon,label,o,k,min,max,step,after)=>({icon,label,min,max,step,f
 const defSector=(icon,o,def,after)=>numSector(icon,def[1],o,def[0],def[2],def[3],def[4],after);
 const choiceSector=(icon,label,options,get,set,format=settingText)=>({icon,label,options,get,set,format,toggle:format===onOff});
 function voiceSectors(owner,withNote){
-  const v=owner.voice,out=[choiceSector('kind','voice',Object.keys(VOICES),()=>owner.voice.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense})},kindLabel)];
+  const v=owner.voice,out=[choiceSector('kind','voice',Object.keys(VOICES),()=>owner.voice.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense,...(v.note!=null?{note:v.note,octave:v.octave,semi:v.semi}:{})})},kindLabel)];
   for(const def of [...VOICE_DEFS[v.kind].filter(d=>withNote||d[0]!=='note').slice(0,BEZEL_PARAMS),COMMON_DEFS[0]])
     out.push(Array.isArray(def[2])?choiceSector(VOICE_ICON[def[0]],def[1],def[2],()=>v[def[0]],x=>{v[def[0]]=x}):defSector(VOICE_ICON[def[0]],v,def));
   return out;

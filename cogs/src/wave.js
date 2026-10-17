@@ -80,7 +80,7 @@ function exportPatch(v){
 function importPatch(v,text){const j=JSON.parse(text);if(!j||typeof j!=='object'||!Array.isArray(j.osc))throw new Error('not a wave patch: no osc list');loadPatch(v,j)}
 
 /* the note path */
-let waveNode=null,waveVoices=0,waveNotes=0;const wavePosted=new WeakMap();let waveBpm=0;let waveIds=0;const waveIdOf=new WeakMap();
+let waveNode=null,waveVoices=0,waveNotes=0,waveLast=null;const wavePosted=new WeakMap();let waveBpm=0;let waveIds=0;const waveIdOf=new WeakMap();
 function wavePost(v){
   if(!waveNode)return 0;let id=waveIdOf.get(v);if(!id){id=++waveIds;waveIdOf.set(v,id)}
   const bpm=S.bpm||120;if(bpm!==waveBpm){waveBpm=bpm;waveNode.port.postMessage({type:'tempo',bpm})}
@@ -88,7 +88,7 @@ function wavePost(v){
   return id;
 }
 function waveNote(v,midi,when,amp,pan,key,x,hold=0,dark=0){
-  const id=wavePost(v);if(!id)return;waveNotes++;
+  const id=wavePost(v);if(!id)return;waveNotes++;waveLast=voiceMidi(v,midi);
   waveNode.port.postMessage({type:'note',id,at:when*ac.sampleRate,key,midi:voiceMidi(v,midi),amp,vel:clamp(x??amp,0,1),pan,hold,dark});
 }
 function startWave(){

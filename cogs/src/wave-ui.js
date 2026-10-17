@@ -121,7 +121,7 @@ function curveEditor(m,edited){
   draw();return el('label',{className:'wave-choice'},el('span',{textContent:'curve'}),cv);
 }
 // A two-octave keyboard to play the patch while shaping it: hold a key to sustain, slide to play the next,
-// several fingers play a chord; ‹ › shift the octave.
+// several fingers play a chord; ‹ › shift the octave. The voice's octave and semitones transpose what it plays.
 const waveKeysAt={oct:4};
 function waveKeys(owner){
   const cv=el('canvas',{className:'wave-keys'}),H=56,box=el('div',{className:'wave-keybar'});
@@ -133,13 +133,14 @@ function waveKeys(owner){
     x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
     for(let i=0;i<14;i++){const m=base+12*Math.floor(i/7)+WHITE[i%7];x.fillStyle=on.has(m)?cs.getPropertyValue('--hot'):cs.getPropertyValue('--fg');x.fillRect(i*ww+1,0,ww-2,H)}
     for(let o=0;o<2;o++)for(const[k,after]of Object.entries(BLACK)){const m=base+12*o+ +k,xx=(o*7+after+1)*ww-ww*.3;x.fillStyle=on.has(m)?cs.getPropertyValue('--hot'):cs.getPropertyValue('--bg');x.fillRect(xx,0,ww*.6,H*.6)}
-    lab.textContent='C'+waveKeysAt.oct};
+    const v=owner.voice,sh=12*(v.octave||0)+(v.semi||0);lab.textContent='C'+waveKeysAt.oct+(sh?' '+(sh>0?'+':'')+sh:'');lab.title=sh?`the voice transposes by ${sh} semitones`:''};
   const noteAt=e=>{const r=cv.getBoundingClientRect(),{ww}=geom(),px=e.clientX-r.left,py=e.clientY-r.top,base=12*(waveKeysAt.oct+1);
     if(px<0||px>=ww*14)return null;
     if(py<H*.6)for(let o=0;o<2;o++)for(const[k,after]of Object.entries(BLACK)){const xx=(o*7+after+1)*ww-ww*.3;if(px>=xx&&px<xx+ww*.6)return base+12*o+ +k}
     const i=Math.floor(px/ww);return base+12*Math.floor(i/7)+WHITE[i%7]};
-  const on=(id,m)=>{if(!ac)initAudio();if(!ac||engineState!=='ready')return;const v=owner.voice,key=owner.id*128+m,shift=12*(v.octave||0)+(v.semi||0);
-    playVoice(v,m-shift,ac.currentTime+.005,.85*(v.level??.7),0,key,.8,8);held.set(id,{midi:m,key});buzz(4);draw()};
+  const on=(id,m)=>{if(!ac)initAudio();if(!ac||engineState!=='ready')return;const v=owner.voice,key=owner.id*128+m;
+    // a key is a MIDI note into the voice: its octave and semitones transpose it, as they do every note the voice plays
+    playVoice(v,m,ac.currentTime+.005,.85*(v.level??.7),0,key,.8,8);held.set(id,{midi:m,key});buzz(4);draw()};
   const off=id=>{const h=held.get(id);if(!h)return;held.delete(id);if(ac)damp(h.key,ac.currentTime);draw()};
   cv.style.touchAction='none';
   cv.onpointerdown=e=>{cv.setPointerCapture(e.pointerId);const m=noteAt(e);if(m!=null)on(e.pointerId,m)};
