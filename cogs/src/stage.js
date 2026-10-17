@@ -195,7 +195,7 @@ function sound(o,midi,key){
   if(!ac||engineState!=='ready')return;
   const when=ac.currentTime+.005,v=o.voice||o,amp=.85*v.level,pan=clamp(((o.x??o.x1)-view.x)/300,-.9,.9);
   if(o.f200)pluckSound(o,midi,o.lastU??.3,when,amp,pan,.7);
-  else if(v.kind==='synth')synth(v,midi,when,amp,pan,key,.7);else drum(v,when,amp,pan);
+  else playVoice(v,midi,when,amp,pan,key,.7);
 }
 const discReader=c=>W.readers.find(r=>segDist(c,r.x1,r.y1,r.x2,r.y2)<radius(c))||{id:0,x:c.x,voice:makeVoice('synth')};
 function audition(o,force){
@@ -1076,7 +1076,8 @@ function voiceRows(f,owner,withNote){
     else if(PITCH_KEYS.has(k))selRow(f,l,span(a,b),()=>String(v[k]),x=>{v[k]=+x;retune()},x=>(x>0?'+':'')+x);
     else if(Array.isArray(a))selRow(f,l,a,()=>v[k],x=>{v[k]=x;retune()});else numRow(f,l,a,b,s,...bind(v,k,changed),VOICES[v.kind][k]);
   }
-  if(withNote&&v.kind==='synth')roRow(f,'pitch',()=>noteName(voiceMidi(v,v.note)));
+  if(withNote&&(v.kind==='synth'||v.kind==='wave'))roRow(f,'pitch',()=>noteName(voiceMidi(v,v.note)));
+  if(v.kind==='wave')waveEditor(f,owner);
 }
 function buildInspector(){
   if(!inspector)return;

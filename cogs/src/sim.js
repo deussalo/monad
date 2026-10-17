@@ -39,7 +39,9 @@ const SCALES={chromatic:[0,1,2,3,4,5,6,7,8,9,10,11],major:[0,2,4,5,7,9,11],minor
 const VOICES={synth:{note:60,octave:0,semi:0,body:'bell',partials:8,bright:.6,even:1,bend:1,hard:.6,attack:0,decay:1.2,damp:.8},
   kick:{tune:52,sweep:3,pdecay:.045,decay:.35},snare:{tune:190,tone:.35,cutoff:1800,decay:.16},hat:{cutoff:7500,decay:.045},
   tom:{tune:110,sweep:1.6,pdecay:.08,tone:.15,decay:.4},clap:{cutoff:1300,spread:.011,decay:.25},rim:{tune:1700,decay:.06},
-  cowbell:{tune:560,decay:.3},wood:{tune:2200,decay:.04},cymbal:{cutoff:5500,tone:.4,decay:1.4}};
+  cowbell:{tune:560,decay:.3},wood:{tune:2200,decay:.04},cymbal:{cutoff:5500,tone:.4,decay:1.4},
+  // the wave synth's patch is built by waveVoice (wave.js); its own editor shows it, past these pitch rows
+  wave:{note:60,octave:0,semi:0}};
 const VOICE_DEFS={
   synth:[['note','note',12,108,1],['octave','octave',-3,3,1],['semi','semitones',-12,12,1],['body','body',Object.keys(BODIES)],['partials','partials',1,PARTIALS_MAX,1],
     ['bright','bright',0,1,.01],['even','even partials',0,1,.01],['bend','bend',0,1,.01],['hard','hard',0,1,.01],['attack','attack s',0,1,.005],['decay','decay s',.02,8,.01],['damp','damp',0,2,.01]],
@@ -51,10 +53,11 @@ const VOICE_DEFS={
   rim:[['tune','tune Hz',400,4000,10],['decay','decay s',.01,.5,.005]],
   cowbell:[['tune','tune Hz',200,1200,1],['decay','decay s',.02,2,.01]],
   wood:[['tune','tune Hz',500,5000,10],['decay','decay s',.01,.5,.005]],
-  cymbal:[['cutoff','cutoff Hz',1000,12000,10],['tone','tone',0,1,.01],['decay','decay s',.1,4,.01]]};
+  cymbal:[['cutoff','cutoff Hz',1000,12000,10],['tone','tone',0,1,.01],['decay','decay s',.1,4,.01]],
+  wave:[['note','note',12,108,1],['octave','octave',-3,3,1],['semi','semitones',-12,12,1]]};
 const COMMON_DEFS=[['level','level',0,1.5,.01],['velSense','vel sense',0,1,.01]];
-const DRUMS=Object.keys(VOICES).filter(k=>k!=='synth');
-const makeVoice=(kind,common={level:.7,velSense:.7})=>({...common,...VOICES[kind],kind});
+const DRUMS=Object.keys(VOICES).filter(k=>k!=='synth'&&k!=='wave');
+const makeVoice=(kind,common={level:.7,velSense:.7})=>kind==='wave'?waveVoice(null,common):({...common,...VOICES[kind],kind});
 // The room's musical face; the rest of SPACE and S is engineering, kept behind the advanced drawer.
 const ROOM_SPACE=['wet','size','decay','highMult','shimmer','freeze'],ROOM_S=['master','bpm','beats'];
 const LOOKAHEAD_MIN=.12;
@@ -200,7 +203,7 @@ function armHit(p,t){
   const vn=Math.abs(c.w*s*(-Math.sin(edge)*nx+Math.cos(edge)*ny));
   pad.hits++;pad.lastV=vn;pad.flash=arm.flash=t;flex(arm,t,vn);
   const v=pad.voice,key=pad.id*128+(v.note|0);
-  fire(v,t,vn,pad,'arm'+arm.id+'>pad'+pad.id,1,(when,amp,pan,vx,dark)=>v.kind==='synth'?synth(v,v.note,when,amp,pan,key,vx,0,dark):drum(v,when,amp,pan,dark));
+  fire(v,t,vn,pad,'arm'+arm.id+'>pad'+pad.id,1,(when,amp,pan,vx,dark)=>playVoice(v,v.note,when,amp,pan,key,vx,0,dark));
 }
 
 function circleCross(c,R,a0,dt,seg){
@@ -220,7 +223,7 @@ function dotCross(c,dot,rd,dt){
   rd.hits++;rd.lastV=hit.vn;rd.lastMidi=voiceMidi(rd.voice,midi);dot.flash=rd.flash=t;
   const v=rd.voice,key=rd.id*128+midi,hold=dot.len>1?dot.len*TAU/c.track.div/Math.abs(c.w):0;
   fire(v,t,hit.vn,hit,'cog'+c.id+'.ring'+dot.ring+'>reader'+rd.id,dot.v,
-    (when,amp,pan,vx,dark)=>v.kind==='synth'?synth(v,midi,when,amp,pan,key,vx,hold,dark):drum(v,when,amp,pan,dark));
+    (when,amp,pan,vx,dark)=>playVoice(v,midi,when,amp,pan,key,vx,hold,dark));
 }
 const stringLen=s=>Math.hypot(s.x2-s.x1,s.y2-s.y1);
 function stringMidi(s){
@@ -291,7 +294,7 @@ function initAudio(){
       channelCount:2,channelCountMode:'explicit',processorOptions:{voices:64,lines:16,space:{...SPACE}}});
     engineNode.port.onmessage=e=>{if(e.data.type==='stats')engineStats=e.data};
     engineNode.onprocessorerror=()=>{engineState='processor error'};
-    drumBus=ac.createGain();drumBus.connect(engineNode);engineNode.connect(master);
+    drumBus=ac.createGain();drumBus.connect(engineNode);engineNode.connect(master);startWave();
     engineState='ready';
   }).catch(err=>{engineState='failed: '+String(err.message).slice(0,160)});
   ac.resume();
@@ -303,8 +306,12 @@ function strike(f,g,t,when,amp,pan,key,contact,attack){
   strikes.push(when*ac.sampleRate,key,amp*.3,contact,attack,pan,f.length,...f,...g,...t);
 }
 // A held note rings for its length, then a damper takes it off over 60 ms.
-function damp(key,when){engineNode.port.postMessage({type:'damp',at:when*ac.sampleRate,key})}
-const voiceMidi=(v,midi)=>clamp(midi+(v.kind==='synth'?12*v.octave+v.semi:0),0,127);
+function damp(key,when){engineNode.port.postMessage({type:'damp',at:when*ac.sampleRate,key});waveNode?.port.postMessage({type:'off',at:when*ac.sampleRate,key})}
+// Every kind's way to sound: the modal synth, the wave synth, or a drum graph.
+function playVoice(v,midi,when,amp,pan,key,x,hold=0,dark=0){
+  if(v.kind==='synth')synth(v,midi,when,amp,pan,key,x,hold,dark);else if(v.kind==='wave')waveNote(v,midi,when,amp,pan,key,x,hold,dark);else drum(v,when,amp,pan,dark);
+}
+const voiceMidi=(v,midi)=>clamp(midi+(v.kind==='synth'||v.kind==='wave'?12*v.octave+v.semi:0),0,127);
 // Additive: `partials` ringing modes at the body's ratios, bent toward harmonic, each decaying by its ratio^-damp.
 function synth(v,midi,when,amp,pan,key,x,hold=0,dark=0){
   const F=BODIES[v.body],f0=hz(voiceMidi(v,midi)),f=[],g=[],t=[];let e=0;
@@ -423,6 +430,7 @@ function deserialize(j){
   const cog=(id,who)=>{const c=byId.get(id);if(!c)throw new Error(`${who}: no cog ${id}`);return c};
   const importedVoice=o=>{
     const v=o.voice;if(!VOICES[v.kind])throw new Error(`${o.id}: voice kind ${v.kind}`);
+    if(v.kind==='wave'){const keep={};for(const k of WAVE_VOICE_KEYS)if(v[k]!==undefined)keep[k]=v[k];return waveVoice(v,keep)}
     return {...makeVoice(v.kind),...v};
   };
   for(const c of cogs)if(c.track){const t=c.track;

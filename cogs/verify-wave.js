@@ -1,0 +1,131 @@
+// The wave synth: its worklet rendered offline (filters, modulation, every table), then its editor in desk.html:
+// knobs, routing by arming a source, the matrix, presets, the library, JSON export and import, undo and saving.
+const { chromium } = require(process.env.COGS_PW || '/srv/rig/rig/webapp/node_modules/.pnpm/playwright-core@1.64.0/node_modules/playwright-core');
+const path = require('path');
+const FILE = process.argv[2] || ('file://' + path.join(__dirname, 'desk.html'));
+const SHOTS = process.env.COGS_SHOTS || '';
+(async () => {
+  const b = await chromium.launch({ executablePath: (process.env.MONAD_CHROME || '/srv/rig/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome') });
+  let pass = true;
+  const check = (label, ok, got) => { if (!ok) pass = false; console.log(('  ' + label).padEnd(70), JSON.stringify(got), ok ? '✓' : '✗'); };
+  const is = (label, got, want) => check(label, JSON.stringify(got) === JSON.stringify(want), got);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const ctx = await b.newContext({ viewport: { width: 1440, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] });
+  const p = await ctx.newPage(), errs = [];
+  p.on('pageerror', e => errs.push(e.message));
+  const probe = (fn, arg) => p.evaluate(fn, arg);
+  const settle = async () => { await p.waitForFunction(() => !__cogs.pending); await wait(50); };
+  const shot = async name => { if (SHOTS) await p.screenshot({ path: path.join(SHOTS, name + '.png') }); };
+  await p.goto(FILE); await wait(500);
+  await p.mouse.click(40, 860); await wait(300);
+  await p.waitForFunction(() => __cogs.engine().state === 'ready' && __cogs.engine().ac === 'running', null, { timeout: 5000 });
+
+  console.log('WAVE WORKLET');
+  const off = await probe(async () => {
+    const url = 'data:text/javascript;charset=utf-8,' + encodeURIComponent(document.querySelector('#engine').textContent);
+    const render = async (patch, notes, secs = .5) => {
+      const ac = new OfflineAudioContext(2, Math.round(48000 * secs), 48000);
+      await ac.audioWorklet.addModule(url);
+      const n = new AudioWorkletNode(ac, 'cogs-wave', { numberOfInputs: 0, outputChannelCount: [2] });
+      n.connect(ac.destination);
+      // messages reach the audio thread while it is suspended, so the first note is in hand before it renders
+      ac.suspend(128 / 48000).then(async () => { n.port.postMessage({ type: 'patch', id: 1, p: patch });
+        for (const [at, midi, hold] of notes) n.port.postMessage({ type: 'note', id: 1, at: 256 + at * 48000, key: midi, midi, amp: .8, vel: .8, pan: 0, hold });
+        await new Promise(r => setTimeout(r, 100)); ac.resume(); });
+      const buf = await ac.startRendering(), L = buf.getChannelData(0), R = buf.getChannelData(1);
+      let e = 0, d = 0, pk = 0, side = 0; for (let i = 1; i < L.length; i++) { e += L[i] * L[i]; d += (L[i] - L[i - 1]) ** 2; pk = Math.max(pk, Math.abs(L[i]), Math.abs(R[i])); side += (L[i] - R[i]) ** 2; }
+      const win = k => { let s = 0; for (let i = k * 2400; i < (k + 1) * 2400; i++)s += L[i] * L[i]; return Math.sqrt(s / 2400); };
+      return { rms: Math.sqrt(e / L.length), bright: Math.sqrt(d / L.length) / Math.max(1e-9, Math.sqrt(e / L.length)), peak: pk, side: Math.sqrt(side / L.length), wins: Array.from({ length: Math.floor(L.length / 2400) }, (_, k) => win(k)), finite: [...L].every(Number.isFinite) };
+    };
+    const base = () => { const p = waveInit(); p.osc[0].pos = .667; return p; };
+    const out = {};
+    out.open = await render(base(), [[0, 57, 0]]);
+    const dark = base(); dark.osc[0].cut = 300; out.dark = await render(dark, [[0, 57, 0]]);
+    const lfo = base(); lfo.osc[0].cut = 300; lfo.lfo[0].rate = 6; lfo.mods = [{ src: 'lfo1', dst: 'osc1.cut', amt: .7 }]; out.lfo = await render(lfo, [[0, 57, 1]], 1);
+    const uni = base(); uni.osc[0].uni = 7; uni.osc[0].detune = .5; uni.osc[0].spread = 1; out.uni = await render(uni, [[0, 57, 0]]);
+    out.tables = {}; for (const t of WAVE_TABLES) { const q = base(); q.osc[0].table = t; q.osc[0].filter = 'off'; out.tables[t] = +(await render(q, [[0, 60, 0]], .2)).rms.toFixed(4); }
+    out.filters = {}; for (const f of WAVE_FILTERS) { const q = base(); q.osc[0].filter = f; q.osc[0].cut = 800; q.osc[0].res = .5; out.filters[f] = +(await render(q, [[0, 48, 0]], .2)).rms.toFixed(4); }
+    const gate = base(); gate.gate = .1; gate.osc[0].r = .05; out.gate = await render(gate, [[0, 57, 0]], .5);
+    const all = base(); all.osc.forEach(o => { o.on = true; o.level = .5; o.uni = 4; }); all.sub.level = .5; all.noise.level = .3; out.all = await render(all, [[0, 45, 0], [0, 52, 0], [0, 57, 0], [0, 61, 0]]);
+    out.presets = {}; for (const [k, f] of Object.entries(WAVE_PRESETS)) out.presets[k] = +(await render(waveVoice(f()), [[0, 57, .3]], .4)).rms.toFixed(4);
+    return out;
+  });
+  check('a saw note sounds, finite and below clipping', off.open.rms > .01 && off.open.finite && off.open.peak < 1, [off.open.rms, off.open.peak]);
+  check('cutoff 300 Hz darkens it', off.dark.bright < off.open.bright * .5, [off.open.bright, off.dark.bright]);
+  const sw = off.lfo.wins.slice(1, 18), spread = Math.max(...sw) / Math.max(1e-9, Math.min(...sw));
+  check('LFO1 routed to cutoff makes the level swing', spread > 1.5, +spread.toFixed(2));
+  check('7-voice unison with stereo spread is wide', off.uni.side > off.open.side * 5 + 1e-4, [off.open.side, off.uni.side]);
+  check('every table sounds', Object.values(off.tables).every(r => r > .005), off.tables);
+  check('every filter type sounds and stays finite', Object.entries(off.filters).every(([k, r]) => r > .001 && r < 1), off.filters);
+  const g = off.gate.wins;
+  check('the gate closes the note: silent after gate plus release', g[0] > .01 && g[g.length - 1] < 1e-4, [g[0], g[g.length - 1]]);
+  check('three oscillators with unison, sub and noise, four notes: no clipping', off.all.peak < 1 && off.all.rms > .02, [off.all.rms, off.all.peak]);
+  check('every factory preset sounds', Object.values(off.presets).every(r => r > .003), off.presets);
+
+  console.log('WAVE EDITOR');
+  await probe(() => { const j = __cogs.serialize(); j.cogs = []; j.arms = []; j.belts = []; j.strings = []; j.readers = [];
+    j.pads = [{ id: 1, x: 0, y: 0, r: 30, voice: { kind: 'wave', note: 62, level: .7, velSense: .7 } }]; j.view = { x: 0, y: 0 }; __cogs.deserialize(j); });
+  await p.click('[data-rail="select"]'); await wait(80);
+  const at = await probe(() => { const s = __cogs.toScreen({ x: 0, y: 0 }); return [s.x, s.y]; });
+  await p.mouse.click(...at); await wait(200);
+  const voice = () => probe(() => __cogs.serialize().pads[0].voice);
+  check('a pad with a wave voice selected: the editor shows', await probe(() => !!document.querySelector('#inspector .wave .knob')), await probe(() => __cogs.sel));
+  is('the saved voice was filled out to a full patch, keeping its note', await probe(() => { const v = __cogs.serialize().pads[0].voice; return [v.note, v.osc.length, v.lfo.length, v.macro.length, v.env.length]; }), [62, 3, 4, 8, 3]);
+  const knobAt = async path => probe(pa => { const k = document.querySelector(`#inspector .knob[data-path="${pa}"] canvas`); k.scrollIntoView({ block: 'center' }); const r = k.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }, path);
+  const dragKnob = async (path, dy) => { const [x, y] = await knobAt(path); await p.mouse.move(x, y); await p.mouse.down(); await p.mouse.move(x, y - dy, { steps: 8 }); await p.mouse.up(); await settle(); };
+  const u0 = await probe(() => __cogs.undos);
+  await dragKnob('osc1.res', 60);
+  const res = (await voice()).osc[0].res;
+  check('drag the A res knob up 60 px: res rises by 0.4', Math.abs(res - .5) < .03, res);
+  is('one knob drag is one undo step', await probe(() => __cogs.undos) - u0, 1);
+  await probe(() => __cogs.undo()); await wait(100);
+  is('undo puts it back', (await voice()).osc[0].res, .1);
+  await p.click('#inspector .wave-src button[data-src="lfo1"]');
+  is('tap LFO1: it is armed', await probe(() => document.querySelector('#inspector .wave-src button[data-src="lfo1"]').ariaPressed), 'true');
+  await dragKnob('osc1.pos', 45);
+  const m1 = (await voice()).mods;
+  check('armed, dragging wt pos draws a route LFO1 -> A wt pos', m1.length === 1 && m1[0].src === 'lfo1' && m1[0].dst === 'osc1.pos' && Math.abs(m1[0].amt - .3) < .03, m1);
+  is('the knob value is untouched by routing', (await voice()).osc[0].pos, 0);
+  await p.click('#inspector .wave-src button[data-src="lfo1"]');
+  // drag a chip onto a knob: Serum's drag and drop
+  const tgt = await knobAt('osc1.cut');
+  const chip2 = await probe(() => { const r = document.querySelector('#inspector .wave-src button[data-src="env2"]').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+  await p.mouse.move(...chip2); await p.mouse.down(); await p.mouse.move(...tgt, { steps: 10 }); await p.mouse.up(); await settle();
+  const m2 = (await voice()).mods;
+  check('the sources stay in view while the knobs scroll; drag the ENV2 chip onto cutoff: a route at half depth', m2.length === 2 && m2[1].src === 'env2' && m2[1].dst === 'osc1.cut' && m2[1].amt === .5, m2);
+  await shot('wave-01-osc');
+  await p.click('#inspector .wave-tabs button[data-tab="MATRIX"]'); await wait(100);
+  is('the matrix lists both routes', await probe(() => document.querySelectorAll('#inspector .wave-route').length), 2);
+  await shot('wave-02-matrix');
+  await p.click('#inspector .wave-route button[aria-label="delete route"]'); await settle();
+  is('delete one in the matrix: one left', (await voice()).mods.map(m => m.src), ['env2']);
+  await p.click('#inspector .wave-tabs button[data-tab="PATCH"]'); await wait(100);
+  await p.selectOption('#inspector .wave-choice select[aria-label="factory"]', 'wobble'); await settle();
+  const wob = await voice();
+  is('load the factory wobble: its routes and macro name, the pad keeps its note', [wob.name, wob.mods.length, wob.macroNames[0], wob.note], ['wobble', 2, 'wobble', 62]);
+  await p.click('#inspector button:text("save to library")'); await wait(100);
+  is('save to library: stored by name', await probe(() => Object.keys(JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k => k.endsWith('.patches')))))), ['wobble']);
+  await p.click('#inspector button:text("init")'); await settle();
+  is('init clears it', [(await voice()).name, (await voice()).mods.length], ['init', 0]);
+  await p.click('#inspector .wave-lib button:text("wobble")'); await settle();
+  is('load it back from the library', [(await voice()).name, (await voice()).mods.length], ['wobble', 2]);
+  await p.click('#inspector button:text("export")'); await wait(100);
+  const text = await p.inputValue('#inspector .wave textarea');
+  const exported = JSON.parse(text);
+  is('export writes the patch as JSON, without the part\'s pitch', [exported.cogsWave, exported.name, 'note' in exported, exported.osc.length], [1, 'wobble', false, 3]);
+  await p.fill('#inspector .wave textarea', JSON.stringify({ ...exported, name: 'edited', vol: .5 }));
+  await p.click('#inspector button:text("import text")'); await settle();
+  is('import text: the edited patch loads', [(await voice()).name, (await voice()).vol, (await voice()).mods.length], ['edited', .5, 2]);
+  await p.fill('#inspector .wave textarea', '{"nope":1}');
+  await p.click('#inspector button:text("import text")'); await wait(100);
+  check('a bad import is refused and said so', /import failed/.test(await probe(() => document.querySelector('#inspector .wave p.wave-hint:last-child').textContent)) && (await voice()).name === 'edited', await probe(() => document.querySelector('#inspector .wave p.wave-hint:last-child').textContent));
+  const again = await probe(() => { const j = __cogs.serialize(); __cogs.deserialize(JSON.parse(JSON.stringify(j))); return __cogs.serialize().pads[0].voice; });
+  is('the patch survives a save and load of the machine', JSON.stringify(again), JSON.stringify(await voice()));
+  await shot('wave-03-patch');
+  await p.mouse.click(...at); await wait(200);
+  await p.click('#inspector .wave-play'); await wait(400);
+  check('play sounds it in the live engine', (await probe(() => __cogs.engine().wave)) > 0, await probe(() => __cogs.engine().wave));
+  check('page errors', errs.length === 0, errs.slice(0, 3));
+  console.log(pass ? 'COGS WAVE: PASS' : 'COGS WAVE: FAIL');
+  await b.close(); process.exit(pass ? 0 : 1);
+})().catch(e => { console.error(e); process.exit(1); });

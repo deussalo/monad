@@ -103,3 +103,7 @@ Both builds keep the last 500 world states. A step is one finished action: it se
 - `engine.worklet.js` and `sim.js`: the audio worklet, the world, solver, audio, clock, persistence, demo and share.
 - `stage.js`: what both builds draw and do on the canvas: look, render, gestures, keys, the roll, the panel widgets and inspector, the frame loop.
 - `phone.js` / `desk.js`: each build's chrome. Each defines the hooks the stage calls: `onResize`, `stage`, `offStage`, `chromeHit`, `drawChrome`, `reveal`, `panelShown`, `inspectorLive`, `togglePanel`, `placeRoll`, `mount`, `PROBE`.
+
+## Wave synth
+
+A pad or reader voice of kind `wave` is a Serum-style synth (`wave.spec.js` registry, `wave.worklet.js` voices, `wave.js` patches and library, `wave-ui.js` editor). Three wavetable oscillators whose tables are built additively, each with its own amp envelope and its own filter with a filter envelope; sub and noise on ENV1; three envelopes, four LFOs and eight macros route to any knob. In the editor, tap a source chip to arm it and drag a knob to set its depth (double tap removes), or drag a chip onto a knob. The matrix tab edits every route; the patch tab saves to a library in local storage, loads factory presets, and exports and imports JSON. `SYNTH-PARITY.md` tracks parity with Serum 2.
