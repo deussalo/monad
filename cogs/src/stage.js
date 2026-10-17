@@ -139,7 +139,8 @@ function drawGhost(s){
   cx.globalAlpha=.55;cx.save();cx.setTransform(dpr*S.zoom,0,0,dpr*S.zoom,dpr*s.x,dpr*s.y);PX=1/S.zoom;
   drawArm({cog:{x:-24,y:0,th:0,w:0},a:0,r0:0,len:24});cx.restore();cx.globalAlpha=1;
 }
-const PART_KEYS={m:'motor',c:'cog',d:'disc',a:'arm',b:'belt',p:'pad',t:'string',r:'reader'},KEY_OF=Object.fromEntries(Object.entries(PART_KEYS).map(([k,v])=>[v,k]));
+// Two readers: the note reader plays a disc's rings as its notes, the comb plays them on its own tines.
+const PART_KEYS={m:'motor',c:'cog',d:'disc',a:'arm',b:'belt',p:'pad',t:'string',r:'reader',k:'comb'},KEY_OF=Object.fromEntries(Object.entries(PART_KEYS).map(([k,v])=>[v,k]));
 const PARTS=Object.values(PART_KEYS);
 const MODEL={
   motor:{n:12,x:0,y:0,th:.13,w:1,layer:0,motor:{rpm:30,revs:0},track:null},
@@ -153,7 +154,7 @@ function drawPartIcon(kind){
   else if(kind==='pad')drawPad({x:0,y:0,r:11,voice:{kind:'kick'}});
   else if(kind==='belt'){cx.strokeStyle=DIM;cx.lineWidth=PX;circle(-12,0,9);circle(14,0,6);cx.setLineDash([3,3]);strokes(-12,-9,14,-6,[[1.5,DIM]]);strokes(-12,9,14,6,[[1.5,DIM]]);cx.setLineDash([])}
   else if(kind==='string')drawString({x1:-20,y1:14,x2:20,y2:-14,kind:'string'});
-  else drawReader({x1:-17,y1:17,x2:17,y2:-17,tines:0});
+  else drawReader({x1:-17,y1:17,x2:17,y2:-17,tines:kind==='comb'?6:0});
 }
 const ICON_SCALE={disc:.235,cog:.82,motor:.82,pad:1.3};
 function bounds(){
@@ -197,7 +198,9 @@ function sound(o,midi,key){
   if(o.f200)pluckSound(o,midi,o.lastU??.3,when,amp,pan,.7);
   else playVoice(v,midi,when,amp,pan,key,.7);
 }
-const discReader=c=>W.readers.find(r=>segDist(c,r.x1,r.y1,r.x2,r.y2)<radius(c))||{id:0,x:c.x,voice:makeVoice('synth')};
+const readerVoice=()=>waveVoice(WAVE_PRESETS.pluck(),{level:.7,velSense:.7});
+let unseatedVoice=null;
+const discReader=c=>W.readers.find(r=>segDist(c,r.x1,r.y1,r.x2,r.y2)<radius(c))||{id:0,x:c.x,voice:unseatedVoice??=readerVoice()};
 function audition(o,force){
   const t=performance.now();if(!force&&t-ui.auditionAt<140)return;ui.auditionAt=t;
   if(o.f200)sound(o,stringMidi(o));
@@ -334,7 +337,8 @@ function newPart(kind,p){
   if(MODEL[kind])return {type:'cog',o:{id,x:p.x,y:p.y,n:kind==='disc'?48:12,motor:kind==='motor'?newMotor():null,turns:0,layer:0,th:0,w:0,
     track:kind==='disc'?newTrack():null}};
   if(kind==='pad')return {type:'pad',o:{id,x:p.x,y:p.y,r:12,voice:makeVoice('kick'),hits:0,lastV:0}};
-  if(kind==='reader')return {type:'reader',o:{id,x1:0,y1:0,x2:0,y2:0,voice:makeVoice('synth'),tines:0,combBase:60,combScale:'major',hits:0,lastV:0}};
+  // a new reader plays the wave synth's pluck; its patch sheet changes the sound
+  if(kind==='reader'||kind==='comb')return {type:'reader',o:{id,x1:0,y1:0,x2:0,y2:0,voice:readerVoice(),tines:kind==='comb'?12:0,combBase:60,combScale:'major',hits:0,lastV:0}};
   if(kind==='string')return {type:'string',o:{id,x1:0,y1:0,x2:0,y2:0,...STRING_DEFAULT,hits:0,lastV:0}};
   return {type:'arm',o:{id,cog:null,a:0,r0:0,len:4,flex:.5}};
 }
@@ -1121,7 +1125,6 @@ function buildInspector(){
     roRow(f,'last vn',()=>o.lastV.toFixed(1));
   }else if(sel&&sel.type==='reader'){
     voiceRows(f,o,false);
-    selRow(f,'reader mode',READER_MODES,()=>readerMode(o),mode=>{setReaderMode(o,mode);buildInspector();changed()});
     if(o.tines){
       numRow(f,'comb tines',1,36,1,...bind(o,'tines',changed),12);
       selRow(f,'comb note',MIDI_NOTES,()=>o.combBase,v=>{o.combBase=+v;changed()},noteName);

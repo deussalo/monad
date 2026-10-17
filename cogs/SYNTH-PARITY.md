@@ -12,24 +12,26 @@ logs what landed. Sources: Xfer's [Serum 2 What's New](https://static.xferrecord
 | Per-osc | unison up to 16, detune, blend, stack, warp ×2 | unison 8, detune, stereo, bend, phase, pan, per-osc amp ADSR, per-osc filter + filter ADSR | unison blend/stack, second warp, random phase knob |
 | Filters | 2 filters, series/parallel, many types, drive | per-osc SVF: lp12/24, hp12/24, bp, notch, peak; drive, key track | global filters with routing, comb/formant/ladder types |
 | Envelopes | 4 (ENV1 = amp), BPM sync, curves | 3 global mod envs (ENV1 also amp for sub/noise) + per-osc amp and filter envs | a 4th, curve shaping, BPM sync, legato modes |
-| LFOs | up to 10, path/2D/chaos/S&H, BPM sync, drawable | 4: sine, tri, saw up/down, square, S&H, smooth; retrig or free; rate and phase | BPM sync, drawable shapes, envelope/one-shot mode, more LFOs |
+| LFOs | up to 10, path/2D/chaos/S&H, BPM sync, drawable | 4: sine, tri, saw up/down, square, S&H, smooth; retrig or free; rate or tempo sync (1/32 to 4 bars), phase | drawable shapes, envelope/one-shot mode, chaos, more LFOs |
 | Macros | 8, assignable, as destinations | 8 named macros, any knob can take one | macro curve per route |
 | Mod matrix | any knob; bypass, reorder, curves, aux source | any knob, ±bipolar, bypass, delete; drag-and-drop and arm-and-drag | aux source (mod × mod), route curves, modulating route depth |
 | Voicing | poly/mono/legato, glide, voices | 16-voice poly, glide, gate length | mono/legato, glide curve, voice count knob |
-| FX | 13 effects on buses | none in the synth (the machine's room reverb follows) | distortion, chorus, delay, EQ, compressor… |
+| FX | 13 effects on buses, splitters, reorderable | per-patch rack: distortion (tube, hard, fold, crush), chorus, delay (tempo sync, ping-pong, tone), EQ shelves, compressor; macros drive it | hyper/dimension, phaser, flanger, filter FX, reverb per patch, reorder, multiband split |
 | Extras | arpeggiator, clip sequencer, preset browser, undo | patch library (save/load/delete), JSON import/export, factory presets, undo | arpeggiator, preset tags |
 
 ## Next, ranked
 
-1. FX rack on the synth output: distortion, chorus, delay (BPM-synced), then EQ and compressor.
-2. BPM sync for LFOs and envelopes from the machine's bpm lock.
-3. Aux sources and route curves in the matrix; a 4th envelope.
-4. Mono/legato modes, unison blend.
-5. More oscillator modes: spectral (live additive with partial modulation), and more warp modes (sync, FM from B, PWM).
-6. Drawable LFO shapes.
+1. Aux sources and route curves in the matrix; a 4th envelope.
+2. Mono/legato modes, unison blend.
+3. Hyper/dimension, phaser/flanger, FX reorder.
+4. More oscillator modes: spectral (live additive with partial modulation), and more warp modes (sync, FM from B, PWM).
+5. Drawable LFO shapes; envelope BPM sync.
 
 ## Log
 
 - 2026-10-17 03:30Z: first build. Wave voice kind; worklet with additive tables and mips, per-osc amp/filter envelopes and
   SVF filters, sub, noise, 3 envs, 4 LFOs, 8 macros, mod matrix; Serum-style knob editor with source chips (arm or drag),
   matrix tab, patch library, JSON export/import, 7 factory presets; `cogs/verify-wave.js`.
+- 2026-10-17 04:00Z (beat 1): FX rack per patch (distortion 4 modes, chorus, tempo-synced ping-pong delay with tone, EQ shelves,
+  compressor), macro routes into FX knobs, LFO tempo sync. Also from the operator: the reader and the comb are now two parts
+  on the shelf; new readers play the wave synth (pluck); the modal synth's bodies are tuned to equal temperament.

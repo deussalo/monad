@@ -29,10 +29,14 @@ const SPACE_DEFS=[['dry','dry',0,1,.001],['wet','wet',0,1.5,.001],['predelay','p
   ['freeze','freeze',0,1,1],['width','width',0,1.5,.01],['duck','duck',0,1,.01],
   ['lowCut','wet lo Hz',20,1000,1],['highCut','wet hi Hz',1500,20000,1]];
 
-const BODIES={harmonic:[1,2,3,4,5],bell:[1,1.183,1.506,2.0,2.514],plate:[1,1.594,2.136,2.653,3.156],
-  bar:[1,2.756,5.404,8.933,13.34],bowl:[1,2.32,4.25,6.63,9.38]};
-// Partials past a body's measured modes continue at harmonic spacing from its last mode.
-const bodyRatio=(F,k)=>k<F.length?F[k]:F[F.length-1]+k+1-F.length;
+// Each body's measured modes, tuned: a mode off the harmonic series is moved to the nearest equal-tempered interval
+// above the fundamental (bell: minor third, fifth, octave, major tenth), so every body plays in tune with the
+// harmonic one and with the scale; a mode at a whole multiple stays a harmonic.
+const tuneMode=r=>Math.abs(r-Math.round(r))<.02?Math.round(r):Math.pow(2,Math.round(12*Math.log2(r))/12);
+const BODIES=Object.fromEntries(Object.entries({harmonic:[1,2,3,4,5],bell:[1,1.183,1.506,2.0,2.514],plate:[1,1.594,2.136,2.653,3.156],
+  bar:[1,2.756,5.404,8.933,13.34],bowl:[1,2.32,4.25,6.63,9.38]}).map(([k,F])=>[k,F.map(tuneMode)]));
+// Partials past a body's measured modes continue on the harmonic series, from the first whole multiple above its last mode.
+const bodyRatio=(F,k)=>k<F.length?F[k]:Math.ceil(F[F.length-1]+1e-9)+k-F.length;
 const PARTIALS_MAX=12;
 const SCALES={chromatic:[0,1,2,3,4,5,6,7,8,9,10,11],major:[0,2,4,5,7,9,11],minor:[0,2,3,5,7,8,10],
   dorian:[0,2,3,5,7,9,10],pentatonic:[0,2,4,7,9],minpent:[0,3,5,7,10],whole:[0,2,4,6,8,10]};
@@ -80,9 +84,6 @@ const ringR=(c,i)=>{const n=trackRings(c.track),r=radius(c);return n>1?r*(.25+.6
 const scaleNote=(base,scale,i)=>{const sc=SCALES[scale];return base+sc[i%sc.length]+12*Math.floor(i/sc.length)};
 const ringNote=(t,i)=>scaleNote(trackBase(t),t.scale,i);
 const trimDots=t=>{const n=trackRings(t);t.dots=t.dots.filter(d=>d.ring<n)};
-const READER_MODES=['disc notes','comb'];
-const readerMode=r=>r.tines?'comb':'disc notes';
-function setReaderMode(r,mode){r.tines=mode==='comb'?(r.tines||12):0}
 const motorRpm=c=>!c.motor?0:S.bpm&&c.motor.revs?c.motor.revs*S.bpm/S.beats:c.motor.rpm;
 function chance(...n){let h=(S.seed|0)^0x9e3779b9;for(const x of n){h=Math.imul(h^Math.round(x*4096),0x85ebca6b);h^=h>>>13;h=Math.imul(h,0xc2b2ae35);h^=h>>>16}return (h>>>0)/4294967296}
 

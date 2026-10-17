@@ -95,7 +95,7 @@ const GESTURE_READOUT={
   glyph:()=>panelShown()?'controls: open':`playback: ${clock.paused?'paused':'playing'}`,
   arm:a=>`arm length: ${Math.round(a.len)} px · angle: ${Math.round(wrap(a.a)*180/Math.PI)}°`,
   pad:(o,s,rim)=>rim?`pad radius: ${settingText(o.r)} px`:`pad voice: ${o.voice.kind}${o.voice.kind==='synth'?' · '+noteName(voiceMidi(o.voice,o.voice.note)):''}`,
-  span:(type,o,s,end)=>o.f200?`${o.kind} note: ${noteName(Math.round(stringMidi(o)))} · ${Math.round(stringLen(o))} px`:`reader ${end?'length':'mode'}: ${end?Math.round(stringLen(o))+' px':readerMode(o)+' · '+o.voice.kind}`,
+  span:(type,o,s,end)=>o.f200?`${o.kind} note: ${noteName(Math.round(stringMidi(o)))} · ${Math.round(stringLen(o))} px`:`${o.tines?'comb':'reader'} ${end?'length':'voice'}: ${end?Math.round(stringLen(o))+' px':o.voice.kind}`,
   belt:b=>`belt crossed: ${onOff(b.cross)}`,
   cog:c=>`${c.track?'disc':c.motor?'motor':'cog'} position: ${Math.round(c.x)}, ${Math.round(c.y)}`,
   notes:(c,s)=>{const cell=cellAt(c,screenToWorld(gesture?.last||s));return cell?`disc note: ${noteName(ringNote(c.track,cell.ring))}`:`disc notes: ${c.track.dots.length} pins`},
@@ -251,7 +251,7 @@ function voiceSectors(owner,withNote){
   return out;
 }
 function readerSectors(o){
-  const out=[...voiceSectors(o,false),choiceSector('comb','reader mode',READER_MODES,()=>readerMode(o),mode=>setReaderMode(o,mode))];
+  const out=voiceSectors(o,false);
   if(o.tines)out.push(numSector('comb','comb tines',o,'tines',1,36,1),numSector('fork','comb note',o,'combBase',12,108,1),
     choiceSector('scale','comb scale',Object.keys(SCALES),()=>o.combScale,x=>{o.combScale=x}));
   return out;
