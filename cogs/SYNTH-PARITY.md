@@ -65,3 +65,5 @@ CPU of the wave worklet, ms per second of audio on this box (node, min of 3; 8 h
   The part's dial for a synth is now just voice + volume (+ note on a pad) plus up to 12 knobs pinned from the editor
   with the ◎ DIAL chip (tap knobs to pin/unpin; saved in the patch as `dial`). Disc root/octave/range are stepped
   sliders on the dial, and octave/range get − + steppers on the notes sheet, like steps.
+- 2026-10-17 07:20Z (beat 7): the machine's canvas draws at most at 2× device pixels. A 3× phone (390×844, CPU
+  throttled 4×, default world playing): frame median 50 → 33 ms, p90 67 → 50 ms (44% of the pixels to raster).

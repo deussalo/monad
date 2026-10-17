@@ -1659,7 +1659,8 @@ let dpr=1,CW=0,CH=0,PX=1;
 const ZMIN=.1,ZMAX=8,DUR=380;
 function resize(){
   const r=cv.getBoundingClientRect();
-  dpr=devicePixelRatio||1;CW=r.width;CH=r.height;cv.width=Math.round(CW*dpr);cv.height=Math.round(CH*dpr);
+  dpr=Math.min(2,devicePixelRatio||1); // 3x screens draw at 2x: 44% of the pixels, no visible loss at arm's length
+  CW=r.width;CH=r.height;cv.width=Math.round(CW*dpr);cv.height=Math.round(CH*dpr);
   onResize();
 }
 const toScreen=p=>({x:(p.x-view.x)*S.zoom+CW/2,y:(p.y-view.y)*S.zoom+CH/2});
