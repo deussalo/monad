@@ -19,15 +19,31 @@ const S_DEFS=[['bpm','bpm lock',0,300,1],['beats','beats/bar',1,16,1],['seed','s
   ['vRef','v ref px/s',20,3000,1],['velCurve','vel curve',.1,3,.01],['master','master',0,1.5,.01],
   ['lookahead','lookahead s',.12,.5,.005],['maxStep','step rad',.005,.3,.005],['zoom','zoom',.1,8,.01],
   ['windows','windows',0,1,1],['ids','ids',0,1,1],['ratios','ratio snap',0,1,1]];
-const SPACE={dry:1,wet:.35,predelay:12,size:1,decay:2.5,lowMult:1.1,highMult:.55,lowCross:200,highCross:4500,
-  diffusion:.78,density:.55,modRate:.3,modDepth:.5,shimmer:0,shimmerPitch:12,freeze:0,width:1.1,duck:.3,lowCut:110,highCut:15000};
-const SPACE_DEFS=[['dry','dry',0,1,.001],['wet','wet',0,1.5,.001],['predelay','predelay ms',0,500,1],
-  ['size','size',.2,3,.01],['decay','T60 s',.3,60,.01],['lowMult','low decay',.25,3,.01],
-  ['highMult','high decay',.05,1.5,.01],['lowCross','low x Hz',40,1200,1],['highCross','high x Hz',800,14000,1],
-  ['diffusion','diffusion',0,1,.01],['density','density',0,1,.01],['modRate','mod Hz',.02,3,.01],
-  ['modDepth','mod ms',0,3,.01],['shimmer','shimmer',0,1,.01],['shimmerPitch','shim st',-12,24,1],
-  ['freeze','freeze',0,1,1],['width','width',0,1.5,.01],['duck','duck',0,1,.01],
-  ['lowCut','wet lo Hz',20,1000,1],['highCut','wet hi Hz',1500,20000,1]];
+// The room's reverb (verb.js) and the dry level the engine mixes beside it. Mode and color are indices into
+// VERB_MODES and VERB_COLORS.
+const SPACE={dry:1,...VERB_DEFAULT,mode:0,color:1,wet:.26,predelay:8,decay:2,size:.55,attack:.15};
+const SPACE_DEFS=[['dry','dry',0,1,.001],...VERB_DEFS];
+const SPACE_CHOICES={mode:VERB_MODES,color:VERB_COLORS};
+// A save from before this reverb carries the old one's keys: they map across (its predelay was always meant in ms;
+// its duck is gone) and the new keys take their defaults. Anything else is clamped to its range.
+function migrateSpace(j){
+  if(!j||typeof j!=='object')return {};
+  let o=j;
+  if(!('mode' in j)&&['highMult','lowMult','density','diffusion','duck','lowCross','highCross'].some(k=>k in j)){
+    const n=k=>Number.isFinite(+j[k])?+j[k]:undefined;o={...SPACE_DEFAULT};
+    for(const k of ['dry','wet','predelay','decay','modRate','shimmer','shimmerPitch','freeze','width','lowCut','highCut'])if(n(k)!==undefined)o[k]=n(k);
+    if(n('size')!==undefined)o.size=Math.log(Math.max(.2,n('size'))/.2)/Math.log(15);
+    if(n('highMult')!==undefined)o.highShelf=20*Math.log10(Math.max(1e-3,n('highMult')));
+    if(n('lowMult')!==undefined)o.bassMult=n('lowMult');
+    if(n('lowCross')!==undefined)o.bassXover=n('lowCross');
+    if(n('highCross')!==undefined)o.highFreq=n('highCross');
+    if(n('diffusion')!==undefined)o.early=n('diffusion');
+    if(n('density')!==undefined)o.late=n('density');
+    if(n('modDepth')!==undefined)o.modDepth=n('modDepth')/1.5;
+  }
+  const out={};for(const[k,,lo,hi]of SPACE_DEFS)if(Number.isFinite(+o[k]))out[k]=clamp(+o[k],lo,hi);
+  return out;
+}
 
 // Each body's measured modes, tuned: a mode off the harmonic series is moved to the nearest equal-tempered interval
 // above the fundamental (bell: minor third, fifth, octave, major tenth), so every body plays in tune with the
@@ -66,7 +82,7 @@ const DRUMS=Object.keys(VOICES).filter(k=>k!=='synth'&&k!=='wave');
 const KIND_LABEL={synth:'modal',wave:'synth'},kindLabel=k=>KIND_LABEL[k]||k;
 const makeVoice=(kind,common={level:.7,velSense:.7})=>kind==='wave'?waveVoice(WAVE_PRESETS.pluck(),common):({...common,...VOICES[kind],kind});
 // The room's musical face; the rest of SPACE and S is engineering, kept behind the advanced drawer.
-const ROOM_SPACE=['wet','size','decay','highMult','shimmer','freeze'],ROOM_S=['master','bpm','beats'];
+const ROOM_SPACE=['mode','color','wet','size','decay','highCut','shimmer','freeze'],ROOM_S=['master','bpm','beats'];
 const LOOKAHEAD_MIN=.12;
 const S_DEFAULT={...S},SPACE_DEFAULT={...SPACE};
 
@@ -298,7 +314,7 @@ function initAudio(){
   const url='data:text/javascript;charset=utf-8,'+encodeURIComponent($('#engine').textContent);
   ac.audioWorklet.addModule(url).then(()=>{
     engineNode=new AudioWorkletNode(ac,'cogs-engine',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[2],
-      channelCount:2,channelCountMode:'explicit',processorOptions:{voices:64,lines:16,space:{...SPACE}}});
+      channelCount:2,channelCountMode:'explicit',processorOptions:{voices:64,space:{...SPACE}}});
     engineNode.port.onmessage=e=>{if(e.data.type==='stats')engineStats=e.data};
     engineNode.onprocessorerror=()=>{engineState='processor error'};
     drumBus=ac.createGain();drumBus.connect(engineNode);engineNode.connect(master);startWave();
@@ -483,7 +499,7 @@ function deserialize(j){
   next.probes=probesIn(j,next);
   Object.assign(W,next);
   W.next=1+Math.max(0,...Object.values(next).flat().map(o=>o.id));
-  Object.assign(S,j.S);Object.assign(SPACE,j.SPACE);Object.assign(view,j.view);
+  Object.assign(S,j.S);Object.assign(SPACE,migrateSpace(j.SPACE));Object.assign(view,j.view);
   // Older saves schedule 60 ms ahead, too close for a phone's main thread: notes landed late and the groove dragged.
   S.lookahead=Math.max(S.lookahead,LOOKAHEAD_MIN);
   select(null);solve();applyAudioSettings();syncRows();changed();
