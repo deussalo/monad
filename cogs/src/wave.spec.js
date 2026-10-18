@@ -28,22 +28,22 @@ const WAVE_SOURCES=[...Array.from({length:WAVE_ENVS},(_,i)=>'env'+(i+1)),...Arra
 function waveParamList(){
   const P=[];
   for(let i=1;i<=WAVE_OSCS;i++){const o='osc'+i+'.';P.push(
-    [o+'pos','wt pos',0,1,0,'lin'],[o+'oct','octave',-4,4,0,'int'],[o+'semi','semi',-12,12,0,'int'],[o+'fine','fine ct',-100,100,0,'lin'],
+    [o+'pos','position',0,1,0,'lin'],[o+'oct','octave',-4,4,0,'int'],[o+'semi','semi',-12,12,0,'int'],[o+'fine','fine',-100,100,0,'lin'],
     [o+'level','level',0,1,i===1?.75:0,'lin'],[o+'pan','pan',-1,1,0,'lin'],[o+'uni','unison',1,8,1,'int'],[o+'detune','detune',0,1,.25,'lin'],[o+'blend','blend',0,1,.5,'lin'],
     [o+'spread','stereo',0,1,.8,'lin'],[o+'phase','phase',0,1,0,'lin'],[o+'warp','warp',-1,1,0,'lin'],[o+'warp2','warp 2',-1,1,0,'lin'],
     [o+'a','attack',0,8,.003,'time'],[o+'d','decay',0,8,.8,'time'],[o+'s','sustain',0,1,.7,'lin'],[o+'r','release',0,8,.3,'time'],
-    [o+'cut','cutoff',20,20000,20000,'log'],[o+'res','res',0,1,.1,'lin'],[o+'drive','drive',0,1,0,'lin'],[o+'key','key track',0,1,0,'lin'],
+    [o+'cut','cutoff',20,20000,20000,'log'],[o+'res','resonance',0,1,.1,'lin'],[o+'drive','drive',0,1,0,'lin'],[o+'key','key track',0,1,0,'lin'],
     [o+'famt','env amt',-1,1,0,'lin'],[o+'fa','f attack',0,8,.003,'time'],[o+'fd','f decay',0,8,.5,'time'],[o+'fs','f sustain',0,1,0,'lin'],[o+'fr','f release',0,8,.3,'time'])}
   P.push(['sub.level','sub',0,1,0,'lin'],['sub.oct','sub oct',-3,0,-1,'int'],['noise.level','noise',0,1,0,'lin'],['noise.color','color',0,1,.6,'lin']);
   for(let i=1;i<=WAVE_ENVS;i++){const e='env'+i+'.';P.push([e+'a','attack',0,8,.003,'time'],[e+'d','decay',0,8,.6,'time'],[e+'s','sustain',0,1,i===1?.8:0,'lin'],[e+'r','release',0,8,.3,'time'])}
-  for(let i=1;i<=WAVE_LFOS;i++){const l='lfo'+i+'.';P.push([l+'rate','rate Hz',.02,40,2,'log'],[l+'phase','phase',0,1,0,'lin'])}
+  for(let i=1;i<=WAVE_LFOS;i++){const l='lfo'+i+'.';P.push([l+'rate','rate',.02,40,2,'log'],[l+'phase','phase',0,1,0,'lin'])}
   for(let i=1;i<=WAVE_MACROS;i++)P.push(['m'+i,'macro '+i,0,1,0,'lin']);
-  P.push(['tune.oct','octave',-4,4,0,'int'],['tune.semi','semi',-12,12,0,'int'],['vol','volume',0,1,.8,'lin'],['glide','glide',0,2,0,'time'],['gate','gate s',.02,8,.35,'time']);
-  P.push(['hyper.voices','voices',1,7,4,'int'],['hyper.rate','rate Hz',.05,5,.5,'log'],['hyper.detune','detune',0,1,.4,'lin'],['hyper.mix','mix',0,1,.5,'lin'],['hyper.dim','dimension',0,1,.3,'lin'],
-    ['flanger.rate','rate Hz',.05,10,.3,'log'],['flanger.depth','depth',0,1,.7,'lin'],['flanger.fb','feedback',0,.95,.5,'lin'],['flanger.spread','stereo',0,1,.25,'lin'],['flanger.mix','mix',0,1,.5,'lin'],
-    ['phaser.rate','rate Hz',.05,10,.4,'log'],['phaser.depth','depth',0,1,.7,'lin'],['phaser.freq','freq',100,8000,800,'log'],['phaser.fb','feedback',0,.9,.4,'lin'],['phaser.spread','stereo',0,1,.25,'lin'],['phaser.mix','mix',0,1,.5,'lin'],
+  P.push(['tune.oct','octave',-4,4,0,'int'],['tune.semi','semi',-12,12,0,'int'],['vol','volume',0,1,.8,'lin'],['glide','glide',0,2,0,'time'],['gate','gate',.02,8,.35,'time']);
+  P.push(['hyper.voices','voices',1,7,4,'int'],['hyper.rate','rate',.05,5,.5,'log'],['hyper.detune','detune',0,1,.4,'lin'],['hyper.mix','mix',0,1,.5,'lin'],['hyper.dim','dimension',0,1,.3,'lin'],
+    ['flanger.rate','rate',.05,10,.3,'log'],['flanger.depth','depth',0,1,.7,'lin'],['flanger.fb','feedback',0,.95,.5,'lin'],['flanger.spread','stereo',0,1,.25,'lin'],['flanger.mix','mix',0,1,.5,'lin'],
+    ['phaser.rate','rate',.05,10,.4,'log'],['phaser.depth','depth',0,1,.7,'lin'],['phaser.freq','freq',100,8000,800,'log'],['phaser.fb','feedback',0,.9,.4,'lin'],['phaser.spread','stereo',0,1,.25,'lin'],['phaser.mix','mix',0,1,.5,'lin'],
     ['dist.drive','drive',0,1,.3,'lin'],['dist.mix','mix',0,1,1,'lin'],
-    ['chorus.rate','rate Hz',.05,5,.6,'log'],['chorus.depth','depth',0,1,.5,'lin'],['chorus.mix','mix',0,1,.5,'lin'],
+    ['chorus.rate','rate',.05,5,.6,'log'],['chorus.depth','depth',0,1,.5,'lin'],['chorus.mix','mix',0,1,.5,'lin'],
     ['delay.time','time',.01,2,.3,'time'],['delay.fb','feedback',0,.95,.4,'lin'],['delay.tone','tone',0,1,.6,'lin'],['delay.mix','mix',0,1,.25,'lin'],
     ['eq.low','low dB',-15,15,0,'lin'],['eq.high','high dB',-15,15,0,'lin'],
     ['comp.thresh','threshold',-40,0,-12,'lin'],['comp.ratio','ratio',1,20,4,'log'],['comp.gain','makeup',0,18,3,'lin']);

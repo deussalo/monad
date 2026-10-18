@@ -154,6 +154,11 @@ const SHOTS = process.env.COGS_SHOTS || '';
   is('one knob drag is one undo step', await probe(() => __cogs.undos) - u0, 1);
   await probe(() => __cogs.undo()); await wait(100);
   is('undo puts it back', (await voice()).osc[0].res, .1);
+  is('the editor opens on MAIN: the eight macros and the quick knobs, the part settings folded, no on-screen keyboard',
+    await probe(() => [document.querySelector('#inspector .wave').dataset.tab, document.querySelectorAll('#inspector .wave-body .knob[data-path^="m"]').length,
+      !!document.querySelector('#inspector .knob[data-path="osc1.cut"]'), document.querySelector('#inspector .wave-part')?.open, !!document.querySelector('#inspector .wave-keys')]), ['MAIN', 8, true, false, false]);
+  is('the synth\'s head connects Bluetooth MIDI in one tap', await probe(() => document.querySelector('#inspector .wave-top .wave-bt')?.ariaLabel), 'connect Bluetooth MIDI');
+  await p.click('#inspector .wave-tabs button[data-tab="A"]'); await wait(100);
   await p.click('#inspector .wave-src button[data-src="lfo1"]');
   is('tap LFO1: it is armed', await probe(() => document.querySelector('#inspector .wave-src button[data-src="lfo1"]').ariaPressed), 'true');
   await dragKnob('osc1.pos', 45);
@@ -169,6 +174,7 @@ const SHOTS = process.env.COGS_SHOTS || '';
   check('the sources stay in view while the knobs scroll; drag the ENV2 chip onto cutoff: a route at half depth', m2.length === 2 && m2[1].src === 'env2' && m2[1].dst === 'osc1.cut' && m2[1].amt === .5, m2);
   await shot('wave-01-osc');
   await p.click('#inspector .wave-tabs button[data-tab="FX"]'); await wait(100);
+  is('FX: a module that is off folds to its name', await probe(() => getComputedStyle(document.querySelector('#inspector .wave-fx[data-fx="delay"] .wave-fx-body')).display), 'none');
   await p.click('#inspector .wave-toggle:text("delay")'); await settle();
   await p.selectOption('#inspector .wave-choice select[aria-label="sync"]', '1/4'); await settle();
   is('FX tab: turn the delay on and sync it to 1/4', [(await voice()).fx.delay.on, (await voice()).fx.delay.sync], [true, '1/4']);
@@ -180,6 +186,9 @@ const SHOTS = process.env.COGS_SHOTS || '';
   await shot('wave-04-fx');
   await p.click('#inspector .wave-tabs button[data-tab="MATRIX"]'); await wait(100);
   is('the matrix lists both routes', await probe(() => document.querySelectorAll('#inspector .wave-route').length), 2);
+  is('a route shows source, knob and depth; ⋯ opens bipolar, bypass, aux and curve', [await probe(() => document.querySelector('#inspector .wave-route-more').hidden),
+    await (async () => { await p.click('#inspector .wave-route button[aria-label="more for this route"]'); return probe(() => document.querySelector('#inspector .wave-route-more').hidden); })()], [true, false]);
+  is('the sources hide on the matrix tab', await probe(() => getComputedStyle(document.querySelector('#inspector .wave-src')).display), 'none');
   await shot('wave-02-matrix');
   await p.click('#inspector .wave-route button[aria-label="delete route"]'); await settle();
   is('delete one in the matrix: one left', (await voice()).mods.map(m => m.src), ['env2']);
@@ -209,20 +218,20 @@ const SHOTS = process.env.COGS_SHOTS || '';
   await p.mouse.click(...at); await wait(200);
   await p.click('#inspector .wave-play'); await wait(400);
   check('play sounds it in the live engine', (await probe(() => __cogs.engine().wave)) > 0, await probe(() => __cogs.engine().wave));
+  const live = await probe(() => [waveMod.id === waveIdOf.get(__cogs.W.pads[0].voice), waveMod.at.has('osc1.cut'), waveMod.at.get('osc1.cut')]);
+  check('while it sounds, the worklet reports where its LFO has the cutoff, for the knob\'s moving dot', live[0] && live[1] && live[2] >= 0 && live[2] <= 1.6, live);
   // fine control: the same vertical drag, made 120 px to the side, moves the knob a third as far
   await p.click('#inspector .wave-tabs button[data-tab="A"]'); await wait(100);
   { await probe(() => { __cogs.W.pads[0].voice.osc[0].pos = .3; }); const P0 = .3; const [x, y] = await knobAt('osc1.pos'); await p.mouse.move(x, y); await p.mouse.down(); await p.mouse.move(x, y - 30, { steps: 6 }); await p.mouse.up(); await settle();
     const P1 = (await voice()).osc[0].pos; await p.mouse.move(x, y); await p.mouse.down(); await p.mouse.move(x + 120, y, { steps: 6 }); await p.mouse.move(x + 120, y - 30, { steps: 6 }); await p.mouse.up(); await settle();
     const P2 = (await voice()).osc[0].pos, coarse = P1 - P0, fine = P2 - P1;
     check('drag sideways for fine control: a third of the travel 120 px out', coarse > .15 && Math.abs(fine / coarse - 1 / 3) < .05, [+coarse.toFixed(3), +fine.toFixed(3)]); }
-  // the synth transposes itself: its octave and semi knobs (SUB tab, voice) move every note into it, keyboard or part
-  await p.click('#inspector .wave-tabs button[data-tab="SUB"]'); await wait(100);
+  // the synth transposes itself: its octave and semi knobs (VOICE tab) move every note into it, from MIDI or the part
+  await p.click('#inspector .wave-tabs button[data-tab="VOICE"]'); await wait(100);
   await dragKnob('tune.oct', 19); await dragKnob('tune.semi', 12);
   const tv = await voice();
   check('the synth\'s octave and semi knobs turn: +1 octave, a few semitones up', tv.tune.oct === 1 && tv.tune.semi > 0, tv.tune);
-  const kb = await p.$('#inspector .wave-keys'); await kb.scrollIntoViewIfNeeded(); const kr = await kb.boundingBox();
-  await p.mouse.move(kr.x + kr.width / 28, kr.y + kr.height * .85); await p.mouse.down(); await wait(80); await p.mouse.up(); await wait(80);
-  is('the keyboard sends its key as is (the synth transposes it) and its label says by how much', [await probe(() => __cogs.engine().waveLast), await probe(() => document.querySelector('#inspector .wave-oct').textContent)], [60, 'C4 +' + (12 * tv.tune.oct + tv.tune.semi)]);
+  is('a MIDI key goes in as sent (the synth transposes it inside)', await probe(async () => { midiMessage(0x90, 60, 100); await new Promise(r => setTimeout(r, 30)); midiMessage(0x80, 60, 0); return __cogs.engine().waveLast; }), 60);
   is('no octave or semitones rows for the part: they are the synth\'s', await probe(() => ['octave', 'semitones'].map(k => !!document.querySelector(`#inspector .row[data-k="${k}"]`))), [false, false]);
   const mig = await probe(() => { const j = __cogs.serialize(); j.pads[0].voice = { ...j.pads[0].voice, octave: -1, semi: 3, tune: { oct: 0, semi: 0 } }; __cogs.deserialize(j); return __cogs.serialize().pads[0].voice; });
   is('a part saved with its own octave and semitones: they fold into the synth\'s', [mig.octave, mig.semi, mig.tune.oct, mig.tune.semi], [0, 0, -1, 3]);
@@ -237,7 +246,7 @@ const SHOTS = process.env.COGS_SHOTS || '';
   await p.click('#inspector .wave-pin');
   console.log('MIDI IN');
   await p.mouse.click(...at); await wait(200);
-  is('the selected pad\'s sheet offers Bluetooth MIDI and MIDI in', await probe(() => [...document.querySelectorAll('#inspector .midi-row button')].map(b => b.textContent)), ['Bluetooth MIDI', 'MIDI in']);
+  is('the selected synth pad\'s sheet: Bluetooth MIDI in its head, no other MIDI row', await probe(() => [!!document.querySelector('#inspector .wave-top .wave-bt'), document.querySelectorAll('#inspector .midi-row').length]), [true, 0]);
   const mi = await probe(async () => { const n0 = __cogs.engine().waveNotes; midiMessage(0x90, 64, 100); await new Promise(r => setTimeout(r, 30));
     const on = [__cogs.engine().waveNotes - n0, __cogs.engine().waveLast, midi.held.has(64)];
     midiMessage(0xb0, 64, 127); midiMessage(0x80, 64, 0); const pedal = [midi.held.has(64), midi.sustained.has(64)];

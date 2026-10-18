@@ -89,7 +89,7 @@ function syncEditor(){syncRollBar();
   if(!panelShown()||!$('#dev').dataset.editor)return;
   if(!mode){togglePanel(false);return}
   if(editorOwner!==sel.o){const tucked=sheetMin();editorOwner=sel.o;togglePanel(true,mode);if(tucked)setSheetMin(true)}
-  const title=$('#editor-title'),labelled=`${sel.type==='cog'?'disc':sel.type} ${sel.o.id} · ${mode}`;
+  const title=$('#editor-title'),labelled=`${sel.type==='cog'?'disc':sel.type==='pit'?'box':sel.type} ${sel.o.id} · ${mode}`;
   if(title.textContent!==labelled)title.textContent=labelled;
 }
 const GESTURE_READOUT={

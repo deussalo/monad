@@ -106,4 +106,20 @@ Both builds keep the last 500 world states. A step is one finished action: it se
 
 ## Wave synth
 
-A pad or reader voice of kind `wave` is a Serum-style synth (`wave.spec.js` registry, `wave.worklet.js` voices, `wave.js` patches and library, `wave-ui.js` editor). Three wavetable oscillators whose tables are built additively, each with its own amp envelope and its own filter with a filter envelope; sub and noise on ENV1; three envelopes, four LFOs and eight macros route to any knob. In the editor, tap a source chip to arm it and drag a knob to set its depth (double tap removes), or drag a chip onto a knob. The matrix tab edits every route; the patch tab saves to a library in local storage, loads factory presets, and exports and imports JSON. `SYNTH-PARITY.md` tracks parity with Serum 2.
+A pad or reader voice of kind `wave` is a Serum-style synth (`wave.spec.js` registry, `wave.worklet.js` voices, `wave.js` patches and library, `wave-ui.js` editor). Three wavetable oscillators whose tables are built additively, each with its own amp envelope and its own filter with a filter envelope; sub and noise on ENV1; three envelopes, four LFOs and eight macros route to any knob. In the editor, tap a source chip to arm it and drag a knob to set its depth (double tap removes), or drag a chip onto a knob. The editor opens on MAIN: the eight macros and the knobs pinned to the part's dial (or a quick set: A cutoff, resonance, attack, release, detune, volume). Tabs in one row: MAIN, A, B, C, VOICE (pitch, volume, glide, voicing, sub, noise), MOD (envelopes and LFOs), FX, MATRIX, PATCH. The head holds ◀ patch ▶, play and a Bluetooth MIDI button; there is no on-screen keyboard. The part's own settings (kind, level, vel sense, note) fold under it. While a note sounds, each routed knob shows a dot where its modulation has it, reported by the worklet 30 times a second for the open patch. FX modules that are off fold to their name; a matrix route is one card, source → knob over its depth, with ⋯ for bipolar, bypass, aux and curve. Groups are filled cards, not hairlines. The patch tab saves to a library in local storage, loads factory presets, and exports and imports JSON.
+
+**One file.** The settings sheet (hold the glyph; the desk's panel) has **save file** and **open file**. A `.cogs.json` file holds the whole machine (parts, their patches, the settings) and the patch library. Opening one checks the machine whole before replacing it (one undo step), then merges the library: a patch already there is skipped, a different one under a taken name is kept as "name (2)". Open file also takes an old machine export or a single synth patch. `SYNTH-PARITY.md` tracks parity with Serum 2.
+
+## Ball pit (the box)
+
+Monad's container of balls, as a part: **box** on the shelf (key `o`, type `pit` in saves). Tap inside a box to drop a
+ball, drag to throw one the way the finger went; on a ball, a tap flicks it, a drag throws it, a hold takes it out.
+Drag the wall to move the box with its balls; the corner of a selected box sizes it. Each ball is a note: a new one
+takes the next note of the box's palette (a shuffled bag, every note before one repeats), and its size from its
+pitch, low notes big. A ball sounds when it hits a wall or another ball, harder for a harder hit, on the box's voice
+(the synth by default, or the modal, or a drum). Arms sweeping through the box bat the balls and cogs in it shove them
+along their rims; those contacts are silent. The box's sheet has the palette as a two-octave keyboard (lit keys are
+its notes, in each note's ball colour) above the voice; a note taken off moves its balls to the nearest one left.
+Balls step at 240 Hz on the sim's clock, ahead of the picture by the lookahead, and are drawn along a short trail at
+the heard time; a dropped ball shows at once where it was dropped. Ball positions are not undo steps: an undo or redo
+keeps the balls in the box where they are, and one that comes back returns where it was. `cogs/verify-pit.js`.

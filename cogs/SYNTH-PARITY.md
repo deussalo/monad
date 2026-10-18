@@ -23,7 +23,7 @@ logs what landed. Sources: Xfer's [Serum 2 What's New](https://static.xferrecord
 
 1. Oscillator modes: spectral (live additive with partial modulation); a choosable warp modulator source.
 2. Drawable LFO shapes; envelope BPM sync and segment curves.
-3. Live mod display on knobs (moving dot), mod-wheel/aftertouch-like sources (e.g. reader hit speed).
+3. Mod-wheel/aftertouch-like sources (e.g. reader hit speed).
 
 ## Log
 
@@ -77,3 +77,9 @@ CPU of the wave worklet, ms per second of audio on this box (node, min of 3; 8 h
   one cycle per turn, computed in the worklet on the notes' clock (a 64-point table read at a phase linear in the frame;
   posted once per change). This is the drawable, tempo-synced LFO the parity table lacked, and it reaches FX knobs
   through macros. See MOTION-PARTS.md.
+- 2026-10-17 (UX pass, operator): the editor opens on MAIN (macros and the dial's knobs, or a quick set); tabs in one row
+  (MAIN A B C VOICE MOD FX MATRIX PATCH); the sources in two rows, all in view, coloured by kind and hidden on MATRIX and
+  PATCH; the on-screen keyboard is gone, a Bluetooth MIDI button sits in the head beside play; the part's kind, level and
+  vel sense fold away. Live mod display: a dot on each routed knob, where the newest note has it. FX modules fold when
+  off; matrix routes are cards with ⋯ for the rarer settings; plainer labels (position, resonance, rate with Hz); cards,
+  not 1 px lines. One cogs file in the settings saves and opens the whole machine with the patch library.

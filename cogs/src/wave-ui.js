@@ -3,8 +3,7 @@
 // set how far that source moves it; the knob shows each route as a blue arc beside its value. Double tap resets a
 // knob, or, armed, removes that route. Drag out sideways for finer steps (the readout says how fine). The matrix tab lists every route to edit, bypass or delete.
 const waveSay=read=>{if(typeof showInteraction==='function')showInteraction(read)};
-const waveUi={tab:'A',arm:null,pin:false,msg:''};
-const WAVE_TABS=['A','B','C','SUB','ENV','LFO','FX','MACRO','MATRIX','PATCH'];
+const waveUi={tab:'MAIN',arm:null,pin:false,msg:''};
 const srcLabel=s=>s.replace(/^env/,'ENV').replace(/^lfo/,'LFO').replace(/^m(\d)$/,'M$1').toUpperCase();
 function waveLabel(v,path){
   let m=path.match(/^osc(\d)\.(\w+)$/);const P=WAVE_PARAMS[WAVE_INDEX.get(path)];
@@ -20,6 +19,7 @@ function waveText(P,x){
   if(/^(eq\.|comp\.(thresh|gain))/.test(P[0]))return (x>0?'+':'')+x.toFixed(1)+' dB';
   if(P[0]==='comp.ratio')return x.toFixed(1)+':1';
   if(c==='time')return x<1?Math.round(x*1000)+' ms':x.toFixed(2)+' s';
+  if(c==='log'&&/\.(rate|freq|cut)$/.test(P[0]))return (x>=1000?(x/1000).toFixed(x>=10000?1:2)+'k':x<10?x.toFixed(2):String(Math.round(x)))+' Hz';
   if(c==='log')return x>=1000?(x/1000).toFixed(x>=10000?1:2)+'k':x<10?x.toFixed(2):String(Math.round(x));
   if(c==='int')return (x>0&&P[2]<0?'+':'')+x;
   if(P[0].endsWith('.fine'))return (x>0?'+':'')+Math.round(x)+' ct';
@@ -52,6 +52,9 @@ function waveKnob(v,path,edited){
       x.beginPath();x.arc(c,c,r,A0+SW*Math.max(0,lo),A0+SW*Math.min(1,hi)+.001);x.stroke();r-=4;if(r<6)break;
     }
     x.globalAlpha=1;
+    // where the modulation has it now, on the newest note: a dot riding the ring
+    k.dot=!cam&&waveIdOf.get(v)===waveWatching&&waveMod.at.has(path);
+    if(k.dot){const la=A0+SW*clamp(waveMod.at.get(path),0,1);x.fillStyle=col('--sel');x.beginPath();x.arc(c+Math.cos(la)*(c-6),c+Math.sin(la)*(c-6),3.5,0,TAU);x.fill()}
     const a=A0+SW*n;x.strokeStyle=col('--fg');x.lineWidth=2;x.beginPath();x.moveTo(c+Math.cos(a)*(c-16),c+Math.sin(a)*(c-16));x.lineTo(c+Math.cos(a)*(c-4),c+Math.sin(a)*(c-4));x.stroke();
     const rt=waveUi.arm&&routesTo(v,path).find(m=>m.src===waveUi.arm);
     val.textContent=cam?`cam ${cam.id} ${Math.round(n*100)}%`:rt?`${srcLabel(rt.src)} ${rt.amt>0?'+':''}${Math.round(rt.amt*100)}`:waveText(P,waveGet(v,path));
@@ -88,12 +91,13 @@ function waveKnob(v,path,edited){
   // a chip dropped here routes its source at half depth
   box.addEventListener('wave-drop',e=>{const src=e.detail;if(!routesTo(v,path).some(m=>m.src===src))v.mods.push({src,dst:path,amt:.5,bi:src.startsWith('lfo'),off:false});edited()});
   if(/^m\d$/.test(path))waveLive.add(()=>{if(camDriver(v,path)&&box.isConnected)draw()});
-  return {box,draw};
+  const k={box,draw,path,dot:false};return k;
 }
 const choice=(label,options,get,set,fmt=o=>o)=>{
   const s=el('select',{ariaLabel:label},...options.map(o=>el('option',{value:o,textContent:fmt(o)})));
   s.value=get();s.onchange=()=>set(s.value);return el('label',{className:'wave-choice'},el('span',{textContent:label}),s);
 };
+const spaced=b=>el('div',{className:'wave-choice'},el('span',{textContent:'\u00a0'}),b);
 const toggle=(label,get,set)=>{const b=el('button',{className:'wave-toggle',textContent:label});const sync=()=>{b.ariaPressed=String(!!get())};b.onclick=()=>{set(!get());sync()};sync();return b};
 // The table's current frame, drawn from its spectrum, so the knob's wt pos shows as a shape.
 function wavePreview(v,i){
@@ -123,7 +127,7 @@ function harmEditor(v,i,edited){
 }
 // A route's curve: drag along it, the bend shows as the line it draws from source in (left) to depth out (up).
 function curveEditor(m,edited){
-  const cv=el('canvas',{className:'wave-curve',title:'curve: drag up or down'}),W=48,H=32;cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';cv.style.touchAction='none';
+  const cv=el('canvas',{className:'wave-curve'}),W=48,H=32;cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';cv.style.touchAction='none';
   const draw=()=>{const x=cv.getContext('2d'),cs={getPropertyValue:wavePal};x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
     x.strokeStyle=cs.getPropertyValue('--sel');x.lineWidth=1.5;x.beginPath();for(let i=0;i<=24;i++){const u=i/24,y=modCurve(u,m.curve||0);i?x.lineTo(u*W,H-2-y*(H-4)):x.moveTo(0,H-2-y*(H-4))}x.stroke()};
   let d=null;
@@ -133,52 +137,34 @@ function curveEditor(m,edited){
   cv.ondblclick=()=>{m.curve=0;draw();edited()};
   draw();return el('label',{className:'wave-choice'},el('span',{textContent:'curve'}),cv);
 }
-// A two-octave keyboard to play the patch while shaping it: hold a key to sustain, slide to play the next,
-// several fingers play a chord; ‹ › shift the octave. The voice's octave and semitones transpose what it plays.
-const waveKeysAt={oct:4};
-function waveKeys(owner){
-  const cv=el('canvas',{className:'wave-keys'}),H=56,box=el('div',{className:'wave-keybar'});
-  const held=new Map(),WHITE=[0,2,4,5,7,9,11],BLACK={1:0,3:1,6:3,8:4,10:5};
-  const lab=el('span',{className:'wave-oct'});
-  const geom=()=>{const W=cv.clientWidth||300;return {W,ww:W/14}};
-  const draw=()=>{const {W,ww}=geom();if(cv.width!==Math.round(W*dpr)){cv.width=Math.round(W*dpr);cv.height=H*dpr}
-    const x=cv.getContext('2d'),cs={getPropertyValue:wavePal},on=new Set([...held.values()].map(h=>h.midi)),base=12*(waveKeysAt.oct+1);
-    x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
-    for(let i=0;i<14;i++){const m=base+12*Math.floor(i/7)+WHITE[i%7];x.fillStyle=on.has(m)?cs.getPropertyValue('--hot'):cs.getPropertyValue('--fg');x.fillRect(i*ww+1,0,ww-2,H)}
-    for(let o=0;o<2;o++)for(const[k,after]of Object.entries(BLACK)){const m=base+12*o+ +k,xx=(o*7+after+1)*ww-ww*.3;x.fillStyle=on.has(m)?cs.getPropertyValue('--hot'):cs.getPropertyValue('--bg');x.fillRect(xx,0,ww*.6,H*.6)}
-    const v=owner.voice,sh=12*(v.octave||0)+(v.semi||0)+12*(v.tune?.oct||0)+(v.tune?.semi||0);lab.textContent='C'+waveKeysAt.oct+(sh?' '+(sh>0?'+':'')+sh:'');lab.title=sh?`the synth transposes by ${sh} semitones`:''};
-  const noteAt=e=>{const r=cv.getBoundingClientRect(),{ww}=geom(),px=e.clientX-r.left,py=e.clientY-r.top,base=12*(waveKeysAt.oct+1);
-    if(px<0||px>=ww*14)return null;
-    if(py<H*.6)for(let o=0;o<2;o++)for(const[k,after]of Object.entries(BLACK)){const xx=(o*7+after+1)*ww-ww*.3;if(px>=xx&&px<xx+ww*.6)return base+12*o+ +k}
-    const i=Math.floor(px/ww);return base+12*Math.floor(i/7)+WHITE[i%7]};
-  const on=(id,m)=>{if(!ac)initAudio();if(!ac||engineState!=='ready')return;const v=owner.voice,key=owner.id*128+m;
-    // a key is a MIDI note into the voice: its octave and semitones transpose it, as they do every note the voice plays
-    playVoice(v,m,ac.currentTime+.005,.85*(v.level??.7),0,key,.8,8);held.set(id,{midi:m,key});buzz(4);draw()};
-  const off=id=>{const h=held.get(id);if(!h)return;held.delete(id);if(ac)damp(h.key,ac.currentTime);draw()};
-  cv.style.touchAction='none';
-  cv.onpointerdown=e=>{cv.setPointerCapture(e.pointerId);const m=noteAt(e);if(m!=null)on(e.pointerId,m)};
-  cv.onpointermove=e=>{const h=held.get(e.pointerId);if(!h)return;const m=noteAt(e);if(m!=null&&m!==h.midi){off(e.pointerId);on(e.pointerId,m)}};
-  cv.onpointerup=cv.onpointercancel=e=>off(e.pointerId);
-  const shift=d=>{waveKeysAt.oct=clamp(waveKeysAt.oct+d,1,7);draw()};
-  box.append(el('button',{textContent:'‹',ariaLabel:'octave down',onclick:()=>shift(-1)}),cv,el('button',{textContent:'›',ariaLabel:'octave up',onclick:()=>shift(1)}),lab);
-  requestAnimationFrame(draw);new ResizeObserver(draw).observe(cv);
-  return box;
+// The editor's tabs. MAIN holds what a player reaches for: the macros and the knobs pinned to the part's dial.
+const WAVE_TABS=['MAIN','A','B','C','VOICE','MOD','FX','MATRIX','PATCH'];
+const WAVE_QUICK=['osc1.cut','osc1.res','osc1.a','osc1.r','osc1.detune','vol'];
+// Bluetooth MIDI from the synth's head: one tap to connect a keyboard; it then plays this part.
+const BT_ICON='<svg width="16" height="16" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 4.5l6 5.5-3 2.5v-10l3 2.5-6 5.5"/></svg>';
+function waveBluetooth(owner){
+  const label=el('span'),b=el('button',{className:'wave-bt',ariaLabel:'connect Bluetooth MIDI',onclick:()=>{initAudio();midi.target=owner;connectBluetooth()}});
+  b.innerHTML=BT_ICON;b.append(label);
+  const sync=()=>{const ble=[...midi.devices].filter(([k])=>k.startsWith('ble:')).map(([,n])=>n);
+    label.textContent=ble.length?ble.join(', '):'MIDI';b.ariaPressed=String(ble.length>0);};
+  midiRows=midiRows.filter(s=>s.el?.isConnected);sync.el=b;midiRows.push(sync);sync();
+  return b;
 }
-function waveEditor(f,owner){
+function waveEditor(f,owner,part){
   const v=owner.voice,root=el('div',{className:'wave'}),body=el('div',{className:'wave-body'});
   let parts=[];
-  const redraw=()=>{for(const p of parts)p.draw?.()};
+  const redraw=()=>{for(const p of parts)p.draw?.();if(root.isConnected)waveWatch(v)};
   const edited=()=>{wavePost(v);changed();redraw()};
   const rebuild=()=>{show(waveUi.tab)};
   // sources: tap to arm, drag onto a knob to route
   const chips=el('div',{className:'wave-src'});
-  const hint=el('div',{className:'wave-hint'});
-  const syncChips=()=>{for(const c of chips.children){c.ariaPressed=String(c.dataset.src?c.dataset.src===waveUi.arm:waveUi.pin);const d=c.dataset.src&&camDriver(v,c.dataset.src);c.classList.toggle('driven',!!d);c.title=d?`turned by cam ${d.id}`:''}
-    hint.toggleAttribute('data-armed',!!waveUi.arm||waveUi.pin);hint.textContent=waveUi.pin?`Tap knobs to put them on the part's dial, or take them off: ${(v.dial||[]).length} of ${WAVE_DIAL}. Tap DIAL to finish.`:waveUi.arm?`${srcLabel(waveUi.arm)} armed: drag a knob to set its depth, double tap to remove. Tap ${srcLabel(waveUi.arm)} to finish.`:'Tap a source, or drag it onto a knob, to modulate.';redraw()};
+  const syncChips=()=>{for(const c of chips.children){c.ariaPressed=String(c.dataset.src?c.dataset.src===waveUi.arm:waveUi.pin);const d=c.dataset.src&&camDriver(v,c.dataset.src);c.classList.toggle('driven',!!d);
+}
+    for(const p of parts)p.draw?.()};
   // the dial chip: armed, a tap on a knob pins it to the dial that opens when the part is tapped
-  chips.append(el('button',{className:'wave-pin',textContent:'◎ DIAL',onclick:()=>{waveUi.pin=!waveUi.pin;waveUi.arm=null;syncChips()}}));
+  chips.append(el('button',{className:'wave-pin',textContent:'DIAL',onclick:()=>{waveUi.pin=!waveUi.pin;waveUi.arm=null;syncChips()}}));
   for(const s of WAVE_SOURCES){
-    const b=el('button',{textContent:srcLabel(s)});b.dataset.src=s;b.style.touchAction='none';
+    const b=el('button',{textContent:srcLabel(s)});b.dataset.src=s;b.dataset.kind=s.replace(/\d+$/,'');b.style.touchAction='none';
     let start=null;
     b.onpointerdown=e=>{b.setPointerCapture(e.pointerId);start={x:e.clientX,y:e.clientY,moved:false}};
     b.onpointermove=e=>{if(start&&Math.hypot(e.clientX-start.x,e.clientY-start.y)>10){start.moved=true;b.classList.add('dragging')}};
@@ -187,33 +173,46 @@ function waveEditor(f,owner){
       waveUi.arm=waveUi.arm===s?null:s;waveUi.pin=false;syncChips()};
     chips.append(b);
   }
-  const tabs=el('div',{className:'wave-tabs'});
-  for(const t of WAVE_TABS){const b=el('button',{textContent:t,onclick:()=>{waveUi.tab=t;show(t)}});b.dataset.tab=t;tabs.append(b)}
-  const play=el('button',{className:'wave-play',textContent:'▶ play',onclick:()=>{if(!ac)initAudio();audition(owner,true)}});
+  const tabs=el('div',{className:'wave-tabs',role:'tablist'});
+  for(const t of WAVE_TABS){const b=el('button',{textContent:t,role:'tab',onclick:()=>{waveUi.tab=t;show(t)}});b.dataset.tab=t;tabs.append(b)}
+  const play=el('button',{className:'wave-play wave-icon',innerHTML:rx('Play',16),ariaLabel:'play',onclick:()=>{if(!ac)initAudio();audition(owner,true);waveWatch(v)}});
   const group=(title,...kids)=>el('div',{className:'wave-group'},el('h4',{textContent:title}),el('div',{className:'knobs'},...kids));
   const K=path=>{const k=waveKnob(v,path,edited);parts.push(k);return k.box};
   const show=t=>{
-    parts=[];waveLive.clear();body.replaceChildren();for(const b of tabs.children)b.ariaPressed=String(b.dataset.tab===t);
+    if(!WAVE_TABS.includes(t))t=waveUi.tab='MAIN';
+    parts=[];waveLive.clear();body.replaceChildren();root.dataset.tab=t;for(const b of tabs.children)b.ariaSelected=b.ariaPressed=String(b.dataset.tab===t);
     const i='ABC'.indexOf(t);
-    if(i>=0){
+    if(t==='MAIN'){
+      const ks=[];for(let m=1;m<=WAVE_MACROS;m++){const kb=K('m'+m),name=el('input',{value:v.macroNames[m-1],className:'wave-name',ariaLabel:'macro '+m+' name'});
+        name.onchange=()=>{v.macroNames[m-1]=name.value.slice(0,16)||'macro '+m;kb.querySelector('span').textContent=v.macroNames[m-1];edited();syncChips()};
+        kb.querySelector('span').textContent=v.macroNames[m-1];ks.push(el('div',{className:'wave-macro'},kb,name))}
+      const pinned=(v.dial||[]).filter(p=>WAVE_INDEX.has(p)),quick=pinned.length?pinned:WAVE_QUICK;
+      const q=group(pinned.length?'on the dial':'quick',...quick.map(p=>{const b=K(p);b.querySelector('span').textContent=waveLabel(v,p);return b}));
+      body.append(el('div',{className:'wave-group'},el('h4',{textContent:'macros'}),el('div',{className:'knobs'},...ks)),q);
+    }else if(i>=0){
       const o=v.osc[i],O=k=>K(`osc${i+1}.${k}`),pv=wavePreview(v,i);parts.push(pv);
-      body.append(el('div',{className:'wave-row'},toggle(`osc ${t}`,()=>o.on,x=>{o.on=x;edited()}),
-        choice('table',WAVE_TABLES,()=>o.table,x=>{o.table=x;edited();rebuild()}),choice('filter',WAVE_FILTERS,()=>o.filter,x=>{o.filter=x;edited()}),
-        choice('warp',WARP_MODES,()=>o.warpMode,x=>{o.warpMode=x;edited()}),choice('warp 2',WARP_MODES,()=>o.warp2Mode,x=>{o.warp2Mode=x;edited()})),pv.box);
+      body.append(el('div',{className:'wave-row'},spaced(toggle(`osc ${t}`,()=>o.on,x=>{o.on=x;edited();body.classList.toggle('osc-off',!x)})),
+        choice('table',WAVE_TABLES,()=>o.table,x=>{o.table=x;edited();rebuild()}),choice('filter',WAVE_FILTERS,()=>o.filter,x=>{o.filter=x;edited()})),pv.box);
+      body.classList.toggle('osc-off',!o.on);
       if(o.table==='harmonics'){const h=harmEditor(v,i,edited);parts.push(h);body.append(h.box)}
-      body.append(group('wave',O('pos'),O('warp'),O('warp2'),O('phase'),O('level'),O('pan')),group('pitch',O('oct'),O('semi'),O('fine')),
+      body.append(group('wave',O('pos'),O('phase'),O('level'),O('pan')),
+        el('div',{className:'wave-group'},el('h4',{textContent:'warp'}),el('div',{className:'wave-row'},
+          choice('warp',WARP_MODES,()=>o.warpMode,x=>{o.warpMode=x;edited()}),choice('warp 2',WARP_MODES,()=>o.warp2Mode,x=>{o.warp2Mode=x;edited()})),el('div',{className:'knobs'},O('warp'),O('warp2'))),
+        group('pitch',O('oct'),O('semi'),O('fine')),
         group('unison',O('uni'),O('detune'),O('blend'),O('spread')),group('amp envelope',O('a'),O('d'),O('s'),O('r')),
         group('filter',O('cut'),O('res'),O('drive'),O('key')),group('filter envelope',O('famt'),O('fa'),O('fd'),O('fs'),O('fr')));
-    }else if(t==='SUB')body.append(group('sub (on ENV1)',K('sub.level'),K('sub.oct')),group('noise (on ENV1)',K('noise.level'),K('noise.color')),group('voice',K('tune.oct'),K('tune.semi'),K('vol'),K('glide'),K('gate')),
+    }else if(t==='VOICE')body.append(group('voice',K('tune.oct'),K('tune.semi'),K('vol'),K('glide'),K('gate')),
       el('div',{className:'wave-row'},choice('voicing',VOICE_MODES,()=>v.voicing.mode,x=>{v.voicing.mode=x;edited()}),
-        toggle('glide always',()=>v.voicing.always,x=>{v.voicing.always=x;edited()}),toggle('glide scales',()=>v.voicing.scale,x=>{v.voicing.scale=x;edited()})),
-      el('p',{className:'wave-hint',textContent:'Mono plays one note at a time and restarts the envelopes; legato restarts them only after a gap. Glide always slides every note; otherwise only overlapping ones. Glide scales makes short steps faster.'}));
-    else if(t==='ENV')for(let e=1;e<=WAVE_ENVS;e++)body.append(group(`ENV${e}`+(e===1?' (also sub and noise)':''),...['a','d','s','r'].map(k=>K(`env${e}.${k}`))));
-    else if(t==='LFO')for(let l=1;l<=WAVE_LFOS;l++){const L=v.lfo[l-1];
-      body.append(el('div',{className:'wave-group'},el('h4',{textContent:'LFO'+l}),el('div',{className:'wave-row'},
-        choice('shape',LFO_SHAPES,()=>L.shape,x=>{L.shape=x;edited()}),toggle('retrig',()=>L.retrig,x=>{L.retrig=x;edited()}),
-        choice('sync',Object.keys(LFO_SYNCS),()=>L.sync,x=>{L.sync=x;edited()})),
-        el('div',{className:'knobs'},K(`lfo${l}.rate`),K(`lfo${l}.phase`))))}
+        spaced(toggle('glide always',()=>v.voicing.always,x=>{v.voicing.always=x;edited()})),spaced(toggle('glide scales',()=>v.voicing.scale,x=>{v.voicing.scale=x;edited()}))),
+      group('sub (on ENV1)',K('sub.level'),K('sub.oct')),group('noise (on ENV1)',K('noise.level'),K('noise.color')));
+    else if(t==='MOD'){
+      for(let e=1;e<=WAVE_ENVS;e++)body.append(group(`ENV${e}`+(e===1?' · also sub and noise':''),...['a','d','s','r'].map(k=>K(`env${e}.${k}`))));
+      for(let l=1;l<=WAVE_LFOS;l++){const L=v.lfo[l-1];
+        body.append(el('div',{className:'wave-group'},el('h4',{textContent:'LFO'+l}),el('div',{className:'wave-row'},
+          choice('shape',LFO_SHAPES,()=>L.shape,x=>{L.shape=x;edited()}),choice('sync',Object.keys(LFO_SYNCS),()=>L.sync,x=>{L.sync=x;edited()}),
+          spaced(toggle('retrig',()=>L.retrig,x=>{L.retrig=x;edited()}))),
+          el('div',{className:'knobs'},K(`lfo${l}.rate`),K(`lfo${l}.phase`))))}
+    }
     else if(t==='FX'){
       // the rack, run top to bottom; ↑ ↓ move a module. Its knobs take macros from the matrix (the rack is shared by every note)
       const fx=v.fx,order=v.fxOrder=waveFxOrder(v.fxOrder);
@@ -221,54 +220,53 @@ function waveEditor(f,owner){
         chorus:['rate','depth','mix'],delay:['time','fb','tone','mix'],comp:['thresh','ratio','gain'],eq:['low','high']};
       const NAMES={hyper:'hyper / dimension',dist:'distortion',flanger:'flanger',phaser:'phaser',chorus:'chorus',delay:'delay',comp:'compressor',eq:'eq'};
       const extra={dist:()=>[choice('mode',DIST_MODES,()=>fx.dist.mode,x=>{fx.dist.mode=x;edited()})],
-        delay:()=>[choice('sync',Object.keys(DELAY_SYNCS),()=>fx.delay.sync,x=>{fx.delay.sync=x;edited()}),toggle('ping-pong',()=>fx.delay.ping,x=>{fx.delay.ping=x;edited()})]};
+        delay:()=>[choice('sync',Object.keys(DELAY_SYNCS),()=>fx.delay.sync,x=>{fx.delay.sync=x;edited()}),spaced(toggle('ping-pong',()=>fx.delay.ping,x=>{fx.delay.ping=x;edited()}))]};
       const move=(k,d)=>{const i=order.indexOf(k),j=i+d;if(j<0||j>=order.length)return;order.splice(i,1);order.splice(j,0,k);edited();show('FX')};
-      body.append(el('p',{className:'wave-hint',textContent:'The rack runs top to bottom on the patch\'s summed voices. Macros can drive its knobs; per-note sources cannot.'}));
-      order.forEach((k,i)=>{const sec=el('div',{className:'wave-group wave-fx'},el('div',{className:'wave-row'},toggle(NAMES[k],()=>fx[k].on,x=>{fx[k].on=x;edited();sec.classList.toggle('off',!x)}),
-          ...(extra[k]?.()||[]),el('span',{className:'wave-grow'}),
-          el('button',{textContent:'↑',ariaLabel:'move '+k+' up',disabled:i===0,onclick:()=>move(k,-1)}),el('button',{textContent:'↓',ariaLabel:'move '+k+' down',disabled:i===order.length-1,onclick:()=>move(k,1)})),
-        el('div',{className:'knobs'},...KNOBS[k].map(q=>K(k+'.'+q))));
+      // a module that is off folds to its name: the rack reads as a list of what is running
+      order.forEach((k,i)=>{const sec=el('div',{className:'wave-group wave-fx'},el('div',{className:'wave-row wave-fx-head'},toggle(NAMES[k],()=>fx[k].on,x=>{fx[k].on=x;edited();sec.classList.toggle('off',!x)}),
+          el('span',{className:'wave-grow'}),
+          el('button',{textContent:'↑',className:'wave-icon',ariaLabel:'move '+k+' up',disabled:i===0,onclick:()=>move(k,-1)}),el('button',{textContent:'↓',className:'wave-icon',ariaLabel:'move '+k+' down',disabled:i===order.length-1,onclick:()=>move(k,1)})),
+        el('div',{className:'wave-fx-body'},...(extra[k]?[el('div',{className:'wave-row'},...extra[k]())]:[]),el('div',{className:'knobs'},...KNOBS[k].map(q=>K(k+'.'+q)))));
         sec.dataset.fx=k;sec.classList.toggle('off',!fx[k].on);body.append(sec)});
-    }
-    else if(t==='MACRO'){
-      const ks=[];for(let m=1;m<=WAVE_MACROS;m++){const kb=K('m'+m),name=el('input',{value:v.macroNames[m-1],className:'wave-name',ariaLabel:'macro '+m+' name'});
-        name.onchange=()=>{v.macroNames[m-1]=name.value.slice(0,16)||'macro '+m;kb.querySelector('span').textContent=v.macroNames[m-1];edited()};
-        kb.querySelector('span').textContent=v.macroNames[m-1];ks.push(el('div',{className:'wave-macro'},kb,name))}
-      body.append(el('div',{className:'knobs'},...ks));
     }else if(t==='MATRIX'){
       const dsts=WAVE_PARAMS.map(P=>P[0]);
       const list=el('div',{className:'wave-matrix'});
+      // a route is one line, source → knob, and its depth under it; ⋯ opens the rest (bipolar, bypass, aux, curve)
       const fill=()=>{list.replaceChildren();
-        if(!v.mods.length)list.append(el('p',{className:'wave-hint',textContent:'No routes yet. Arm a source above and drag a knob, or add one here.'}));
         v.mods.forEach((m,j)=>{
           const amt=el('input',{type:'range',min:-1,max:1,step:.01,value:m.amt,ariaLabel:'amount'}),num=el('b',{textContent:Math.round(m.amt*100)});
           amt.oninput=()=>{m.amt=+amt.value;num.textContent=Math.round(m.amt*100);wavePost(v)};amt.onchange=edited;
+          const more=el('div',{className:'wave-route-more'},toggle('± bipolar',()=>m.bi,x=>{m.bi=x;edited()}),toggle('bypass',()=>m.off,x=>{m.off=x;row.classList.toggle('off',x);edited()}),
+            choice('aux',['',...WAVE_SOURCES],()=>m.aux||'',x=>{m.aux=x;edited()},x=>x?srcLabel(x):'none'),toggle('aux inv',()=>m.auxInv,x=>{m.auxInv=x;edited()}),curveEditor(m,edited));
+          more.hidden=!waveUi.open?.has(m);
+          const dots=el('button',{className:'wave-icon',textContent:'⋯',ariaLabel:'more for this route',onclick:()=>{(waveUi.open||=new WeakSet());more.hidden=!more.hidden;more.hidden?waveUi.open.delete(m):waveUi.open.add(m);dots.ariaPressed=String(!more.hidden)}});
+          dots.ariaPressed=String(!more.hidden);
           const row=el('div',{className:'wave-route'},
-            choice('source',WAVE_SOURCES,()=>m.src,x=>{m.src=x;edited()},srcLabel),choice('to',dsts,()=>m.dst,x=>{m.dst=x;edited()},p=>waveLabel(v,p)),
-            el('div',{className:'wave-amt'},amt,num),toggle('±',()=>m.bi,x=>{m.bi=x;edited()}),toggle('bypass',()=>m.off,x=>{m.off=x;edited()}),
-            choice('aux',['',...WAVE_SOURCES],()=>m.aux||'',x=>{m.aux=x;edited()},x=>x?srcLabel(x):'none'),toggle('aux inv',()=>m.auxInv,x=>{m.auxInv=x;edited()}),
-            curveEditor(m,edited),
-            el('button',{textContent:'×',ariaLabel:'delete route',onclick:()=>{v.mods.splice(j,1);edited();fill()}}));
-          list.append(row)})};
+            el('div',{className:'wave-route-head'},choice('source',WAVE_SOURCES,()=>m.src,x=>{m.src=x;edited()},srcLabel),el('span',{className:'wave-arrow',textContent:'→'}),
+              choice('to',dsts,()=>m.dst,x=>{m.dst=x;edited()},p=>waveLabel(v,p)),dots,
+              el('button',{className:'wave-icon',textContent:'×',ariaLabel:'delete route',onclick:()=>{v.mods.splice(j,1);edited();fill()}})),
+            el('div',{className:'wave-amt'},amt,num),more);
+          row.classList.toggle('off',!!m.off);list.append(row)})};
       fill();
-      body.append(list,el('button',{textContent:'+ route',onclick:()=>{v.mods.push({src:'lfo1',dst:'osc1.cut',amt:.25,bi:true,off:false});edited();fill()}}));
+      body.append(list,el('button',{className:'wave-add',textContent:'+ route',onclick:()=>{v.mods.push({src:'lfo1',dst:'osc1.cut',amt:.25,bi:true,off:false});edited();fill()}}));
     }else if(t==='PATCH'){
-      const name=el('input',{value:v.name||'',className:'wave-name',ariaLabel:'patch name'});name.onchange=()=>{v.name=name.value.slice(0,40);edited()};
+      const name=el('input',{value:v.name||'',className:'wave-name',ariaLabel:'patch name'});name.onchange=()=>{v.name=name.value.slice(0,40);pname.textContent=v.name||'patch';edited()};
       const msg=el('p',{className:'wave-hint',textContent:waveUi.msg});const say=s=>{waveUi.msg=msg.textContent=s};
-      const load=j=>{loadPatch(v,j);edited();say(`loaded ${v.name}`);show('PATCH')};
+      const load=j=>{loadPatch(v,j);edited();pname.textContent=v.name||'patch';say(`loaded ${v.name}`);show('PATCH')};
       const factory=choice('factory',Object.keys(WAVE_PRESETS),()=>'init',x=>load(WAVE_PRESETS[x]()));
       const lib=patchLib.all(),names=Object.keys(lib).sort(),user=el('div',{className:'wave-lib'});
-      for(const n of names)user.append(el('div',{className:'wave-row'},el('button',{textContent:n,onclick:()=>load(lib[n])}),
-        el('button',{textContent:'×',ariaLabel:'delete '+n,onclick:()=>{patchLib.remove(n);say(`deleted ${n}`);show('PATCH')}})));
-      const ta=el('textarea',{placeholder:'paste a patch JSON here',ariaLabel:'patch json'}),file=el('input',{type:'file',accept:'.json,application/json'});
+      for(const n of names)user.append(el('div',{className:'wave-row'},el('button',{className:'wave-lib-name',textContent:n,onclick:()=>load(lib[n])}),
+        el('button',{className:'wave-icon',textContent:'×',ariaLabel:'delete '+n,onclick:()=>{patchLib.remove(n);say(`deleted ${n}`);show('PATCH')}})));
+      const ta=el('textarea',{placeholder:'paste a patch JSON here',ariaLabel:'patch json'}),file=el('input',{type:'file',accept:'.json,application/json',hidden:true});
       file.onchange=async()=>{const fl=file.files[0];if(!fl)return;try{importPatch(v,await fl.text());edited();say(`imported ${v.name}`);show('PATCH')}catch(e){say('import failed: '+e.message)}};
-      body.append(el('div',{className:'wave-row'},el('span',{textContent:'name'}),name),
-        el('div',{className:'wave-row'},el('button',{textContent:'save to library',onclick:()=>{const ok=patchLib.save(v.name||'patch',patchOf(v));say(ok?`saved ${v.name}`:'saved for this session only: storage is off here; export to keep it');show('PATCH')}}),
-          el('button',{textContent:'init',onclick:()=>load(waveInit())})),
-        factory,el('h4',{textContent:'library'}),names.length?user:el('p',{className:'wave-hint',textContent:'Nothing saved yet.'}),
-        el('h4',{textContent:'JSON'}),el('div',{className:'wave-row'},el('button',{textContent:'export',onclick:()=>{ta.value=exportPatch(v);say('exported: downloaded and copied')}}),
-          el('button',{textContent:'import text',onclick:()=>{try{importPatch(v,ta.value);edited();say(`imported ${v.name}`);show('PATCH')}catch(e){say('import failed: '+e.message)}}})),
-        el('label',{className:'wave-file'},el('span',{textContent:'import file'}),file),ta,msg);
+      body.append(el('div',{className:'wave-row'},name,el('button',{textContent:'save to library',onclick:()=>{const ok=patchLib.save(v.name||'patch',patchOf(v));say(ok?`saved ${v.name}`:'saved for this session only: storage is off here; export to keep it');show('PATCH')}})),
+        el('div',{className:'wave-row'},factory,el('span',{className:'wave-grow'}),spaced(el('button',{textContent:'init',onclick:()=>load(waveInit())}))),
+        ...(names.length?[el('h4',{textContent:'library'}),user]:[]),
+        el('h4',{textContent:'this patch as JSON'}),el('div',{className:'wave-row'},el('button',{textContent:'export',onclick:()=>{ta.value=exportPatch(v);say('exported: downloaded and copied')}}),
+          el('button',{textContent:'import text',onclick:()=>{try{importPatch(v,ta.value);edited();pname.textContent=v.name||'patch';say(`imported ${v.name}`);show('PATCH')}catch(e){say('import failed: '+e.message)}}}),
+          el('button',{textContent:'import file',onclick:()=>file.click()}),file),
+        ta,
+        msg);
     }
     redraw();
   };
@@ -277,11 +275,14 @@ function waveEditor(f,owner){
     let i=names.findIndex(([,n])=>n===v.name);i=((i<0?(d>0?-1:0):i)+d+names.length)%names.length;const[kind,n]=names[i];
     loadPatch(v,kind==='f'?WAVE_PRESETS[n]():lib[n]);edited();pname.textContent=v.name;show(waveUi.tab);if(!ac)initAudio();audition(owner,true)};
   const pname=el('span',{className:'wave-pname',textContent:v.name||'patch'});
-  const top=el('div',{className:'wave-top'},el('button',{textContent:'◀',ariaLabel:'previous patch',onclick:()=>browse(-1)}),pname,
-    el('button',{textContent:'▶',ariaLabel:'next patch',onclick:()=>browse(1)}),el('span',{className:'wave-grow'}),play);
-  root.append(top,chips,hint,tabs,body,waveKeys(owner));
+  const top=el('div',{className:'wave-top'},el('button',{className:'wave-icon',textContent:'◀',ariaLabel:'previous patch',onclick:()=>browse(-1)}),pname,
+    el('button',{className:'wave-icon',textContent:'▶',ariaLabel:'next patch',onclick:()=>browse(1)}),el('span',{className:'wave-grow'}),play,waveBluetooth(owner));
+  // the routing bar stays in reach while the knobs scroll: the sources, then the tabs
+  const stick=el('div',{className:'wave-stick'},chips,tabs);
+  root.append(top,...(part?[part]:[]),stick,body);
   f.append(root);show(waveUi.tab);syncChips();
-  // the sources stay in reach while the knobs scroll: they stick under the phone sheet's head, or at the panel's top
-  requestAnimationFrame(()=>{const head=document.querySelector('#sheet-top');chips.style.top=(head&&head.offsetParent?head.offsetHeight:0)+'px'});
+  waveModHooks.add(()=>{if(!root.isConnected)return false;for(const p of parts)if(p.path&&(p.dot||waveMod.at.has(p.path)))p.draw();return true});waveWatch(v);
+  // the bar sticks under the phone sheet's head, or at the panel's top
+  requestAnimationFrame(()=>{const head=document.querySelector('#sheet-top');stick.style.top=(head&&head.offsetParent?head.offsetHeight:0)+'px'});
   rows.push(redraw);
 }

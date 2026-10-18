@@ -71,7 +71,7 @@ const LOOKAHEAD_MIN=.12;
 const S_DEFAULT={...S},SPACE_DEFAULT={...SPACE};
 
 /* ---------- world ---------- */
-const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],cams:[],next:1};
+const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],cams:[],pits:[],next:1};
 let simT=0,sel=null,group=[],marquee=null;
 const view={x:0,y:0};
 const stats={events:0,late:0,skipped:0,steps:0,stepsTick:0,log:[]};
@@ -260,15 +260,18 @@ function advance(tEnd){
   for(const arm of W.arms)if(arm.cog.w)for(const s of W.strings)if(within(arm.cog,arm.r0+arm.len,s))plucks.push([arm,s]);
   for(const c of W.cogs)if(c.track&&c.w)for(const dot of c.track.dots)for(const rd of W.readers)if(within(c,ringR(c,dot.ring),rd))reads.push([c,dot,rd]);
   let maxW=0;for(const c of W.cogs)maxW=Math.max(maxW,Math.abs(c.w));
+  // a box with balls in it steps the world finely: they bounce at 240 Hz
+  const pits=W.pits.filter(p=>p.balls.length).map(pitReach);
   stats.stepsTick=0;
   while(simT<tEnd){
-    const dt=Math.min(tEnd-simT,maxW?S.maxStep/maxW:Infinity);
+    const dt=Math.min(tEnd-simT,maxW?S.maxStep/maxW:Infinity,pits.length?PIT.dt:Infinity);
     for(const p of pairs){
       const psi=p.c.th+p.arm.a,span=Math.abs(p.c.w)*dt,d0=p.c.w>0?wrap(p.edge-psi):wrap(psi-p.edge);
       if(d0>0&&d0<=span)armHit(p,simT+dt*d0/span);
     }
     for(const[c,dot,rd]of reads)dotCross(c,dot,rd,dt);
     for(const[arm,s]of plucks)pluck(arm,s,dt);
+    for(const q of pits)pitStep(q,dt,simT);
     for(const c of W.cogs)turn(c,dt);
     simT+=dt;stats.steps++;stats.stepsTick++;
   }
@@ -391,11 +394,11 @@ function changed(structural){
 }
 // Undo: one step per finished action. A step settles when the pointer lifts, or after a quiet
 // spell for wheel and keyboard edits. Camera, pause, selection and cog phase are never undone.
-const UNDONE_ELSEWHERE=new Set(['view','zoom','th']);
+const UNDONE_ELSEWHERE=new Set(['view','zoom','th','bx','by','bvx','bvy']);
 const worldKey=()=>JSON.stringify(serialize(),(k,v)=>UNDONE_ELSEWHERE.has(k)?undefined:v);
 const EDITS_MAX=500,EDITS_QUIET=350;
 const edits={past:[],future:[],cur:null,pending:false,timer:0,held:false,
-  snap(){return {key:worldKey(),t:simT,phase:new Map(W.cogs.map(c=>[c.id,{th:c.th,w:c.w}]))}},
+  snap(){return {key:worldKey(),t:simT,phase:new Map(W.cogs.map(c=>[c.id,{th:c.th,w:c.w}])),balls:ballStates()}},
   mark(){this.pending=true;clearTimeout(this.timer);this.timer=setTimeout(()=>{if(!this.held)this.commit()},EDITS_QUIET)},
   commit(){
     clearTimeout(this.timer);this.pending=false;const s=this.snap();
@@ -410,10 +413,15 @@ const edits={past:[],future:[],cur:null,pending:false,timer:0,held:false,
 };
 // Put the parts of a snapshot back without touching the clock: each cog takes the phase it
 // would have now had it kept the speed it had then, and keeps its revolution count.
+// Balls keep moving through an undo: one still in the box carries on from where it is now; one coming back
+// returns where it was when the step was taken.
+const ballStates=()=>new Map(W.pits.flatMap(p=>p.balls.map(b=>[p.id+':'+b.id,{bx:b.x,by:b.y,bvx:b.vx,bvy:b.vy,trail:b.trail}])));
 function restore(s){
   const kept=sel&&{type:sel.type,id:sel.o.id};
   const j=JSON.parse(s.key);Object.assign(j.S,{zoom:S.zoom});j.view={...view};
   for(const c of j.cogs){const p=s.phase.get(c.id);c.th=wrap(p.th+p.w*(simT-s.t))}
+  const live=ballStates();
+  for(const p of j.pits||[])for(const b of p.balls){const k=p.id+':'+b.id,st=live.get(k)||s.balls?.get(k);if(st)Object.assign(b,st)}
   reload(j);
   const back=kept&&W[kept.type+'s']?.find(o=>o.id===kept.id);if(back)select(kept.type,back);
   clearTimeout(edits.timer);edits.pending=false;
@@ -429,7 +437,8 @@ function serialize(){
     readers:W.readers.map(r=>({id:r.id,on:r.on?r.on.id:null,x1:r.x1,y1:r.y1,x2:r.x2,y2:r.y2,voice:r.voice,tines:r.tines,combBase:r.combBase,combScale:r.combScale})),
     belts:W.belts.map(b=>({id:b.id,a:b.a.id,b:b.b.id,cross:b.cross})),
     strings:W.strings.map(({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})=>({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})),
-    cams:W.cams.map(m=>({id:m.id,cog:m.cog.id,ang:m.ang,phase:m.phase,shape:m.shape,prof:[...m.prof],to:m.to?m.to.id:null,macro:m.macro,lo:m.lo,hi:m.hi}))};
+    cams:W.cams.map(m=>({id:m.id,cog:m.cog.id,ang:m.ang,phase:m.phase,shape:m.shape,prof:[...m.prof],to:m.to?m.to.id:null,macro:m.macro,lo:m.lo,hi:m.hi})),
+    pits:W.pits.map(p=>({id:p.id,x:p.x,y:p.y,w:p.w,h:p.h,voice:p.voice,notes:[...p.notes],balls:p.balls.map(b=>({id:b.id,note:b.note,bx:b.x,by:b.y,bvx:b.vx,bvy:b.vy}))}))};
 }
 // Every part is built and checked before any of the live world is replaced.
 function deserialize(j){
@@ -461,6 +470,12 @@ function deserialize(j){
       cogs.filter(c=>c.track&&Math.hypot(r.x1-c.x,r.y1-c.y)<=radius(c)&&Math.hypot(r.x2-c.x,r.y2-c.y)<=radius(c)).sort((a,b)=>b.layer-a.layer)[0];
     if(c&&c.track)seatReader(r,c);
   }
+  // ball pits: a box takes its palette and its balls; one saved without its place starts at the middle, still
+  next.pits=(j.pits||[]).map(p=>{
+    const notes=(Array.isArray(p.notes)?p.notes:[]).map(n=>clamp(n|0,0,127)).filter((n,i,a)=>a.indexOf(n)===i).sort((a,b)=>a-b);
+    const o={id:p.id,x:+p.x||0,y:+p.y||0,w:Math.max(60,+p.w||240),h:Math.max(60,+p.h||160),voice:importedVoice(p),notes:notes.length?notes:[...PIT_NOTES],balls:[],nb:1,bag:[],hits:0,lastV:0};
+    for(const b of p.balls||[]){const n=clamp(b.note|0,0,127),q=makeBall(o,n,b.bx??o.x,b.by??o.y,+b.bvx||0,+b.bvy||0,b.id|0);if(b.trail)q.trail=b.trail;o.balls.push(q)}
+    o.nb=1+Math.max(0,...o.balls.map(b=>b.id));return o});
   Object.assign(W,next);
   W.next=1+Math.max(0,...Object.values(next).flat().map(o=>o.id));
   Object.assign(S,j.S);Object.assign(SPACE,j.SPACE);Object.assign(view,j.view);

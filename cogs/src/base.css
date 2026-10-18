@@ -19,50 +19,102 @@ button{background:var(--rig-surface,#000);color:var(--fg);border:0;font:inherit;
 textarea{height:90px}
 #notice{position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 8px);transform:translateX(-50%);z-index:20;max-width:min(92vw,560px);padding:6px 10px;background:var(--pad);color:var(--bad);cursor:pointer}
 #notice[hidden]{display:none}
-/* the wave synth editor */
-.wave{margin:6px 0;display:flex;flex-direction:column;gap:6px}
-.wave-top{display:flex;align-items:center;justify-content:space-between}.wave-top b{color:var(--hot);font-weight:normal}
-.wave button{background:var(--pad);border-radius:6px;padding:6px 10px;min-height:32px}
+/* the wave synth editor: filled surfaces and spacing to group things, no hairlines */
+.wave{margin:4px 0;display:flex;flex-direction:column;gap:8px;--card:var(--rig-surface,#000)}
+.wave button{background:var(--pad);border-radius:8px;padding:6px 10px;min-height:34px}
 .wave button[aria-pressed=true]{color:var(--bg);background:var(--hot)}
-.wave-src{display:flex;gap:4px;overflow-x:auto;padding:4px 0;scrollbar-width:none;position:sticky;top:0;z-index:3;background:var(--bg)}
-.wave-src button{flex:0 0 auto;font-size:12px;padding:4px 8px;color:var(--sel);touch-action:none}
-.wave-src button.dragging{outline:1px dashed var(--sel)}
+.wave button:disabled{opacity:.3}
+.wave .wave-icon{min-width:40px;padding:0}
+.wave-grow{flex:1}
+.wave-top{display:flex;align-items:center;gap:6px}
+.wave-pname{color:var(--hot);font-size:14px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 4px}
+.wave .wave-bt{color:var(--sel);max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wave .wave-bt[aria-pressed=true]{color:var(--bg);background:var(--sel)}
+/* the part's own settings, folded under the synth */
+.wave-part{background:var(--card);border-radius:10px;padding:0 10px}
+.wave-part>summary{min-height:40px;display:flex;align-items:center;gap:6px;color:var(--dim);cursor:pointer;list-style:none}
+.wave-part>summary::-webkit-details-marker{display:none}
+.wave-part>summary::before{content:'▸';color:var(--fg)}.wave-part[open]>summary::before{content:'▾'}
+.wave-part[open]{padding-bottom:8px}
+.wave-part .midi-row{margin:4px 0}
+/* sources and tabs: one bar that stays in reach while the knobs scroll */
+.wave-stick{position:sticky;top:0;z-index:3;background:var(--bg);display:flex;flex-direction:column;gap:6px;padding:4px 0 6px}
+.wave-src{display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:3px}
+.wave .wave-src button{font-size:11px;padding:0;min-height:30px;min-width:0;background:var(--card);color:var(--fg);touch-action:none;overflow:hidden;white-space:nowrap}
+.wave .wave-src button[data-kind=env]{color:var(--read);order:1}.wave .wave-src button[data-kind=lfo]{color:var(--sel);order:2}
+.wave .wave-src button[data-kind=vel]{order:3}.wave .wave-src button[data-kind=m]{order:4}.wave .wave-src button[data-kind=note]{order:5}.wave .wave-src button[data-kind=rand]{order:6}
+.wave .wave-src .wave-pin{color:var(--hot);order:0}
+.wave .wave-src button[aria-pressed=true]{color:var(--bg);background:var(--hot)}
+.wave .wave-src button.dragging{background:var(--sel);color:var(--bg)}
+.wave .wave-src button.driven::after{content:'⟳';margin-left:1px}
+.wave:is([data-tab=MATRIX],[data-tab=PATCH]) .wave-src{display:none}
+.wave-tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;background:var(--card);border-radius:10px;padding:3px}
+.wave .wave-tabs button{flex:1 0 auto;background:none;font-size:11px;padding:0 5px;min-height:32px;color:var(--dim);border-radius:7px}
+.wave .wave-tabs button[aria-pressed=true]{background:var(--pad);color:var(--hot)}
 .wave-hint{color:var(--dim);font-size:12px;margin:0}
-/* ten tabs in a 5 × 2 grid: all in view on a phone, no sideways scrolling */
-.wave-tabs{display:grid;grid-template-columns:repeat(5,1fr);gap:3px}
-.wave .wave-tabs button{font-size:12px;padding:6px 2px;min-width:0}
+.wave-hint[data-armed]{color:var(--hot);font-size:11px}
+.wave-note{color:var(--dim);font-size:11px;line-height:1.4;margin:0 2px}
+/* the knobs, in cards by what they do */
 .wave-body{display:flex;flex-direction:column;gap:8px}
-.wave-group h4,.wave h4{margin:2px 0;font-weight:normal;font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em}
-.knobs{display:flex;flex-wrap:wrap;gap:2px 4px}
+.wave-group{background:var(--card);border-radius:10px;padding:8px}
+.wave-group h4,.wave h4{margin:0 0 4px;font-weight:normal;font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em}
+.wave-group .wave-row{margin-bottom:4px}
+.wave-body.osc-off>.wave-group{opacity:.45}
+.knobs{display:flex;flex-wrap:wrap;gap:4px}
 .knob{width:62px;display:flex;flex-direction:column;align-items:center;font-size:10px;line-height:1.25;user-select:none;-webkit-user-select:none}
 .knob canvas{cursor:ns-resize}
 .knob span{color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:62px}
 .knob b{font-weight:normal;color:var(--fg);white-space:nowrap}
+.knob.pinned span{color:var(--hot)}
+.knob.pinned span::before{content:'◎ '}
+.knob.armed canvas{background:radial-gradient(circle,rgba(255,204,68,.1),transparent 70%)}
+.wave-row{display:flex;flex-wrap:wrap;gap:6px;align-items:flex-end}
+.wave-choice{display:flex;flex-direction:column;gap:2px;font-size:10px;color:var(--dim)}
+.wave-choice select{background:var(--pad);border-radius:8px;padding:4px 8px;min-height:34px;width:auto;color:var(--fg)}
+.wave-shape,.wave-harm{display:block;background:var(--card);border-radius:10px}
+.wave-macro{display:flex;flex-direction:column;align-items:center;gap:2px}
+.wave-name{background:var(--pad);color:var(--fg);border:0;border-radius:8px;padding:6px 8px;font:inherit;width:100%;max-width:220px;min-height:34px}
+.wave-row>.wave-name{flex:1}
+.wave-macro .wave-name{width:62px;font-size:10px;padding:3px 4px;min-height:0;text-align:center}
+.wave input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:var(--pad)}
+.wave input[type=range]::-moz-range-track{height:4px;border-radius:2px;background:var(--pad)}
+.wave input[type=range]::-webkit-slider-thumb{margin-top:-5px;width:14px;height:14px}
+/* the rack: a module that is off folds to its name */
+.wave-fx.off .wave-fx-body{display:none}
+.wave-fx.off{padding-bottom:4px}
+.wave-fx-head{margin:0 0 4px}
+/* the matrix: a route a card, source → knob over its depth; ⋯ opens the rest */
+.wave-matrix{display:flex;flex-direction:column;gap:6px}
+.wave-route{background:var(--card);border-radius:10px;padding:6px 8px;display:flex;flex-direction:column;gap:4px}
+.wave-route.off{opacity:.5}
+.wave-route-head{display:flex;align-items:flex-end;gap:4px}
+.wave-route-head .wave-choice{flex:1 1 0;min-width:0}.wave-route-head .wave-choice select{width:100%;text-overflow:ellipsis}
+.wave-arrow{color:var(--dim);padding:0 2px 9px}
+.wave-route-more{display:flex;flex-wrap:wrap;gap:6px;align-items:flex-end}
+.wave-route-more[hidden]{display:none}
+.wave-amt{display:flex;align-items:center;gap:8px}.wave-amt b{width:36px;text-align:right;font-weight:normal}
+.wave-curve{background:var(--pad);border-radius:8px;cursor:ns-resize}
+.wave .wave-add{align-self:flex-start}
+.wave-lib{display:flex;flex-direction:column;gap:4px}
+.wave-lib .wave-lib-name{flex:1;text-align:left}
+.wave-file{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--dim)}
+.wave textarea{background:var(--card);border-radius:8px;padding:6px}
 .midi-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:4px 0 8px}
 .midi-row button{font-size:12px;padding:4px 10px;min-height:36px}
 .midi-status{flex:1 1 140px;font-size:11px;color:var(--dim)}
 .cam-strip{display:block;width:100%;height:72px;background:var(--rig-surface,#000);border-radius:6px;margin:4px 0 8px;touch-action:none}
-.knob.pinned span{color:var(--hot)}
-.knob.pinned span::before{content:'◎ '}
-.wave-src .wave-pin{color:var(--hot)}
-.wave-src button.driven{color:var(--hot)}
-.wave-src button.driven::after{content:' ⟳'}
-.knob.armed canvas{background:radial-gradient(circle,rgba(255,204,68,.08),transparent 70%)}
-.wave-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-.wave-choice{display:flex;flex-direction:column;gap:2px;font-size:10px;color:var(--dim)}
-.wave-choice select{background:var(--pad);border-radius:6px;padding:4px 8px;min-height:32px;width:auto;color:var(--fg)}
-.wave-shape,.wave-harm{display:block;background:var(--rig-surface,#000);border-radius:6px}
-.wave-macro{display:flex;flex-direction:column;align-items:center;gap:2px}
-.wave-name{background:var(--pad);color:var(--fg);border:0;border-radius:6px;padding:4px 6px;font:inherit;width:100%;max-width:220px}
-.wave-macro .wave-name{width:62px;font-size:10px}
-.wave-route{display:flex;flex-wrap:wrap;gap:4px;align-items:flex-end;padding:6px 0;border-bottom:1px solid var(--line)}
-.wave-amt{display:flex;align-items:center;gap:4px;min-width:140px;flex:1}.wave-amt b{width:34px;text-align:right;font-weight:normal}
-.wave-lib{display:flex;flex-direction:column;gap:4px}
-.wave-file{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--dim)}
-.wave-curve{background:var(--rig-surface,#000);border-radius:6px;cursor:ns-resize}
-.wave-grow{flex:1}.wave-fx.off .knobs{opacity:.45}
-.wave-pname{color:var(--hot);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 4px}
-.wave-top{gap:4px}.wave-top button{min-width:40px}
-.wave-keybar{position:sticky;bottom:0;z-index:3;display:flex;align-items:center;gap:4px;padding:6px 0;background:var(--bg);border-top:1px solid var(--line)}
-.wave-keys{flex:1;min-width:0;height:56px;border-radius:4px;touch-action:none}
-.wave-keybar button{min-width:36px;padding:0}.wave-oct{font-size:11px;color:var(--dim);width:22px}
+.file-msg{margin:4px 0 0;color:var(--dim);font-size:11px;white-space:normal}
+.wave .wave-bt{display:inline-flex;align-items:center;gap:6px}.wave .wave-bt svg{flex:none}
+.wave-macro .knob>span{display:none}
+/* one height for every control in a row, so a labelled choice and a button share a bottom edge on every browser */
+.wave .wave-row>button,.wave .wave-row .wave-choice select,.wave .wave-route-more>button{height:40px;min-height:0;margin:0}
+.wave .wave-row>.wave-name{height:40px;min-height:0}
+.wave .wave-row:has(>.wave-choice){align-items:flex-start}
+.wave .wave-choice>button{height:40px;min-height:0;margin:0}
+/* the ball pit's palette: a keyboard whose lit keys are the notes its balls take */
+.pit{display:flex;flex-direction:column;gap:6px;margin:4px 0 8px}
+.pit-keybar{display:flex;align-items:center;gap:4px}
+.pit-keys{flex:1;min-width:0;height:64px;touch-action:none}
+.pit-keybar button{min-width:36px;min-height:40px;padding:0;background:var(--pad);border-radius:8px}
+.pit-tools{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dim)}
+.pit-tools button{background:var(--pad);border-radius:8px;padding:6px 10px;min-height:34px}

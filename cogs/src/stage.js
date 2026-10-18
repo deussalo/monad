@@ -116,6 +116,7 @@ function draw(){
   cx.globalAlpha=1;drawGround();
   const z=S.zoom*dpr;PX=1/S.zoom;
   cx.setTransform(z,0,0,z,dpr*CW/2-view.x*z,dpr*CH/2-view.y*z);
+  for(const p of W.pits)drawPit(p);
   for(const c of [...W.cogs].sort((a,b)=>a.layer-b.layer))drawCog(c);
   for(const b of W.belts)drawBelt(b);
   drawWindows();
@@ -125,10 +126,12 @@ function draw(){
   for(const a of W.arms)drawArm(a);
   for(const m of W.cams)drawCam(m);
   for(const m of W.cams)drawCamLink(m);
+  for(const p of W.pits)drawBalls(p);
+  if(ui.pitBand){const{a,p}=ui.pitBand;cx.setLineDash([6*PX,5*PX]);strokes(a.x,a.y,p.x,p.y,[[2*PX,DIM]]);cx.setLineDash([])}
   if(ui.carry&&ui.carry.band){const{a,p}=ui.carry.band;cx.setLineDash([6*PX,5*PX]);strokes(a.x,a.y,p.x,p.y,[[2*PX,DIM]]);cx.setLineDash([])}
   if(sel){const o=sel.o;
     if(sel.type==='cog')halo(o.x,o.y,radius(o)+3.2);else if(sel.type==='pad')halo(o.x,o.y,o.r+2.4);
-    else if(sel.type==='arm'){const t=armTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='cam'){const t=camTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='reader'||sel.type==='string'){halo(o.x1,o.y1,3.8);halo(o.x2,o.y2,3.8)}}
+    else if(sel.type==='arm'){const t=armTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='cam'){const t=camTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='reader'||sel.type==='string'){halo(o.x1,o.y1,3.8);halo(o.x2,o.y2,3.8)}else if(sel.type==='pit')drawPitSel(o)}
   if(S.ids){cx.fillStyle=DIM;cx.font=`${10*PX}px monospace`;
     for(const c of W.cogs)cx.fillText('c'+c.id,c.x+4*PX,c.y-4*PX);
     for(const p of W.pads)cx.fillText('p'+p.id,p.x+p.r+2*PX,p.y);
@@ -143,7 +146,7 @@ function drawGhost(s){
   drawArm({cog:{x:-24,y:0,th:0,w:0},a:0,r0:0,len:24});cx.restore();cx.globalAlpha=1;
 }
 // Two readers: the note reader plays a disc's rings as its notes, the comb plays them on its own tines.
-const PART_KEYS={m:'motor',c:'cog',d:'disc',a:'arm',b:'belt',p:'pad',t:'string',r:'reader',k:'comb',e:'cam'},KEY_OF=Object.fromEntries(Object.entries(PART_KEYS).map(([k,v])=>[v,k]));
+const PART_KEYS={m:'motor',c:'cog',d:'disc',a:'arm',b:'belt',p:'pad',t:'string',r:'reader',k:'comb',e:'cam',o:'box'},KEY_OF=Object.fromEntries(Object.entries(PART_KEYS).map(([k,v])=>[v,k]));
 const PARTS=Object.values(PART_KEYS);
 const MODEL={
   motor:{n:12,x:0,y:0,th:.13,w:1,layer:0,motor:{rpm:30,revs:0},track:null},
@@ -158,6 +161,7 @@ function drawPartIcon(kind){
   else if(kind==='pad')drawPad({x:0,y:0,r:11,voice:{kind:'kick'}});
   else if(kind==='belt'){cx.strokeStyle=DIM;cx.lineWidth=PX;circle(-12,0,9);circle(14,0,6);cx.setLineDash([3,3]);strokes(-12,-9,14,-6,[[1.5,DIM]]);strokes(-12,9,14,6,[[1.5,DIM]]);cx.setLineDash([])}
   else if(kind==='string')drawString({x1:-20,y1:14,x2:20,y2:-14,kind:'string'});
+  else if(kind==='box'){const p={x:0,y:0,w:36,h:26,balls:[]};drawPit(p);for(const[x,y,m]of [[-8,3,52],[5,-4,60],[9,6,67]]){cx.fillStyle=ballColor(m);circle(x,y,ballR(m)*.55,true)}}
   else drawReader({x1:-17,y1:17,x2:17,y2:-17,tines:kind==='comb'?6:0});
 }
 const ICON_SCALE={disc:.235,cog:.82,motor:.82,pad:1.3};
@@ -165,6 +169,7 @@ function bounds(){
   const xs=[],ys=[],add=(x,y,r)=>{xs.push(x-r,x+r);ys.push(y-r,y+r)};
   for(const c of W.cogs)add(c.x,c.y,radius(c)+4);for(const p of W.pads)add(p.x,p.y,p.r+3);
   for(const r of [...W.readers,...W.strings]){add(r.x1,r.y1,4);add(r.x2,r.y2,4)}for(const a of W.arms){const t=armTip(a);add(t.x,t.y,4)}
+  for(const p of W.pits){xs.push(p.x-p.w/2-4,p.x+p.w/2+4);ys.push(p.y-p.h/2-4,p.y+p.h/2+4)}
   if(!xs.length)return null;
   const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);return {cx:(x0+x1)/2,cy:(y0+y1)/2,w:x1-x0,h:y1-y0};
 }
@@ -226,6 +231,7 @@ function focus(type,o,s){
   if(type==='pad'){z=30/o.r;at=o}
   else if(type==='reader'||type==='string'){z=170/Math.max(20,stringLen(o));at=mid(o)}
   else if(type==='arm'){z=150/(o.r0+o.len);at=o.cog}
+  else if(type==='pit'){z=Math.min(CW*.8/o.w,(shelfTopOr()-40)*.8/o.h);at=o}
   else if(o.track){z=14/ringGap(o);const w=screenToWorld(s);if(S.zoom<z*.9){fly(w.x-(s.x-CW/2)/z,w.y-(s.y-CH/2)/z,z);return}}
   else{z=120/radius(o);at=o}
   if(S.zoom>=z*.9){flyFit();return}
@@ -244,24 +250,27 @@ function removeSel(){
   const items=group.length?group:sel?[sel]:[];group=[];
   for(const{type,o}of items)if(type!=='belt'||W.belts.includes(o))removeObj(type,o);
 }
-const PART_LISTS=['cog','arm','pad','reader','string','belt','cam'],UNSEAT_PX=36;
+const PART_LISTS=['cog','arm','pad','reader','string','belt','cam','pit'],UNSEAT_PX=36;
+const shelfTopOr=()=>typeof shelfTop==='function'?shelfTop():CH;
 // A copied cog takes its arms; a belt comes when both its cogs do.
 let partClip=null;
 function copyParts(){
   const items=group.length?group:sel&&sel.type!=='dot'?[sel]:[];if(!items.length)return false;
   const ids=new Set(items.map(x=>x.o.id)),j=serialize(),own=o=>ids.has(o.id);
   partClip={cogs:j.cogs.filter(own),arms:j.arms.filter(a=>own(a)||ids.has(a.cog)),pads:j.pads.filter(own),readers:j.readers.filter(own),
-    strings:j.strings.filter(own),belts:j.belts.filter(b=>ids.has(b.a)&&ids.has(b.b)),cams:j.cams.filter(m=>own(m)||ids.has(m.cog))};
+    strings:j.strings.filter(own),belts:j.belts.filter(b=>ids.has(b.a)&&ids.has(b.b)),cams:j.cams.filter(m=>own(m)||ids.has(m.cog)),pits:j.pits.filter(own)};
   return true;
 }
 // Paste lands centred under the pointer, or a step down-right of the original when the pointer is off the stage.
 function pasteParts(){
   if(!partClip)return false;
   const j=serialize(),id=new Map(),fresh=o=>{const n=W.next+id.size;id.set(o.id,n);return n},c=structuredClone(partClip);
-  const pts=[...c.cogs,...c.pads,...[...c.readers,...c.strings].map(mid)],step=30/S.zoom;
+  c.pits=c.pits||[];
+  const pts=[...c.cogs,...c.pads,...c.pits,...[...c.readers,...c.strings].map(mid)],step=30/S.zoom;
   let dx=step,dy=step;
   if(pts.length&&ui.hover){const xs=pts.map(p=>p.x),ys=pts.map(p=>p.y),at=screenToWorld(ui.hover);dx=at.x-(Math.min(...xs)+Math.max(...xs))/2;dy=at.y-(Math.min(...ys)+Math.max(...ys))/2}
   for(const o of [...c.cogs,...c.pads]){o.id=fresh(o);o.x+=dx;o.y+=dy}
+  for(const o of c.pits){o.id=fresh(o);o.x+=dx;o.y+=dy;for(const b of o.balls){b.bx+=dx;b.by+=dy}}
   for(const o of [...c.readers,...c.strings]){o.id=fresh(o);o.x1+=dx;o.y1+=dy;o.x2+=dx;o.y2+=dy}
   for(const o of c.readers)o.on=id.has(o.on)?id.get(o.on):null;
   c.arms=c.arms.filter(a=>id.has(a.cog)||j.cogs.some(o=>o.id===a.cog));
@@ -280,6 +289,7 @@ function boxSelect(a,b){
   const x0=Math.min(a.x,b.x),x1=Math.max(a.x,b.x),y0=Math.min(a.y,b.y),y1=Math.max(a.y,b.y),inside=q=>q.x>=x0&&q.x<=x1&&q.y>=y0&&q.y<=y1,g=[];
   for(const o of W.cogs)if(inside(o))g.push({type:'cog',o});
   for(const o of W.pads)if(inside(o))g.push({type:'pad',o});
+  for(const o of W.pits)if(inside(o))g.push({type:'pit',o});
   for(const type of ['reader','string'])for(const o of W[type+'s'])if(inside(mid(o)))g.push({type,o});
   for(const o of W.arms)if(inside(armTip(o)))g.push({type:'arm',o});
   for(const o of W.cams)if(inside(camTip(o)))g.push({type:'cam',o});
@@ -293,6 +303,7 @@ function drawGroup(){
   cx.setLineDash([]);
   for(const{type,o}of group){
     if(type==='cog'||type==='pad'){const s=toScreen(o);circle(s.x,s.y,(type==='cog'?radius(o):o.r)*S.zoom+5)}
+    else if(type==='pit'){const a=toScreen({x:o.x-o.w/2,y:o.y-o.h/2});cx.strokeRect(a.x-5,a.y-5,o.w*S.zoom+10,o.h*S.zoom+10)}
     else if(type==='arm'){const s=toScreen(armTip(o));circle(s.x,s.y,7)}
     else if(type==='cam'){const s=toScreen(camTip(o));circle(s.x,s.y,7)}
     else if(type!=='belt'){const a=toScreen({x:o.x1,y:o.y1}),b=toScreen({x:o.x2,y:o.y2});circle(a.x,a.y,6);circle(b.x,b.y,6);line(a.x,a.y,b.x,b.y)}
@@ -350,11 +361,13 @@ function newPart(kind,p){
   if(kind==='reader'||kind==='comb')return {type:'reader',o:{id,x1:0,y1:0,x2:0,y2:0,voice:readerVoice(),tines:kind==='comb'?12:0,combBase:60,combScale:'major',hits:0,lastV:0}};
   if(kind==='string')return {type:'string',o:{id,x1:0,y1:0,x2:0,y2:0,...STRING_DEFAULT,hits:0,lastV:0}};
   if(kind==='cam')return {type:'cam',o:newCam(id)};
+  if(kind==='box')return {type:'pit',o:newPit(id,p)};
   return {type:'arm',o:{id,cog:null,a:0,r0:0,len:4,flex:.5}};
 }
 function placePart(type,o,p){
   if(type==='cog')placeCog(o,p);
   else if(type==='pad'){o.x=p.x;o.y=p.y}
+  else if(type==='pit')shiftPit(o,p.x-o.x,p.y-o.y);
   else if(type==='string')Object.assign(o,{x1:p.x-60,y1:p.y,x2:p.x+60,y2:p.y});
   else if(type==='reader'){const d=pickCog(p,c=>c.track);
     if(d){const a=Math.atan2(p.y-d.y,p.x-d.x),r0=ringR(d,0)-6,r1=ringR(d,trackRings(d.track)-1)+6;
@@ -379,7 +392,7 @@ const G={
     for(const{type,o}of group)if(type==='reader'&&o.on&&!group.some(x=>x.o===o.on))o.on=null;
     const p0=screenToWorld(s0),start=group.map(({o})=>({o,s:{x:o.x,y:o.y,x1:o.x1,y1:o.y1,x2:o.x2,y2:o.y2}}));
     return {o:null,move(s){trackScrap(s);const q=screenToWorld(s),dx=q.x-p0.x,dy=q.y-p0.y;
-        for(const{o,s:k}of start){if('x'in o){o.x=k.x+dx;o.y=k.y+dy}if('x1'in o){o.x1=k.x1+dx;o.y1=k.y1+dy;o.x2=k.x2+dx;o.y2=k.y2+dy}}solve()},
+        for(const{o,s:k}of start){if(o.balls){shiftPit(o,k.x+dx-o.x,k.y+dy-o.y);continue}if('x'in o){o.x=k.x+dx;o.y=k.y+dy}if('x1'in o){o.x1=k.x1+dx;o.y1=k.y1+dy;o.x2=k.x2+dx;o.y2=k.y2+dy}}solve()},
       up(){if(ui.scrap){ui.scrap=false;removeSel()}else changed(true)}};
   },
   // An armed part: press or drag on the canvas to place it, as if carried in.
@@ -520,12 +533,14 @@ function begin(s){
     near(dist({x:o.x1,y:o.y1}),22,()=>G.span(type,o,s,1));near(dist({x:o.x2,y:o.y2}),22,()=>G.span(type,o,s,2));
     near(segDist(p,o.x1,o.y1,o.x2,o.y2)*Z+8,22,()=>G.span(type,o,s,0))}
   for(const o of W.belts)for(const l of beltLines(o))near(segDist(p,...l)*Z+10,22,()=>G.belt(o));
+  let box=null;for(const o of W.pits)box=pitTouch(o,s,near)||box;
   const c=pickCog(p,()=>true,14/Z),d=c&&dist(c),Rs=c&&radius(c)*Z;
   if(c&&Rs>=30)near(Math.abs(d-Rs),14,()=>G.rim(c,s));
   if(best)return best.make();
   if(c){
     if(noteMode(c)&&d>Math.max(22,Rs*.2)&&cellAt(c,p))return G.notes(c,s);
     return G.cog(c,s)}
+  if(box)return G.pitIn(box,s);
   return G.pan(s);
 }
 
@@ -1037,6 +1052,7 @@ function buildPanel(lead){
   const room=section('room'),sRow=(f,def,o,dflt,after)=>numRow(f,def[1],def[2],def[3],def[4],...bind(o,def[0],after),dflt[def[0]]);
   for(const k of ROOM_SPACE)sRow(room,SPACE_DEFS.find(d=>d[0]===k),SPACE,SPACE_DEFAULT,roomEdited);
   for(const k of ROOM_S)sRow(room,S_DEFS.find(d=>d[0]===k),S,S_DEFAULT,()=>{applyAudioSettings();changed(k!=='master')});
+  fileSection();
   const adv=el('details',{},el('summary',{textContent:'advanced'}));panel.append(adv);
   const wf=section('world',adv);
   for(const def of S_DEFS)if(!ROOM_S.includes(def[0]))sRow(wf,def,S,S_DEFAULT,()=>{applyAudioSettings();changed(/Tol|bpm|beats/.test(def[0]))});
@@ -1056,10 +1072,46 @@ function buildPanel(lead){
   roRow(st,'world',()=>`c${W.cogs.length} a${W.arms.length} p${W.pads.length} r${W.readers.length} b${W.belts.length} s${W.strings.length}`);
   const js=section('json',adv),ta=el('textarea'),msg=el('b');
   js.append(ta,el('button',{textContent:'export',onclick:()=>{ta.value=JSON.stringify(serialize());msg.textContent='ok'}}),
-    el('button',{textContent:'import',onclick:()=>{try{deserialize(JSON.parse(ta.value));msg.textContent='ok'}catch(e){msg.textContent=e.message}}}),
+    el('button',{textContent:'import',onclick:()=>{try{msg.textContent=openCogsFile(ta.value)}catch(e){msg.textContent=e.message}}}),
     el('button',{textContent:'share',onclick:async()=>{ta.value=await shareURL();
       try{await navigator.clipboard.writeText(ta.value);msg.textContent='url copied'}catch(e){msg.textContent='url in box; clipboard: '+e.name}}}),msg);
   panelRows=rows.length;panelReadouts=readouts.length;
+}
+/* ---------- the cogs file: everything in one, the machine (its parts, their patches, the settings) and the library ---------- */
+const COGS_FILE=1;
+function cogsFile(){return JSON.stringify({cogsFile:COGS_FILE,saved:new Date().toISOString(),world:serialize(),patches:patchLib.all()})}
+const cogsFileName=()=>`cogs-${new Date().toISOString().slice(0,10)}.cogs.json`;
+// Opens a cogs file, a bare machine (the old json export) or one synth patch (into the library). The machine is
+// checked whole before anything changes, then the library merges in; returns what happened, in words.
+function openCogsFile(text){
+  let j;try{j=JSON.parse(text)}catch(e){throw new Error('not a cogs file: '+e.message)}
+  if(!j||typeof j!=='object')throw new Error('not a cogs file');
+  const said=[];
+  const lib=got=>{const n=got.added+got.renamed,pl=k=>`${k} patch${k===1?'':'es'}`,bits=[];
+    if(n)bits.push(`${pl(n)} added`+(got.renamed?` (${got.renamed} renamed beside one of the same name)`:''));
+    if(got.same)bits.push(`${pl(got.same)} already there`);
+    if(bits.length)said.push('library: '+bits.join(', '));
+    if(!got.saved)said.push('the library is kept for this session only: storage is off')};
+  if(Array.isArray(j.osc)){lib(mergePatches({[j.name||'patch']:j}));return said.filter(Boolean).join('; ')}
+  const world=j.cogsFile?j.world:j;
+  if(!world||!Array.isArray(world.cogs))throw new Error('not a cogs file: no machine in it');
+  deserialize(world);
+  const parts=W.cogs.length+W.arms.length+W.pads.length+W.readers.length+W.belts.length+W.strings.length+W.cams.length;
+  said.push(`machine loaded: ${parts} part${parts===1?'':'s'}`);
+  if(j.cogsFile&&j.patches)lib(mergePatches(j.patches));
+  return said.filter(Boolean).join('; ');
+}
+// The panel's file row: save everything to a file, open one.
+function fileSection(){
+  const f=section('file'),msg=el('p',{className:'file-msg'}),pick=el('input',{type:'file',className:'cogs-file',accept:'.json,application/json',hidden:true});
+  const say=t=>{msg.textContent=t};
+  const save=el('button',{textContent:'save file',onclick:()=>{
+    offerFile(cogsFileName(),cogsFile());const n=Object.keys(patchLib.all()).length;
+    say(`saved ${cogsFileName()} (also copied): the machine and ${n} library patch${n===1?'':'es'}`)}});
+  const open=el('button',{textContent:'open file',onclick:()=>pick.click()});
+  pick.onchange=async()=>{const fl=pick.files[0];pick.value='';if(!fl)return;try{say(openCogsFile(await fl.text()))}catch(e){say(`${fl.name}: ${e.message}`)}};
+  save.dataset.act='save file';open.dataset.act='open file';
+  f.append(save,open,pick,msg);
 }
 function applyAudioSettings(){listen(true)}
 /* ---------- the listener is the camera ---------- */
@@ -1091,11 +1143,17 @@ const frac=s=>{const[a,b=1]=s.split('/').map(Number);return a/b};
 function select(type,o){sel=type?{type,o}:null;if(o&&o.voice&&(type==='reader'||type==='pad'))midi.target=o;group=[];if(inspectorLive())buildInspector()}
 const span=(a,b)=>Array.from({length:b-a+1},(_,i)=>String(a+i));
 const PITCH_KEYS=new Set(['note','octave','semi']);
-function voiceRows(f,owner,withNote){
+function voiceRows(f0,owner,withNote){
   const v=owner.voice,retune=()=>changed();
+  // the synth's part settings (its kind, level, MIDI in) fold away under the patch: the synth itself comes first
+  let f=f0,part=null;
+  if(v.kind==='wave'){const sum=el('summary');part=f=el('details',{className:'wave-part'},sum);
+    const say=()=>{sum.textContent=`part · level ${(+v.level).toFixed(2)} · vel ${(+v.velSense).toFixed(2)}`+(withNote?` · ${noteName(voiceMidi(v,v.note))}`:'')};
+    rows.push(say);say()}
   selRow(f,'kind',Object.keys(VOICES),()=>v.kind,k=>{owner.voice=makeVoice(k,{level:v.level,velSense:v.velSense,...(v.note!=null?{note:v.note,octave:v.octave,semi:v.semi}:{})});buildInspector();changed()},kindLabel);
+  // MIDI in for a voice; the synth has its Bluetooth button in its own head instead
+  if(v.kind!=='wave')midiRow(f,owner);
   // the wave synth is one tap away from any other voice
-  midiRow(f,owner);
   if(v.kind!=='wave')f.append(el('button',{className:'to-wave',textContent:'Use the synth: 3 oscillators, filters, envelopes, LFOs, FX',onclick:()=>{
     owner.voice=waveVoice(WAVE_PRESETS.pluck(),{note:v.note??60,octave:v.octave??0,semi:v.semi??0,level:v.level,velSense:v.velSense});buildInspector();changed()}}));
   for(const[k,l,a,b,s]of [...VOICE_DEFS[v.kind],...COMMON_DEFS]){
@@ -1104,15 +1162,15 @@ function voiceRows(f,owner,withNote){
     else if(PITCH_KEYS.has(k))selRow(f,l,span(a,b),()=>String(v[k]),x=>{v[k]=+x;retune()},x=>(x>0?'+':'')+x);
     else if(Array.isArray(a))selRow(f,l,a,()=>v[k],x=>{v[k]=x;retune()});else numRow(f,l,a,b,s,...bind(v,k,changed),VOICES[v.kind][k]);
   }
-  if(withNote&&(v.kind==='synth'||v.kind==='wave'))roRow(f,'pitch',()=>noteName(voiceMidi(v,v.note)));
-  if(v.kind==='wave')waveEditor(f,owner);
+  if(withNote&&v.kind==='synth')roRow(f,'pitch',()=>noteName(voiceMidi(v,v.note)));
+  if(v.kind==='wave')waveEditor(f0,owner,part);
 }
 function buildInspector(){
   if(!inspector)return;
   rows.length=panelRows;readouts.length=panelReadouts;
   roll=null;camStrips=[];
   const o=sel&&sel.o,f=inspector,cogKind=c=>c.track?'disc':c.motor?'motor':'cog';
-  inspector.replaceChildren(el('legend',{textContent:sel?`${sel.type==='cog'?cogKind(o):sel.type} ${sel.o.id}`:'selection'}));
+  inspector.replaceChildren(el('legend',{textContent:sel?`${sel.type==='cog'?cogKind(o):sel.type==='pit'?'box':sel.type} ${sel.o.id}`:'selection'}));
   if(sel&&sel.type==='cog'){
     numRow(f,'teeth',6,240,1,()=>o.n,v=>{resizer(o).set(v);changed(true)});
     if(motorOf(o)){
@@ -1160,6 +1218,9 @@ function buildInspector(){
     roRow(f,'last note',()=>o.lastMidi==null?'-':noteName(o.lastMidi));
     roRow(f,'hits',()=>o.hits);
     roRow(f,'last vn',()=>o.lastV.toFixed(1));
+  }else if(sel&&sel.type==='pit'){
+    pitPalette(f,o);
+    voiceRows(f,o,false);
   }else if(sel&&sel.type==='belt'){
     numRow(f,'crossed',0,1,1,...bind(o,'cross',()=>changed(true)));
     roRow(f,'ratio',()=>`c${o.b.id}/c${o.a.id} = ${(o.a.w?o.b.w/o.a.w:(o.cross?-1:1)*o.a.n/o.b.n).toFixed(4)}`);

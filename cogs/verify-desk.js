@@ -272,6 +272,24 @@ const SHOTS = process.env.COGS_SHOTS || '';
   is('a save that does not fit is announced, and the panel says storage is off', await probe(() => [!document.querySelector('#notice').hidden && /not saved/.test(document.querySelector('#notice').textContent), [...document.querySelectorAll('#panel .ro')].find(r => r.textContent.startsWith('storage'))?.textContent.includes('off')]), [true, true]);
   await probe(n => { for (let i = 0; i < n; i++) localStorage.removeItem('fill' + i); }, filled[0]);
 
+  console.log('ONE FILE');
+  if (!(await probe(() => __cogs.open))) await rail('panel');
+  const kept = await key();
+  const file = await probe(() => { localStorage.removeItem('cogs.v1.patches'); patchLib.save('mine', patchOf(waveInit())); return cogsFile(); });
+  const fj = JSON.parse(file);
+  is('save file: one file holds the machine and the patch library', [fj.cogsFile, Array.isArray(fj.world.cogs), Object.keys(fj.patches)], [1, true, ['mine']]);
+  await probe(() => { localStorage.removeItem('cogs.v1.patches'); __cogs.deserialize({ ...__cogs.serialize(), cogs: [], arms: [], pads: [], readers: [], belts: [], strings: [], cams: [] }); __cogs.commit(); });
+  await p.setInputFiles('#panel input.cogs-file', { name: 'cogs.cogs.json', mimeType: 'application/json', buffer: Buffer.from(file) }); await settle(); await wait(100);
+  is('open file: the machine comes back and the library patch is in the library again', [await key() === kept, await probe(() => Object.keys(patchLib.all())), await probe(() => /machine loaded/.test(document.querySelector('#panel .file-msg').textContent))], [true, ['mine'], true]);
+  is('the load is one undo step', await probe(() => { __cogs.undo(); const n = __cogs.W.cogs.length; __cogs.redo(); return n; }), 0);
+  const merged = await probe(t => { const a = openCogsFile(t); const j = JSON.parse(t); j.patches.mine.vol = .3; const b = openCogsFile(JSON.stringify(j));
+    const one = openCogsFile(JSON.stringify({ cogsWave: 1, ...patchOf(waveInit()), name: 'solo', vol: .2 })); return [a, b, one, Object.keys(patchLib.all()).sort()]; }, file);
+  check('again: nothing doubled; a different patch under a taken name sits beside it; a single patch goes to the library', /already there/.test(merged[0]) && /renamed/.test(merged[1]) && /1 patch added/.test(merged[2]) && JSON.stringify(merged[3]) === JSON.stringify(['mine', 'mine (2)', 'solo']), merged);
+  const before2 = await key();
+  const refused = await probe(() => { try { openCogsFile('{"cogsFile":1,"world":{"nope":1}}'); return 'opened'; } catch (e) { return e.message; } });
+  is('a file without a machine is refused, the world untouched', [refused, await key() === before2], ['not a cogs file: no machine in it', true]);
+  await probe(() => localStorage.removeItem('cogs.v1.patches'));
+
   console.log('BOUND');
   const bound = await probe(() => { for (let i = 0; i < 520; i++) { __cogs.W.pads[0].x += 1; __cogs.commit(); } return __cogs.undos; });
   is('520 more steps: history holds the last 500', bound, 500);

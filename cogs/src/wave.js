@@ -80,11 +80,27 @@ const patchLib={
   save(name,p){const all=this.all();all[name]={...p,name};return this.put(all)},
   remove(name){const all=this.all();delete all[name];this.put(all)},
 };
-function exportPatch(v){
-  const p=patchOf(v),text=JSON.stringify({cogsWave:1,...p},null,1),name=(p.name||'patch').replace(/[^\w-]+/g,'-')+'.cogs-wave.json';
+// A file out: downloaded, and copied too, for a sandbox that blocks downloads.
+function offerFile(name,text){
   try{const a=el('a',{href:URL.createObjectURL(new Blob([text],{type:'application/json'})),download:name});document.body.append(a);a.click();a.remove()}catch(e){}
   try{navigator.clipboard?.writeText(text).catch(()=>{})}catch(e){}
   return text;
+}
+function exportPatch(v){
+  const p=patchOf(v);
+  return offerFile((p.name||'patch').replace(/[^\w-]+/g,'-')+'.cogs-wave.json',JSON.stringify({cogsWave:1,...p},null,1));
+}
+// Patches into the library: one already there word for word is skipped; a different one under a taken name is
+// kept beside it as "name (2)", so an import never overwrites a patch.
+function mergePatches(lib){
+  const all=patchLib.all(),same=(a,b)=>JSON.stringify({...a,name:''})===JSON.stringify({...b,name:''}),got={added:0,renamed:0,same:0};
+  for(const[name,p]of Object.entries(lib||{})){
+    if(!p||typeof p!=='object'||!Array.isArray(p.osc))continue;
+    if(Object.values(all).some(q=>same(q,p))){got.same++;continue}
+    let n=name.slice(0,40)||'patch';if(all[n]){let i=2;while(all[`${n} (${i})`])i++;n=`${n} (${i})`;got.renamed++}else got.added++;
+    all[n]={...p,name:n};
+  }
+  got.saved=patchLib.put(all);return got;
 }
 function importPatch(v,text){const j=JSON.parse(text);if(!j||typeof j!=='object'||!Array.isArray(j.osc))throw new Error('not a wave patch: no osc list');loadPatch(v,j)}
 
@@ -100,8 +116,18 @@ function waveNote(v,midi,when,amp,pan,key,x,hold=0,dark=0){
   const id=wavePost(v);if(!id)return;waveNotes++;waveLast=voiceMidi(v,midi);
   waveNode.port.postMessage({type:'note',id,at:when*ac.sampleRate,key,midi:voiceMidi(v,midi),amp,vel:clamp(x??amp,0,1),pan,hold,dark});
 }
+// Live modulation for the open editor: the worklet sends, 30 times a second, where its newest note has each routed
+// knob (normalised); the editor draws a dot there. Nothing is sent while no editor watches.
+let waveWatching=0;const waveMod={id:0,at:new Map()},waveModHooks=new Set();
+function waveWatch(v){const id=v?wavePost(v):0;if(id===waveWatching||!waveNode)return;waveWatching=id;waveMod.at.clear();waveNode.port.postMessage({type:'watch',id})}
+function waveModIn(m){
+  if(m.id!==waveWatching)return;waveMod.id=m.id;waveMod.at=new Map(m.d.map((d,i)=>[WAVE_PARAMS[d][0],m.n[i]]));
+  for(const h of waveModHooks)if(!h())waveModHooks.delete(h);
+  if(!waveModHooks.size)waveWatch(null);
+}
 function startWave(){
   waveNode=new AudioWorkletNode(ac,'cogs-wave',{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[2]});
-  waveNode.port.onmessage=e=>{if(e.data.type==='stats')waveVoices=e.data.voices};
+  waveNode.port.onmessage=e=>{if(e.data.type==='stats')waveVoices=e.data.voices;else if(e.data.type==='mod')waveModIn(e.data)};
+  waveWatching=0;
   waveNode.connect(engineNode);
 }

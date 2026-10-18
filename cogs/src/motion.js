@@ -80,7 +80,7 @@ function linkCam(m,rd){
   let slot=v.macro.findIndex((x,i)=>!used.has(i+1)&&!x&&!v.mods.some(r=>r.src==='m'+(i+1)||r.aux==='m'+(i+1)));
   if(slot<0)slot=[...Array(WAVE_MACROS).keys()].find(i=>!used.has(i+1))??0;
   m.to=rd;m.macro=slot+1;buzz(12);changed(true);
-  waveUi.arm='m'+m.macro;waveUi.pin=false;if(['MATRIX','PATCH','MACRO'].includes(waveUi.tab))waveUi.tab='A';
+  waveUi.arm='m'+m.macro;waveUi.pin=false;if(['MATRIX','PATCH'].includes(waveUi.tab))waveUi.tab='MAIN';
   select('reader',rd);if(typeof openPartEditor==='function')openPartEditor();
   camSay(()=>`cam ${m.id} turns M${m.macro}: drag a knob to set how far`);
   return true;

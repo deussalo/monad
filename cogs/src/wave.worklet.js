@@ -181,13 +181,14 @@ class WaveSynth extends AudioWorkletProcessor{
   constructor(){
     super();
     this.tables={};for(const n of WAVE_TABLES)if(n!=='harmonics')this.tables[n]=buildTable(waveSpectra(n));
-    this.patches=new Map();this.bpm=120;this.streams=0;this.uniScale=1;this.bws=new Float64Array(8);this.queue=[];this.offs=[];this.motions=new Map();this.frame=0;this.statAt=0;this.ver=0;
+    this.patches=new Map();this.bpm=120;this.streams=0;this.uniScale=1;this.bws=new Float64Array(8);this.queue=[];this.offs=[];this.motions=new Map();this.frame=0;this.statAt=0;this.ver=0;this.watch=0;this.wAge=-1;this.wAt=0;this.wN=new Float64Array(NP);this.wSent=false;
     this.voices=Array.from({length:WVOICES},()=>this.voice());
     this.mixL=new Float32Array(WSLICE);this.mixR=new Float32Array(WSLICE);this.ol=new Float32Array(WSLICE);this.or=new Float32Array(WSLICE);
     this.port.onmessage=e=>{const m=e.data;
       if(m.type==='patch')this.setPatch(m.id,m.p);else if(m.type==='note')this.queue.push(m);else if(m.type==='off')this.offs.push(m);
       else if(m.type==='motion')this.motion(m);
       else if(m.type==='tempo')this.bpm=m.bpm>0?m.bpm:120;
+      else if(m.type==='watch'){this.watch=m.id|0;this.wSent=false}
       else if(m.type==='panic')for(const v of this.voices)v.on=false};
   }
   voice(){
@@ -346,6 +347,8 @@ const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
       for(const d of cp.modded)vals[d]=cp.base[d];
       // a route: its source through the curve, bipolar or not, times the depth, times the aux source (or its inverse)
       for(const[s,d,amt,bi,ax,ai,cv]of cp.routes){const x=modCurve(src[s],cv);vals[d]+=(bi?x*2-1:x)*amt*(ax<0?1:ai?1-src[ax]:src[ax])}
+      // the editor watches a patch: its newest note's modulated knob positions, for the moving dots
+      if(cp.id===this.watch&&v.age>=this.wAge){this.wAge=v.age;for(const d of cp.modded)this.wN[d]=vals[d]}
       for(const d of cp.modded)vals[d]=waveDenorm(WAVE_PARAMS[d],vals[d]);
     }
     for(let i=0;i<WAVE_LFOS;i++){const l=v.lfo[i],nph=l.ph+this.lfoRate(cp,vals,i)*n/fs;if(nph>=1){l.prev=l.held;l.held=Math.random()}l.ph=nph%1}
@@ -384,6 +387,7 @@ const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
     const out=outputs[0],L=out[0],R=out[1]||out[0],n=L.length,end=currentFrame+n;this.frame=currentFrame;
     // last block's demand sets this block's unison budget
     {const per=this.streams/Math.max(1,n/WSLICE);this.uniScale=per>WSTREAMS?WSTREAMS/per:1;this.streams=0}
+    const watching=this.watch&&end-this.wAt>=sampleRate/30;if(watching)this.wAge=-1;
     for(let at=0;at<n;at+=WSLICE){
       const sl=Math.min(WSLICE,n-at),t=currentFrame+at+sl;
       if(this.motions.size)this.runMotions(currentFrame+at);
@@ -398,6 +402,9 @@ const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
       for(let s=0;s<n;s++){L[s]+=cp.busL[s];R[s]+=cp.busR[s]}
       cp.live=false;
     }
+    if(watching){this.wAt=end;const cp=this.patches.get(this.watch);
+      if(this.wAge>=0&&cp){this.port.postMessage({type:'mod',id:this.watch,d:cp.modded,n:cp.modded.map(d=>this.wN[d])});this.wSent=true}
+      else if(this.wSent){this.port.postMessage({type:'mod',id:this.watch,d:[],n:[]});this.wSent=false}}
     if(end-this.statAt>=sampleRate*.25){this.statAt=end;let nv=0;for(const v of this.voices)nv+=v.on?1:0;this.port.postMessage({type:'stats',voices:nv})}
     return true;
   }
