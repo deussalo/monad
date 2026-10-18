@@ -53,7 +53,7 @@ class FieldSlot{
     this.dw=w;this.dT=dT;this.dlp=[l1,l2];this.dhp=[h1,h2];
   }
   reverb(p,k,inL,inR,L,R,n,lv){
-    if(!this.verb){const V=typeof Verb==='function'?Verb:FieldMiniVerb;this.verb=new V(this.fs,this.verbParams(p,k))}
+    if(!this.verb)this.verb=new Verb(this.fs,this.verbParams(p,k));
     this.verb.set(this.verbParams(p,k));
     const tl=this.tl||(this.tl=new Float32Array(128)),tr=this.tr||(this.tr=new Float32Array(128));tl.fill(0,0,n);tr.fill(0,0,n);
     this.verb.process(inL,inR,tl,tr,n);
@@ -80,22 +80,6 @@ class FieldSlot{
   }
 }
 const ZERO=new Float32Array(128);
-// Until the main reverb arrives in the same script, a small FDN stands in for it.
-class FieldMiniVerb{
-  constructor(fs,p){this.fs=fs;const ms=[29.7,37.1,41.1,43.7,53.3,59.9,67.1,73.3];this.len=ms.map(m=>Math.round(m*fs/1000));
-    this.buf=this.len.map(l=>new Float32Array(Math.ceil(l*2.2)+4));this.i=0;this.lp=new Float64Array(8);this.ap=[new Float32Array(Math.round(fs*.0047)),new Float32Array(Math.round(fs*.0113)),new Float32Array(Math.round(fs*.0037)),new Float32Array(Math.round(fs*.0091))];this.api=[0,0,0,0];this.set(p)}
-  clear(){for(const b of this.buf)b.fill(0);for(const a of this.ap)a.fill(0);this.lp.fill(0)}
-  set(p){this.p=p;const sz=.5+(p.size??.6);this.L=this.len.map(l=>Math.min(Math.round(l*sz),l*2.2|0));this.g=this.L.map(l=>Math.exp(-6.9*l/this.fs/Math.max(.2,p.decay||2.5)))}
-  process(inL,inR,oL,oR,n){
-    const N=8,b=this.buf,L=this.L,g=this.g,lp=this.lp,y=new Float64Array(N);
-    for(let s=0;s<n;s++){
-      let x=(inL[s]+inR[s])*.5;for(let j=0;j<4;j++){const a=this.ap[j],i=this.api[j]%a.length,d=a[i],v=x-.6*d;a[i]=v;this.api[j]++;x=d+.6*v}
-      let sum=0;for(let j=0;j<N;j++){const B=b[j],r=B[(this.i-L[j]+B.length*4)%B.length];lp[j]+=(r-lp[j])*.45;y[j]=lp[j]*g[j];sum+=y[j]}
-      sum*=2/N;let l=0,r=0;for(let j=0;j<N;j++){const B=b[j];B[this.i%B.length]=y[j]-sum+x*.35;if(j&1)r+=y[j];else l+=y[j]}
-      this.i++;oL[s]+=l*.5;oR[s]+=r*.5;
-    }
-  }
-}
 class CogsFields extends AudioWorkletProcessor{
   constructor(){
     super();this.slots=Array.from({length:FIELD_SLOTS},()=>new FieldSlot(sampleRate));this.bpm=120;this.events=[];

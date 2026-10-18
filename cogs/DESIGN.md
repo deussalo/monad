@@ -18,7 +18,7 @@ One idea carries the design: **you hold the machine in your hand, and the closer
 | **Set synth pitch** | Select a pad or reader and tap **patch**. Pitched pads have a named MIDI note selector; pitched pads and readers have an octave offset from −3 to +3. The offset transposes playback and auditions, not the disc score or comb. |
 | **Tune a disc** | When the disc is selected and its bezel fits on screen, the bezel sets the scale, root, divisions and number of rings. Changing lane count never hides it, including at one lane; zoomed-in discs retain access through the notes button. |
 | **FX field** | Drag the glowing sphere from the shelf (key `f`). It has no wall and no outline: anything that sounds inside it (a ball, a struck pad, a read pin) is also sent to its effect: **delay**, **reverb** or **distortion**. The send is full in its core and fades to nothing at the rim; **diffuse** sets how much of the radius that fade takes, and also how strongly the distance bends the effect (nearer the centre: longer, darker echoes; a bigger, longer room; harder drive). The glow is drawn with exactly that falloff, and a faint dotted ring shows where the effect's parameters are while sound is in it. Drag its centre to move it, the handle on its rim (shown when selected) to size it; tap for its dial: effect, the effect's knobs, diffuse, return and **takes dry** (how much of the dry it removes at full send; distortion starts at 0.8). Up to eight fields sound at once. |
-| **Room** | Pinch out past the whole machine. It shrinks to a medallion, and the **room** bezel appears around it: wet, size, decay, air, shimmer, freeze and master. Freeze is a tap-only on/off toggle; boolean panel controls are switches, never sliders. |
+| **Room** | Pinch out past the whole machine. It shrinks to a medallion, and the **room** bezel appears around it: the reverb's mode and color (tap to step them), wet, size, decay, air (high cut), shimmer, freeze and master. Freeze is a tap-only on/off toggle; boolean panel controls are switches, never sliders. |
 | **Pause** | Tap the balance-wheel glyph. It swings while time runs. A long press opens the dev layer, which holds the old numeric panel. |
 
 ## Gestures
@@ -71,7 +71,7 @@ Watchmaking, not wireframe.
 | voice kind and params | the bezel |
 | rings, base, scale, div | the disc bezel |
 | dots, roll | the pop-up notes editor, or the disc face at patch zoom |
-| space (20 params) | the room bezel exposes 7; the rest are in the dev layer |
+| space (the reverb's 22 knobs and the dry level) | the room bezel exposes 8; the rest are in the dev layer |
 | master | the room bezel |
 | zoom | pinch and double tap |
 | audio | the first touch anywhere |
@@ -124,3 +124,25 @@ its notes, in each note's ball colour) above the voice; a note taken off moves i
 Balls step at 240 Hz on the sim's clock, ahead of the picture by the lookahead, and are drawn along a short trail at
 the heard time; a dropped ball shows at once where it was dropped. Ball positions are not undo steps: an undo or redo
 keeps the balls in the box where they are, and one that comes back returns where it was. `cogs/verify-pit.js`.
+
+## Reverb
+
+The room and the synth's FX rack share one reverb, `src/verb.js` (class `Verb`), a recreation in spirit of Valhalla
+VintageVerb: a predelay; an input low and high cut; an early diffuser of six allpasses whose blend sets the echo density
+from sparse to dense (Early Diffusion); a swell of two long allpasses (Attack); a tapped early-reflection line
+(EarlyLateMix balances it against the tail); and a ring of 4 or 6 stages (a modulated allpass, a second allpass whose gain
+is Late Diffusion, a delay and a three-band decay: Bass Mult below Bass Xover, the High Shelf in dB above High Freq), read
+by output taps in each stage. Twenty modes are rows of lengths, taps and a modulation recipe: concert hall, bright hall,
+plate, room, chamber, random space (delay randomisation: no pitch wobble), chorus space, ambience, sanctuary, dirty hall
+and plate (saturating), smooth plate, room and random, nonlin (Size is the gate's length, Attack bends it from a cut-off
+decay through flat to reverse), chaotic hall, chamber and neutral (logistic-map wow and flutter), cathedral and palace.
+Three colors: **1970s** runs the ring at half the sample rate inside 10 kHz with noisy modulation, **1980s** is full band
+with the noisy modulation, **now** is full band and clean. A short decay shrinks a big mode's ring, so a stage never loses
+more than 5 dB a pass and comes round again as a repeat. Mode and color changes fade the old tail out over a block and
+rebuild in silence. Params are one flat object of numbers (mode and color as indices), so they post across the port;
+`VERB_DEFS`, `VERB_MODES`, `VERB_COLORS` and `VERB_PRESETS` are read on the page too. The engine mixes the dry signal
+itself and runs the reverb only while something sounds or a tail rings (`energy`, `holdBlocks`). A save from before
+this reverb is mapped across (`migrateSpace`). `cogs/verify-verb.js` checks it offline: no slapback on a click or a snare
+(onset within 15 ms of the predelay, echo density over the first 50 ms, no second attack), decay times, loudness across
+modes and colors, freeze, switches, the engine's dry path and idling, and the render time of a block.
+

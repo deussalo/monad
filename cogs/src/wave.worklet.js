@@ -105,7 +105,9 @@ function newFxState(fs){
     hb:[new Float32Array(4096),new Float32Array(4096)],hw:0,hph:new Float64Array(7),fb_:[new Float32Array(1024),new Float32Array(1024)],fw:0,fph:0,fz:[0,0],
     ap:new Float64Array(12),pph:0,pz:[0,0],pa:[0,0]};
 }
-const fxTail=cp=>cp.fxOn.delay?2+12*cp.val[FXI['delay.fb']]:Object.values(cp.fxOn).some(Boolean)?.3:0;
+// how long a rack rings on after its last note: the delay's echoes, the reverb's tail to -140 dB, or a short while
+const fxTail=cp=>Math.max(cp.fxOn.delay?2+12*cp.val[FXI['delay.fb']]:0,cp.fxOn.reverb?1+cp.val[FXI['reverb.predelay']]+2.4*Math.max(cp.val[FXI['reverb.decay']],cp.fxv[FXI['reverb.decay']]||0):0,
+  Object.values(cp.fxOn).some(Boolean)?.3:0);
 // RBJ shelving biquad coefficients
 function shelf(f,db,fs,high){const A=Math.pow(10,db/40),w=TAU*f/fs,cs=Math.cos(w),sn=Math.sin(w),al=sn/2*Math.SQRT2,sq=2*Math.sqrt(A)*al;
   let b0,b1,b2,a0,a1,a2;
@@ -115,6 +117,17 @@ function shelf(f,db,fs,high){const A=Math.pow(10,db/40),w=TAU*f/fs,cs=Math.cos(w
 }
 function biquad(c,z,x){const y=c[0]*x+c[1]*z[0]+c[2]*z[1]-c[3]*z[2]-c[4]*z[3];z[1]=z[0];z[0]=x;z[3]=z[2];z[2]=y;return y}
 const FX_RUN={
+  // Reverb: the room's own (verb.js), one per patch, made the first time the patch turns it on. Its knobs glide and take
+  // the macros like any FX knob; mix keeps the dry full to half way and the wet full from half way.
+  reverb(cp,v,st,L,R,n,bpm,fs){
+    const p=st.vp||(st.vp={});p.mode=cp.verbMode;p.color=cp.verbColor;p.wet=1;p.predelay=v[FXI['reverb.predelay']]*1000;p.decay=v[FXI['reverb.decay']];
+    p.size=v[FXI['reverb.size']];p.attack=v[FXI['reverb.attack']];p.early=v[FXI['reverb.early']];p.late=v[FXI['reverb.late']];p.modDepth=v[FXI['reverb.mod']];
+    p.modRate=v[FXI['reverb.rate']];p.lowCut=v[FXI['reverb.lowcut']];p.highCut=v[FXI['reverb.highcut']];
+    if(!st.verb){st.verb=new Verb(fs,p);st.vl=new Float32Array(Math.max(128,n));st.vr=new Float32Array(Math.max(128,n))}else st.verb.set(p);
+    if(st.vl.length<n){st.vl=new Float32Array(n);st.vr=new Float32Array(n)}
+    const wl=st.vl,wr=st.vr;wl.fill(0,0,n);wr.fill(0,0,n);st.verb.process(L,R,wl,wr,n);
+    const mix=v[FXI['reverb.mix']],dg=Math.min(1,2*(1-mix)),wg=Math.min(1,2*mix);
+    for(let s=0;s<n;s++){L[s]=L[s]*dg+wl[s]*wg;R[s]=R[s]*dg+wr[s]*wg}},
   dist(cp,v,st,L,R,n,bpm,fs){const dr=v[FXI['dist.drive']],mix=v[FXI['dist.mix']],g=1+dr*30,inv=1/Math.sqrt(g),mode=cp.distMode,q=Math.pow(2,16-dr*14),hold=1+Math.floor(dr*16);
     for(let s=0;s<n;s++)for(let c=0;c<2;c++){const B=c?R:L,x=B[s];let y;
       if(mode===0)y=Math.tanh(x*g)*inv;else if(mode===1)y=Math.max(-1,Math.min(1,x*g))*inv;else if(mode===2)y=Math.sin(x*g)*inv;
@@ -210,7 +223,7 @@ class WaveSynth extends AudioWorkletProcessor{
     this.patches.set(id,{id,ver:++this.ver,base,val,routes,modded:[...modded],tabs,harmKey:p.osc.map(o=>JSON.stringify(o.harm)),
       on:p.osc.map(o=>!!o.on),warpMode:p.osc.map(o=>Math.max(0,WARP_MODES.indexOf(o.warpMode??'bend'))),warpMode2:p.osc.map(o=>Math.max(0,WARP_MODES.indexOf(o.warp2Mode??'off'))),ftype:p.osc.map(o=>Math.max(0,WAVE_FILTERS.indexOf(o.filter))),
       lfoShape:p.lfo.map(l=>Math.max(0,LFO_SHAPES.indexOf(l.shape))),lfoRetrig:p.lfo.map(l=>l.retrig!==false),lfoSync:p.lfo.map(l=>LFO_SYNCS[l.sync]||0),mode:Math.max(0,VOICE_MODES.indexOf(p.voicing?.mode)),always:p.voicing?.always!==false,glideScale:!!p.voicing?.scale,last:old?old.last:null,
-      fxOn:Object.fromEntries(WAVE_FX.map(k=>[k,!!(p.fx&&p.fx[k]&&p.fx[k].on)])),fxOrder:waveFxOrder(p.fxOrder),distMode:Math.max(0,DIST_MODES.indexOf(p.fx?.dist?.mode)),delaySync:DELAY_SYNCS[p.fx?.delay?.sync]||0,ping:p.fx?.delay?.ping!==false,
+      fxOn:Object.fromEntries(WAVE_FX.map(k=>[k,!!(p.fx&&p.fx[k]&&p.fx[k].on)])),fxOrder:waveFxOrder(p.fxOrder),distMode:Math.max(0,DIST_MODES.indexOf(p.fx?.dist?.mode)),verbMode:verbMode(p.fx?.reverb?.mode),verbColor:p.fx?.reverb?.color===undefined?1:verbColor(p.fx.reverb.color),delaySync:DELAY_SYNCS[p.fx?.delay?.sync]||0,ping:p.fx?.delay?.ping!==false,
       busL:old?old.busL:new Float32Array(128),busR:old?old.busR:new Float32Array(128),fxs:old?old.fxs:newFxState(sampleRate),fxv:new Float64Array(NP),quiet:old?old.quiet:1e9,live:false});
     // the macros as they play: the knobs' values, or where a motion part (a cam) has turned them
     const cp=this.patches.get(id);cp.mac=Float64Array.from(MAC_P,i=>cp.base[i]);

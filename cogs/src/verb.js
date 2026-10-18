@@ -44,16 +44,16 @@ const VERB_PRESETS={
 // delay-randomisation depth, hi: the treble decay against the decay knob, sat: saturation in the loop, att: built-in
 // attack, diff: the ceiling of late diffusion, gain: loudness trim.
 const VERB_ALGOS=(()=>{
-  const hall={k:4,d:[137,113,127,101],a1:[29.3,23.1,26.7,19.9],a2:[11.3,8.3,13.7,9.7],ind:[4.77,3.59,12.73,9.31],er:[12,70,.5],
+  const hall={k:4,d:[137,113,127,101],a1:[29.3,23.1,26.7,19.9],a2:[47.3,39.1,53.7,31.9],ind:[4.77,3.59,12.73,9.31],er:[12,70,.5],
     mod:[1,0,0,0],depth:1,dd:0,hi:.75,sat:0,smin:.3,att:0,diff:.7,gain:1};
   const plate={k:4,d:[149.6,125,141.7,106.3],a1:[22.6,30.5,24.9,28.1],a2:[60.5,89.2,53.3,71.9],ind:[4.77,3.59,12.73,9.31],er:[12,30,.6],
     mod:[1,0,0,0],depth:.8,dd:0,hi:1,sat:0,smin:.35,att:0,diff:.7,gain:1};
-  const room={k:4,d:[53,61,47,67],a1:[11.3,8.9,13.1,7.7],a2:[4.3,5.9,3.7,6.7],ind:[3.1,2.3,5.7,4.1],er:[14,55,1],
+  const room={k:4,d:[53,61,47,67],a1:[11.3,8.9,13.1,7.7],a2:[17.3,23.9,13.7,26.7],ind:[3.1,2.3,5.7,4.1],er:[14,55,1],
     mod:[0,1,0,0],depth:.6,dd:0,hi:.6,sat:0,smin:.25,att:0,diff:.6,gain:1};
-  const chamber={k:4,d:[73,89,67,81],a1:[17.3,13.9,19.1,11.3],a2:[7.1,5.9,8.3,6.7],ind:[4.1,3.3,7.9,6.1],er:[12,35,.6],
+  const chamber={k:4,d:[73,89,67,81],a1:[17.3,13.9,19.1,11.3],a2:[27.1,33.9,23.3,29.7],ind:[4.1,3.3,7.9,6.1],er:[12,35,.6],
     mod:[1,.3,0,0],depth:.8,dd:0,hi:.85,sat:0,smin:.3,att:0,diff:.7,gain:1};
-  const space={k:6,d:[131,157,113,149,121,163],a1:[29.1,23.3,37.7,19.7,31.3,26.9],a2:[13.1,9.3,11.9,15.7,7.9,12.3],ind:[5.3,4.1,14.3,10.9],er:[12,90,.4],
-    mod:[0,0,1,0],depth:.5,dd:1,hi:.75,sat:0,smin:.3,att:.35,diff:.7,gain:1};
+  const space={k:6,d:[131,157,113,149,121,163],a1:[29.1,23.3,37.7,19.7,31.3,26.9],a2:[43.1,59.3,37.9,51.7,41.9,62.3],ind:[5.3,4.1,14.3,10.9],er:[16,80,.6],
+    mod:[0,0,1,0],depth:.5,dd:1,hi:.75,sat:0,smin:.3,att:.25,diff:.7,gain:1};
   const scale=(o,f,fa=1)=>({...o,d:o.d.map(x=>x*f),a1:o.a1.map(x=>x*fa)});
   const trim=[1,1,1.06,.8,.88,1.5,1.48,.62,1.57,1.03,1.09,1.05,.81,1.45,1.68,1.01,.88,1.06,1.66,1.67];
   return [
@@ -64,9 +64,9 @@ const VERB_ALGOS=(()=>{
     chamber,                                                         // chamber
     space,                                                           // random space
     {...space,mod:[1,0,0,0],depth:1.2,dd:0},                         // chorus space
-    {k:4,d:[23,29,19,31],a1:[7.1,5.3,6.7,4.3],a2:[2.9,3.7,2.3,3.1],ind:[1.3,1.9,2.9,3.7],er:[16,28,1.2],
+    {k:4,d:[23,29,19,31],a1:[7.1,5.3,6.7,4.3],a2:[7.9,11.3,6.7,9.1],ind:[1.3,1.9,2.9,3.7],er:[16,28,1.2],
       mod:[1,0,0,0],depth:.4,dd:0,hi:.8,sat:0,smin:.3,att:0,diff:.65,gain:1},  // ambience
-    {...scale(space,1.25),mod:[1,.3,.5,0],depth:1.3,dd:.5,hi:.55,att:.55,smin:.35,er:[8,120,.15]}, // sanctuary
+    {...scale(space,1.25),mod:[1,.3,.5,0],depth:1.3,dd:.5,hi:.55,att:.45,smin:.35,er:[14,100,.45]}, // sanctuary
     {...hall,mod:[0,1,0,0],depth:1.2,sat:.6,diff:.5,hi:.7},          // dirty hall
     {...plate,mod:[0,.4,0,0],depth:.3,sat:.5,diff:.35},              // dirty plate
     {...plate,mod:[1,0,.6,0],depth:.8,dd:.6,diff:.75,ind:[5.9,4.3,15.1,11.3]}, // smooth plate
@@ -76,11 +76,11 @@ const VERB_ALGOS=(()=>{
     {...hall,mod:[0,0,0,1],depth:1,dd:.5,sat:.3},                    // chaotic hall
     {...chamber,mod:[0,0,0,1],depth:1,dd:.4,sat:.2},                 // chaotic chamber
     {...plate,mod:[0,0,0,1],depth:.8,dd:.6,hi:1,diff:.75},           // chaotic neutral
-    {...scale(space,1.6,1.3),mod:[1,0,.4,0],depth:1,dd:.4,hi:.6,att:.5,smin:.4,er:[10,140,.2]}, // cathedral
-    {...scale(space,2),mod:[1,0,.3,0],depth:1.4,dd:.3,hi:.9,att:.4,smin:.4,er:[10,160,.2]},     // palace
+    {...scale(space,1.6,1.3),mod:[1,0,.4,0],depth:1,dd:.4,hi:.6,att:.4,smin:.4,er:[14,120,.45]}, // cathedral
+    {...scale(space,2),mod:[1,0,.3,0],depth:1.4,dd:.3,hi:.9,att:.35,smin:.4,er:[14,140,.45]},     // palace
   ].map((a,i)=>({...a,gain:trim[i]}));
 })();
-const VERB_SWELL=[19.3,31.7];
+const VERB_SWELL=[19.3,31.7],VERB_IND0=[1.13,1.71];
 const VERB_P2=n=>{let p=1;while(p<n)p<<=1;return p};
 // A seeded generator, so a mode's taps are the same every time.
 const verbRng=seed=>()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296};
@@ -92,7 +92,7 @@ class Verb{
     const alloc=ms=>{const L=VERB_P2(Math.ceil(ms*fs/1000)+8);off.push(total);mask.push(L-1);total+=L;return off.length-1};
     const most=(f)=>Math.max(...VERB_ALGOS.map(f));
     this.lPre=[alloc(501),alloc(501)];
-    this.lInd=[];for(let c=0;c<2;c++)for(let j=0;j<4;j++)this.lInd.push(alloc(most(a=>a.ind[j])*1.12));
+    this.lInd=[];for(let c=0;c<2;c++)for(let j=0;j<6;j++)this.lInd.push(alloc(j<2?VERB_IND0[j]*1.12:most(a=>a.ind[j-2])*1.12));
     this.lSw=[];for(let c=0;c<2;c++)for(let j=0;j<2;j++)this.lSw.push(alloc(VERB_SWELL[j]*1.12));
     this.lEr=[alloc(most(a=>a.er[1])*1.02+2),alloc(most(a=>a.er[1])*1.02+2)];
     this.lA1=[];this.lA2=[];this.lD=[];
@@ -107,11 +107,11 @@ class Verb{
     // per stage
     const S=6,f64=()=>new Float64Array(S);
     Object.assign(this,{dLen:f64(),a1Len:f64(),a2Len:f64(),gl:f64(),gm:f64(),gh:f64(),lo:f64(),hp:f64(),o:f64(),mc:f64(),ms:f64(),rc:f64(),rs:f64(),
-      r1:f64(),r2:f64(),tg:f64(),cnt:f64(),chaos:f64(),injL:f64(),injR:f64(),mA:f64()});
+      r1:f64(),r2:f64(),tg:f64(),cnt:f64(),chaos:f64(),injL:f64(),injR:f64(),mA:f64()});this.injK=new Int32Array(S);
     // taps: early (up to 64 per side) and late (3 per stage per side)
     this.eO=new Int32Array(128);this.eM=new Int32Array(128);this.eD=new Int32Array(128);this.eGa=new Float64Array(128);this.eU=new Float64Array(128);
     this.tO=new Int32Array(64);this.tM=new Int32Array(64);this.tD=new Int32Array(64);this.tGa=new Float64Array(64);this.tF=new Float64Array(64);this.tLine=new Int32Array(64);
-    this.indD=new Int32Array(8);this.swD=new Float64Array(4);this.gIn=new Float64Array(4);
+    this.indD=new Int32Array(12);this.swD=new Float64Array(4);this.gIn=new Float64Array(6);
     this.target={...VERB_DEFAULT};this.cur={...VERB_DEFAULT};this.energy=0;this.holdBlocks=8;
     this.glide=1-Math.exp(-B/(fs*.05));this.sizeGlide=1-Math.exp(-B/(fs*.35));this.preGlide=1-Math.exp(-B/(fs*.12));
     this.clear(params);
@@ -134,8 +134,7 @@ class Verb{
   set(p){
     for(const k in p){if(!(k in this.target))continue;const x=+p[k];if(!Number.isFinite(x))continue;
       if(k==='mode'||k==='color'){const r=Math.round(Math.min(k==='mode'?VERB_MODES.length-1:2,Math.max(0,x)));if(r!==this.target[k]){this.target[k]=r;this.pending=true}}
-      else this.target[k]=x}
-    this.moving=true;
+      else if(this.target[k]!==x){this.target[k]=x;this.moving=true}}
   }
   // The structure of the current mode and color: lengths, taps and how the input enters the ring.
   build(){
@@ -174,17 +173,20 @@ class Verb{
     const A=this.algo,K=this.K,fs=this.fs,fsT=this.fsT,ms=fsT/1000,TAU_=2*Math.PI;
     const sc=A.smin+(1-A.smin)*Math.min(1,Math.max(0,c.size));
     const frozen=c.freeze>=.5,T=Math.max(.05,c.decay),TL=T*Math.max(.1,c.bassMult),TH=Math.min(T*1.2,T*A.hi*Math.pow(10,Math.min(0,c.highShelf)/20));
-    let ring=0;
+    // a short decay shrinks a big space: a stage that lost more than 5 dB a pass would come round again as a repeat
+    let ring=0,stage=0;for(let i=0;i<K;i++)stage=Math.max(stage,A.d[i]+A.a1[i]+A.a2[i]);
+    const scR=frozen?sc:Math.min(sc,T*1000/12/stage);
     for(let i=0;i<K;i++){
-      const D=Math.max(4,A.d[i]*sc*ms),a1=Math.max(2,A.a1[i]*sc*ms),a2=Math.max(2,A.a2[i]*sc*ms);
+      // frozen, every length is whole and nothing moves, so no interpolation dulls the held tail
+      const rd=frozen?Math.round:x=>x,D=rd(Math.max(4,A.d[i]*scR*ms)),a1=rd(Math.max(2,A.a1[i]*scR*ms)),a2=rd(Math.max(2,A.a2[i]*scR*ms));
       this.dLen[i]=D;this.a1Len[i]=a1;this.a2Len[i]=a2;ring+=D+a1+a2;
       const sec=(D+a1+a2)/fsT;
       this.gm[i]=frozen?1:Math.pow(10,-3*sec/T);this.gl[i]=frozen?1:Math.pow(10,-3*sec/TL);this.gh[i]=frozen?1:Math.pow(10,-3*sec/TH);
     }
     for(let j=0;j<this.nT;j++){const i=this.tStage[j],L=this.tLine[j]?this.a2Len[i]:this.dLen[i];this.tD[j]=Math.max(1,Math.round(this.tF[j]*L))}
     // early: the diffuser (lengths fixed, so a size change never sweeps the onset), the swell and the reflection taps
-    for(let side=0;side<2;side++)for(let j=0;j<4;j++)this.indD[side*4+j]=Math.max(1,Math.round(A.ind[j]*(side?1.11:1)*ms));
-    const ge=.5+.25*Math.min(1,Math.max(0,c.early));this.gIn[0]=this.gIn[1]=ge;this.gIn[2]=this.gIn[3]=ge*.83;
+    for(let side=0;side<2;side++)for(let j=0;j<6;j++)this.indD[side*6+j]=Math.max(1,Math.round((j<2?VERB_IND0[j]:A.ind[j-2])*(side?1.11:1)*ms));
+    const ge=.5+.25*Math.min(1,Math.max(0,c.early));this.gIn[0]=this.gIn[1]=.6;this.gIn[2]=this.gIn[3]=ge;this.gIn[4]=this.gIn[5]=ge*.83;
     this.blend=Math.min(1,Math.max(0,c.early)*1.6);
     const att=Math.min(1,Math.max(0,c.attack+A.att*(1-c.attack)));this.att=att;this.gSw=.7*att;
     for(let side=0;side<2;side++)for(let j=0;j<2;j++)this.swD[side*2+j]=Math.max(1,VERB_SWELL[j]*(side?1.11:1)*sc*ms);
@@ -196,9 +198,12 @@ class Verb{
     let sum=0;for(let j=0;j<this.nE;j++)sum+=env(j)**2;const norm=nl?.73/Math.sqrt(sum/2):1/Math.sqrt(this.nE/2);
     for(let j=0;j<this.nE;j++){const d=Math.max(1,Math.round(this.eU[j]*span));this.eD[j]=d;erMax=Math.max(erMax,d);
       this.eGa[j]=Math.sign(this.eGa[j])*env(j)*norm}
-    // inject: the first stage takes the left, the middle stage the right; a fast attack feeds every stage at once
+    // inject: the first stage takes the left, the middle stage the right, through their allpasses; a fast attack also
+    // feeds the other stages, straight into their delays at staggered depths, so the first pass reaches the next stage
+    // spread over the loop and never comes round again as one wave
     for(let i=0;i<K;i++){const h=K>>1,spread=(1-att)*.7,s=(i&2)?-1:1,odd=i&1;
-      this.injL[i]=i===0?1:i===h?0:spread*s*(odd?.35:.9);this.injR[i]=i===h?1:i===0?0:spread*s*(odd?.9:.35)*(i>h?-1:1)}
+      this.injL[i]=i===0||i===h?0:spread*s*(odd?.35:.9);this.injR[i]=i===0||i===h?0:spread*s*(odd?.9:.35)*(i>h?-1:1);
+      this.injK[i]=Math.round(this.dLen[i]*(.2+.6*((i*.618034)%1)))-Math.round(this.dLen[i])}
     // early/late balance: each full at the middle
     const el=Math.min(1,Math.max(0,c.earlyLate));
     const cg=A.gain*(this.decim>1?1.27:1);
@@ -206,7 +211,7 @@ class Verb{
     // modulation: [sine, random walk, random delay, chaos]; the old colors add the noisy walk
     const m=A.mod,dep=Math.min(1,Math.max(0,c.modDepth)),noisy=c.color<2?.5:0;
     this.kS=m[0];this.kR=m[1]+m[3]+noisy;this.kD=(m[2]+m[3]*.5)*A.dd;this.chaotic=m[3]>0;
-    this.dA=dep*A.depth*.0009*fsT;this.dD=dep*.0025*fsT;
+    this.dA=frozen?0:dep*A.depth*.0009*fsT;this.dD=frozen?0:dep*.0025*fsT;
     for(let i=0;i<K;i++)this.dA=Math.min(this.dA,this.a1Len[i]-1.5);
     const rate=Math.max(.01,c.modRate);this.rate=rate;
     for(let i=0;i<K;i++){const w=TAU_*rate*(.8+.4*i/Math.max(1,K-1))/fsT;this.rc[i]=Math.cos(w);this.rs[i]=Math.sin(w)}
@@ -279,18 +284,18 @@ class Verb{
     const eOL=off[this.lEr[0]],eOR=off[this.lEr[1]],eMk=mask[this.lEr[0]],nE=this.nE,eO=this.eO,eD=this.eD,eGa=this.eGa,nE2=nE>>1,eG=this.eG,lG=this.lG;
     const nT=this.nT,tO=this.tO,tM=this.tM,tD=this.tD,tGa=this.tGa,nT2=nT>>1;
     const a1O=this.a1O,a1M=this.a1M,a2O=this.a2O,a2M=this.a2M,dO=this.dO,dM=this.dM;
-    const dLen=this.dLen,a1Len=this.a1Len,a2Len=this.a2Len,gl=this.gl,gm=this.gm,gh=this.gh,lo=this.lo,hp=this.hp,o=this.o,injL=this.injL,injR=this.injR;
+    const dLen=this.dLen,a1Len=this.a1Len,a2Len=this.a2Len,gl=this.gl,gm=this.gm,gh=this.gh,lo=this.lo,hp=this.hp,o=this.o,injL=this.injL,injR=this.injR,injK=this.injK,hK=K>>1;
     const mc=this.mc,ms=this.ms,rc=this.rc,rs=this.rs,r1=this.r1,r2=this.r2,tg=this.tg,cnt=this.cnt,chaos=this.chaos,mA=this.mA;
     const kN=1/Math.max(1,this.kS+this.kR),kS=this.kS*kN,kR=this.kR*kN,kD=this.kD,dA=this.dA,dD=this.dD,ra=this.ra,chaotic=this.chaotic,period=this.fsT/(this.rate*(chaotic?3:2));
     const g1=-this.gL1,g2=this.gL2,aLo=this.aLo,aHi=this.aHi,sat=this.sat,shim=this.shim;
     let w=this.w,dn=this.dn;
     for(let t=0;t<m;t++){
       let xl=tinL[t],xr=tinR[t];
-      // early diffusion: four allpasses a side, blended in from the raw input (sparse) to all of it (dense)
+      // early diffusion: six allpasses a side (two short ones to thicken the first milliseconds, then the mode's four), blended in from the raw input (sparse) to all of it (dense)
       let yl=xl,yr=xr;
-      for(let j=0;j<4;j++){const g=gIn[j];
+      for(let j=0;j<6;j++){const g=gIn[j];
         let k=iM[j],oo=iO[j],d=mem[oo+((w-indD[j])&k)],v=yl-g*d;mem[oo+(w&k)]=v;yl=d+g*v;
-        k=iM[j+4];oo=iO[j+4];d=mem[oo+((w-indD[j+4])&k)];v=yr-g*d;mem[oo+(w&k)]=v;yr=d+g*v}
+        k=iM[j+6];oo=iO[j+6];d=mem[oo+((w-indD[j+6])&k)];v=yr-g*d;mem[oo+(w&k)]=v;yr=d+g*v}
       xl+=(yl-xl)*blend;xr+=(yr-xr)*blend;
       mem[eOL+(w&eMk)]=xl;mem[eOR+(w&eMk)]=xr;
       let el=0,er=0;
@@ -319,13 +324,14 @@ class Verb{
       }
       // and write each stage from the one before: the modulated allpass, the second allpass, the delay
       for(let i=0;i<K;i++){
-        let x=o[i===0?K-1:i-1]+sl*injL[i]+sr*injR[i];
+        let x=o[i===0?K-1:i-1]+(i===0?sl:i===hK?sr:0);
         let k=a1M[i],oo=a1O[i],pos=w-a1Len[i]-mA[i],ii=(pos|0),fr=pos-ii,a=mem[oo+(ii&k)],d=a+(mem[oo+((ii+1)&k)]-a)*fr,v=x-g1*d;
         mem[oo+(w&k)]=v;x=d+g1*v;
         k=a2M[i];oo=a2O[i];pos=w-a2Len[i];ii=(pos|0);fr=pos-ii;a=mem[oo+(ii&k)];d=a+(mem[oo+((ii+1)&k)]-a)*fr;v=x-g2*d;
         mem[oo+(w&k)]=v;x=d+g2*v;
         mem[dO[i]+(w&dM[i])]=x+dn;
       }
+      for(let i=1;i<K;i++)if(i!==hK){const k=dM[i];mem[dO[i]+((w+injK[i])&k)]+=sl*injL[i]+sr*injR[i]}
       dn=-dn;
       let ll=0,lr=0;
       for(let j=0;j<nT2;j++)ll+=mem[tO[j]+((w-tD[j])&tM[j])]*tGa[j];

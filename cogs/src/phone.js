@@ -261,7 +261,7 @@ const ICON={
   scale:'M3 20h4v-4h4v-4h4v-4h4V4',div:'M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4',
   rings:'M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0M7 12a5 5 0 1 0 10 0a5 5 0 1 0-10 0M11 12a1 1 0 1 0 2 0a1 1 0 1 0-2 0',
   wet:'M12 3c4 6 6 9 6 12a6 6 0 0 1-12 0c0-3 2-6 6-12z',size:'M3 20V10l9-6 9 6v10zM3 20h18',tail:'M3 20h18M4 20V6M8 20v-9M12 20v-6M16 20v-4M20 20v-2',
-  air:'M3 9h12a3 3 0 1 0-3-3M3 15h15a3 3 0 1 1-3 3',shimmer:'M12 2l2 7 7 3-7 3-2 7-2-7-7-3 7-3z',freeze:'M12 2v20M3.3 7l17.4 10M3.3 17L20.7 7',
+  air:'M3 9h12a3 3 0 1 0-3-3M3 15h15a3 3 0 1 1-3 3',verb:'M3 18a9 9 0 0 1 18 0M7 18a5 5 0 0 1 10 0M11 18a1 1 0 0 1 2 0',era:'M12 3a9 9 0 1 0 .01 0M12 7v5l3 3',shimmer:'M12 2l2 7 7 3-7 3-2 7-2-7-7-3 7-3z',freeze:'M12 2v20M3.3 7l17.4 10M3.3 17L20.7 7',
   tempo:'M8 21l3-18h2l3 18zM12 16l6-10',beats:'M5 12h.01M10 12h.01M15 12h.01M20 12h.01',comb:'M3 5h18M5 5v14M9 5v12M13 5v10M17 5v8M21 5v6',
   odds:'M12 3a9 9 0 1 0 .01 0M12 3v9h9',string:'M3 19L21 5M3 19h.01M21 5h.01',quant:'M4 20V14M9 20V9M14 20V12M19 20V4',
   seal:'M12 3a9 9 0 1 0 .01 0M12 7l1.5 3.2 3.5.4-2.6 2.4.7 3.5-3.1-1.8-3.1 1.8.7-3.5L7 10.6l3.5-.4z',
@@ -337,9 +337,11 @@ function fieldSectors(f){
   return out;
 }
 const dotSectors=d=>[numSector('odds','probability',d,'p',0,1,.01),numSector('level','velocity',d,'v',0,1,.01),numSector('div','length steps',d,'len',1,ui.dotOf.track.div,1)];
-const ROOM_ICON={wet:'wet',size:'size',decay:'tail',highMult:'air',shimmer:'shimmer'};
+const ROOM_ICON={mode:'verb',color:'era',wet:'wet',size:'size',decay:'tail',highCut:'air',shimmer:'shimmer'};
+// the room's reverb: its mode and color step by name, its knobs turn
 function roomSectors(){
-  const out=ROOM_SPACE.filter(k=>k!=='freeze').map(k=>defSector(ROOM_ICON[k],SPACE,SPACE_DEFS.find(d=>d[0]===k),roomEdited));
+  const out=ROOM_SPACE.filter(k=>k!=='freeze').map(k=>SPACE_CHOICES[k]?choiceSector(ROOM_ICON[k],'reverb '+k,SPACE_CHOICES[k].map((_,i)=>i),()=>SPACE[k],x=>{SPACE[k]=x;roomEdited()},i=>SPACE_CHOICES[k][i])
+    :defSector(ROOM_ICON[k],SPACE,SPACE_DEFS.find(d=>d[0]===k),roomEdited));
   out.push(choiceSector('freeze','reverb freeze',[0,1],()=>SPACE.freeze,x=>{SPACE.freeze=x;roomEdited()},onOff));
   out.push(defSector('level',S,S_DEFS.find(d=>d[0]==='master'),roomEdited));
   out.push(choiceSector('quant','ratio snap',[0,1],()=>S.ratios,x=>{S.ratios=x;changed(true)},onOff));

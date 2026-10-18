@@ -16,7 +16,7 @@ logs what landed. Sources: Xfer's [Serum 2 What's New](https://static.xferrecord
 | Macros | 8, assignable, as destinations | 8 named macros, any knob can take one | macro curve per route |
 | Mod matrix | any knob; bypass, reorder, curves, aux source | any knob, ±bipolar, bypass, delete, aux source (or inverted), drawn curve per route; drag-and-drop and arm-and-drag | reorder, modulating a route's depth, mod-wheel/aftertouch sources |
 | Voicing | poly/mono/legato, glide, always, scaled glide | poly, mono, legato; glide with always and scaled; 16 voices; gate | voice count knob, glide curve |
-| FX | 13 effects on buses, splitters, reorderable | per-patch rack in any order (↑ ↓): hyper/dimension (1-7 voices), distortion (tube, hard, fold, crush), flanger, phaser (6 stages), chorus, delay (tempo sync, ping-pong, tone), compressor, EQ shelves; macros drive it | reverb per patch, filter FX, multiband split/second bus, tempo sync for flanger/phaser |
+| FX | 13 effects on buses, splitters, reorderable | per-patch rack in any order (↑ ↓): hyper/dimension (1-7 voices), distortion (tube, hard, fold, crush), flanger, phaser (6 stages), chorus, delay (tempo sync, ping-pong, tone), reverb (the room's VintageVerb-style reverb: 20 modes, 3 colors), compressor, EQ shelves; macros drive it | filter FX, multiband split/second bus, tempo sync for flanger/phaser |
 | Extras | arpeggiator, clip sequencer, preset browser, undo | patch library (save/load/delete), JSON import/export, factory presets, undo | arpeggiator, preset tags |
 
 ## Next, ranked

@@ -19,7 +19,8 @@ function waveText(P,x){
   if(/^(eq\.|comp\.(thresh|gain))/.test(P[0]))return (x>0?'+':'')+x.toFixed(1)+' dB';
   if(P[0]==='comp.ratio')return x.toFixed(1)+':1';
   if(c==='time')return x<1?Math.round(x*1000)+' ms':x.toFixed(2)+' s';
-  if(c==='log'&&/\.(rate|freq|cut)$/.test(P[0]))return (x>=1000?(x/1000).toFixed(x>=10000?1:2)+'k':x<10?x.toFixed(2):String(Math.round(x)))+' Hz';
+  if(P[0]==='reverb.decay')return x.toFixed(x<10?2:1)+' s';
+  if(c==='log'&&/\.(rate|freq|cut|lowcut|highcut)$/.test(P[0]))return (x>=1000?(x/1000).toFixed(x>=10000?1:2)+'k':x<10?x.toFixed(2):String(Math.round(x)))+' Hz';
   if(c==='log')return x>=1000?(x/1000).toFixed(x>=10000?1:2)+'k':x<10?x.toFixed(2):String(Math.round(x));
   if(c==='int')return (x>0&&P[2]<0?'+':'')+x;
   if(P[0].endsWith('.fine'))return (x>0?'+':'')+Math.round(x)+' ct';
@@ -217,9 +218,10 @@ function waveEditor(f,owner,part){
       // the rack, run top to bottom; ↑ ↓ move a module. Its knobs take macros from the matrix (the rack is shared by every note)
       const fx=v.fx,order=v.fxOrder=waveFxOrder(v.fxOrder);
       const KNOBS={hyper:['voices','rate','detune','dim','mix'],dist:['drive','mix'],flanger:['rate','depth','fb','spread','mix'],phaser:['rate','depth','freq','fb','spread','mix'],
-        chorus:['rate','depth','mix'],delay:['time','fb','tone','mix'],comp:['thresh','ratio','gain'],eq:['low','high']};
-      const NAMES={hyper:'hyper / dimension',dist:'distortion',flanger:'flanger',phaser:'phaser',chorus:'chorus',delay:'delay',comp:'compressor',eq:'eq'};
+        chorus:['rate','depth','mix'],delay:['time','fb','tone','mix'],reverb:['mix','predelay','decay','size','attack','early','late','mod','rate','lowcut','highcut'],comp:['thresh','ratio','gain'],eq:['low','high']};
+      const NAMES={hyper:'hyper / dimension',dist:'distortion',flanger:'flanger',phaser:'phaser',chorus:'chorus',delay:'delay',reverb:'reverb',comp:'compressor',eq:'eq'};
       const extra={dist:()=>[choice('mode',DIST_MODES,()=>fx.dist.mode,x=>{fx.dist.mode=x;edited()})],
+        reverb:()=>[choice('mode',VERB_MODES,()=>fx.reverb.mode,x=>{fx.reverb.mode=x;edited()}),choice('color',VERB_COLORS,()=>fx.reverb.color,x=>{fx.reverb.color=x;edited()})],
         delay:()=>[choice('sync',Object.keys(DELAY_SYNCS),()=>fx.delay.sync,x=>{fx.delay.sync=x;edited()}),spaced(toggle('ping-pong',()=>fx.delay.ping,x=>{fx.delay.ping=x;edited()}))]};
       const move=(k,d)=>{const i=order.indexOf(k),j=i+d;if(j<0||j>=order.length)return;order.splice(i,1);order.splice(j,0,k);edited();show('FX')};
       // a module that is off folds to its name: the rack reads as a list of what is running

@@ -1084,14 +1084,17 @@ function buildPanel(lead){
   btn('demo',demo);btn('clear',()=>deserialize({S:{...S},SPACE:{...SPACE},view:{x:0,y:0},cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[]}));
   inspector=section('selection');inspector.id='inspector';
   const room=section('room'),sRow=(f,def,o,dflt,after)=>numRow(f,def[1],def[2],def[3],def[4],...bind(o,def[0],after),dflt[def[0]]);
-  for(const k of ROOM_SPACE)sRow(room,SPACE_DEFS.find(d=>d[0]===k),SPACE,SPACE_DEFAULT,roomEdited);
+  // the reverb's mode and color are named choices; the rest are sliders
+  const spRow=(f,def)=>SPACE_CHOICES[def[0]]?selRow(f,def[1],SPACE_CHOICES[def[0]].map((_,i)=>String(i)),()=>String(SPACE[def[0]]),x=>{SPACE[def[0]]=+x;roomEdited()},i=>SPACE_CHOICES[def[0]][i])
+    :sRow(f,def,SPACE,SPACE_DEFAULT,roomEdited);
+  for(const k of ROOM_SPACE)spRow(room,SPACE_DEFS.find(d=>d[0]===k));
   for(const k of ROOM_S)sRow(room,S_DEFS.find(d=>d[0]===k),S,S_DEFAULT,()=>{applyAudioSettings();changed(k!=='master')});
   fileSection();
   const adv=el('details',{},el('summary',{textContent:'advanced'}));panel.append(adv);
   const wf=section('world',adv);
   for(const def of S_DEFS)if(!ROOM_S.includes(def[0]))sRow(wf,def,S,S_DEFAULT,()=>{applyAudioSettings();changed(/Tol|bpm|beats/.test(def[0]))});
   const sp=section('space',adv);
-  for(const def of SPACE_DEFS)if(!ROOM_SPACE.includes(def[0]))sRow(sp,def,SPACE,SPACE_DEFAULT,roomEdited);
+  for(const def of SPACE_DEFS)if(!ROOM_SPACE.includes(def[0]))spRow(sp,def);
   const st=section('stats',adv);
   const resetHits=el('button',{textContent:'reset hits',onclick:()=>{for(const o of [...W.pads,...W.readers,...W.strings])o.hits=0;stats.events=stats.late=stats.skipped=0;stats.log.length=0}});
   resetHits.dataset.act='reset hits';st.append(resetHits);
@@ -1169,7 +1172,8 @@ function listen(force=false){
   const t=ac.currentTime,glide=.08;
   master.gain.setTargetAtTime(S.master*(1-.5*e),t,glide);
   distant.frequency.setTargetAtTime(20000*Math.pow(700/20000,e),t,glide);
-  if(engineNode)engineNode.port.postMessage({type:'space',...SPACE,wet:SPACE.wet+(Math.min(1,SPACE.wet*2+.35)-SPACE.wet)*e,dry:SPACE.dry*(1-.55*e)});
+  // farther off, more of the room: the wet rises toward at most 1.6x (never past 1) and the dry falls by up to 45%
+  if(engineNode)engineNode.port.postMessage({type:'space',...SPACE,wet:SPACE.wet+(Math.min(1,SPACE.wet*1.6+.1)-SPACE.wet)*e,dry:SPACE.dry*(1-.45*e)});
 }
 let inspector=null,panelRows=0,panelReadouts=0;
 const REVS=['-2','-1','-1/2','-1/3','-1/4','0','1/8','1/6','1/4','1/3','1/2','2/3','3/4','1','4/3','3/2','2','3','4','6','8'];

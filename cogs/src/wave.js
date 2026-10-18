@@ -5,7 +5,7 @@ function waveInit(){
   const p={name:'init',osc:[],sub:{},noise:{},tune:{},env:[],lfo:[],macro:[],macroNames:[],mods:[],
     voicing:{mode:'poly',always:true,scale:false},
     fxOrder:[...WAVE_FX],
-    fx:{hyper:{on:false},flanger:{on:false},phaser:{on:false},dist:{on:false,mode:'tube'},chorus:{on:false},delay:{on:false,sync:'1/8.',ping:true},eq:{on:false},comp:{on:false}}};
+    fx:{hyper:{on:false},flanger:{on:false},phaser:{on:false},dist:{on:false,mode:'tube'},chorus:{on:false},delay:{on:false,sync:'1/8.',ping:true},reverb:{on:false,mode:'concert hall',color:'1980s'},eq:{on:false},comp:{on:false}}};
   for(let i=0;i<WAVE_OSCS;i++)p.osc.push({on:i===0,table:'basic',filter:'lp24',warpMode:'bend',warp2Mode:'off',harm:Array.from({length:WAVE_HARMS},(_,k)=>k===0?1:0)});
   for(let i=0;i<WAVE_ENVS;i++)p.env.push({});
   for(let i=0;i<WAVE_LFOS;i++)p.lfo.push({shape:'sine',retrig:true,sync:'off'});
@@ -25,7 +25,8 @@ function wavePatch(j){
   const vc=j.voicing||{};if(VOICE_MODES.includes(vc.mode))p.voicing.mode=vc.mode;if('always' in vc)p.voicing.always=!!vc.always;p.voicing.scale=!!vc.scale;
   p.fxOrder=waveFxOrder(j.fxOrder);
   const fx=j.fx||{};for(const k of WAVE_FX){const q=fx[k];if(!q)continue;p.fx[k].on=!!q.on;
-    if(k==='dist'&&DIST_MODES.includes(q.mode))p.fx.dist.mode=q.mode;if(k==='delay'){if(q.sync in DELAY_SYNCS)p.fx.delay.sync=q.sync;p.fx.delay.ping=q.ping!==false}}
+    if(k==='dist'&&DIST_MODES.includes(q.mode))p.fx.dist.mode=q.mode;if(k==='delay'){if(q.sync in DELAY_SYNCS)p.fx.delay.sync=q.sync;p.fx.delay.ping=q.ping!==false}
+    if(k==='reverb'){if(VERB_MODES.includes(q.mode))p.fx.reverb.mode=q.mode;if(VERB_COLORS.includes(q.color))p.fx.reverb.color=q.color}}
   (j.macroNames||[]).slice(0,WAVE_MACROS).forEach((n,i)=>{if(typeof n==='string')p.macroNames[i]=n.slice(0,16)});
   p.mods=(j.mods||[]).filter(m=>m&&WAVE_SOURCES.includes(m.src)&&WAVE_INDEX.has(m.dst)).map(m=>({src:m.src,dst:m.dst,amt:Math.min(1,Math.max(-1,+m.amt||0)),bi:!!m.bi,off:!!m.off,
     aux:WAVE_SOURCES.includes(m.aux)?m.aux:'',auxInv:!!m.auxInv,curve:Math.min(1,Math.max(-1,+m.curve||0))}));
