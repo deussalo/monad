@@ -54,19 +54,21 @@ function camProgram(m){
   // anchored at the sim's own time, mapped to audio frames as fire() maps strikes, so it lines up with the notes
   return {table,step,f0:(simT+clock.off-clock.shift)*sr,ph0:camU(m,c.th),rate:-c.w/TAU,lo:m.lo,hi:m.hi};
 }
+// Cams and probes on synths: one program per macro, sent only when it changed (a ball's value when it moved).
 function postMotions(){
-  if(!waveNode||!ac||!W.cams.length&&!motionPosted.size)return;
+  if(!waveNode||!ac||!W.cams.length&&!W.probes.length&&!motionPosted.size)return;
   const seen=new Set();
-  for(const m of W.cams){
-    if(!m.to||!m.cog||m.to.voice.kind!=='wave'||!W.readers.includes(m.to))continue;
-    const v=m.to.voice,id=waveIdOf.get(v)||wavePost(v);if(!id)continue;
-    const key=id*8+m.macro-1;seen.add(key);
-    const p=camProgram(m),old=motionPosted.get(key);
-    if(old&&old.cam===m&&old.ver===m.ver&&old.rate===p.rate&&old.lo===p.lo&&old.hi===p.hi&&old.step===p.step){
-      const at=old.ph0+old.rate*(p.f0-old.f0)/ac.sampleRate,d=at-p.ph0;if(Math.abs(d-Math.round(d))<1e-4)continue}
-    motionPosted.set(key,{...p,cam:m,ver:m.ver});
-    waveNode.port.postMessage({type:'motion',id,slot:m.macro-1,prog:{...p,table:Float32Array.from(p.table)}});
-  }
+  const send=(v,slot,part,p,sig)=>{
+    const id=waveIdOf.get(v)||wavePost(v);if(!id)return;
+    const key=id*8+slot;if(seen.has(key))return;seen.add(key);
+    const old=motionPosted.get(key);
+    if(old&&old.part===part&&old.sig===sig&&old.rate===p.rate&&old.lo===p.lo&&old.hi===p.hi&&old.step===p.step){
+      const at=old.ph0+old.rate*(p.f0-old.f0)/ac.sampleRate,d=at-p.ph0;if(Math.abs(d-Math.round(d))<1e-4)return}
+    motionPosted.set(key,{...p,part,sig});
+    waveNode.port.postMessage({type:'motion',id,slot,prog:{...p,table:Float32Array.from(p.table)}});
+  };
+  for(const m of W.cams)if(m.to&&m.cog&&m.to.voice.kind==='wave'&&W.readers.includes(m.to))send(m.to.voice,m.macro-1,m,camProgram(m),m.ver);
+  for(const pr of W.probes){const q=probeProgram(pr);if(q)send(q.v,pr.macro-1,pr,q.p,q.sig)}
   for(const key of motionPosted.keys())if(!seen.has(key)){motionPosted.delete(key);waveNode.port.postMessage({type:'motion',id:Math.floor(key/8),slot:key%8,prog:null})}
 }
 // Which macros a cam drives on a voice: the synth editor marks them.
@@ -76,7 +78,7 @@ const camsOn=v=>W.cams.filter(m=>m.to&&m.to.voice===v);
 // patch sheet opens with that macro armed, so one drag on a knob finishes the connection.
 function linkCam(m,rd){
   if(rd.voice.kind!=='wave'){camSay(()=>'link: that reader is not a synth');return false}
-  const v=rd.voice,used=new Set(camsOn(v).filter(o=>o!==m).map(o=>o.macro));
+  const v=rd.voice,used=new Set(macroUsers(v).filter(o=>o!==m).map(o=>o.macro));
   let slot=v.macro.findIndex((x,i)=>!used.has(i+1)&&!x&&!v.mods.some(r=>r.src==='m'+(i+1)||r.aux==='m'+(i+1)));
   if(slot<0)slot=[...Array(WAVE_MACROS).keys()].find(i=>!used.has(i+1))??0;
   m.to=rd;m.macro=slot+1;buzz(12);changed(true);
@@ -86,9 +88,10 @@ function linkCam(m,rd){
   return true;
 }
 // Linking: the next tap on a reader takes the link; anywhere else cancels it.
-function startLink(m){ui.linking=m;buzz(6);camSay(()=>`cam ${m.id}: tap a synth reader to link it`,true)}
+function startLink(m){ui.linking=m;buzz(6);camSay(()=>W.probes.includes(m)?`probe ${m.id}: tap a reader, pad or sphere to drive it`:`cam ${m.id}: tap a synth reader to link it`,true)}
 function linkGesture(s){
   const m=ui.linking;ui.linking=null;const p=screenToWorld(s);
+  if(W.probes.includes(m)){const o=voicedAt(p);if(o)linkProbe(m,o);else camSay(()=>'link: cancelled');return {o:null,move(){},up(){},tap(){},cancel(){}}}
   const rd=W.readers.map(r=>[r,segDist(p,r.x1,r.y1,r.x2,r.y2)*S.zoom]).filter(([,d])=>d<24).sort((a,b)=>a[1]-b[1])[0]?.[0];
   if(rd)linkCam(m,rd);else camSay(()=>'link: cancelled');
   return {o:null,move(){},up(){},tap(){},cancel(){}};

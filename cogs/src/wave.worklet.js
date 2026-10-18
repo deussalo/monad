@@ -160,8 +160,9 @@ const FX_RUN={
         for(let k=0;k<6;k++){const z=c*6+k,o=a*y+ap[z];ap[z]=y-a*o;y=o}
         st.pz[c]=y;B[s]=x*(1-mix*.5)+y*mix}}},
 };
-// A motion's value at a frame: its table (64 points, wrapping) at phase ph0 + rate·(frame − f0)/sampleRate, linear or
-// stepped, mapped into lo..hi. One-pole smoothing (about 3 ms) takes the edges off a stepped shape.
+// A motion's value at a frame: its table (64 points for a cam, 128 for a probe, wrapping) at phase ph0 + rate·(frame − f0)/sampleRate, linear or
+// stepped, mapped into lo..hi. One-pole smoothing (about 3 ms, or the program's own glide: a ball's value streamed
+// at the frame rate glides 30 ms) takes the edges off a stepped shape.
 const MOTION_GLIDE=1-Math.exp(-WSLICE/(.003*sampleRate));
 function motionAt(p,frame){
   const t=p.table,N=t.length,ph=p.ph0+p.rate*(frame-p.f0)/sampleRate,u=(ph-Math.floor(ph))*N,i=Math.floor(u)%N;
@@ -219,11 +220,12 @@ class WaveSynth extends AudioWorkletProcessor{
   motion(m){
     const k=m.id*8+m.slot;
     if(!m.prog){this.motions.delete(k);const cp=this.patches.get(m.id);if(cp)cp.mac[m.slot]=cp.base[MAC_P[m.slot]];return}
-    const old=this.motions.get(k);this.motions.set(k,{...m.prog,id:m.id,slot:m.slot,y:old?old.y:motionAt(m.prog,this.frame)});
+    const old=this.motions.get(k),g=m.prog.glide?1-Math.exp(-WSLICE/(m.prog.glide*sampleRate)):MOTION_GLIDE;
+    this.motions.set(k,{...m.prog,id:m.id,slot:m.slot,g,y:old?old.y:motionAt(m.prog,this.frame)});
   }
   runMotions(frame){
     for(const mo of this.motions.values()){const cp=this.patches.get(mo.id);if(!cp)continue;
-      const x=motionAt(mo,frame);mo.y+=(x-mo.y)*MOTION_GLIDE;cp.mac[mo.slot]=mo.y}
+      const x=motionAt(mo,frame);mo.y+=(x-mo.y)*mo.g;cp.mac[mo.slot]=mo.y}
   }
   start(m){
     const cp=this.patches.get(m.id);if(!cp)return;

@@ -89,7 +89,7 @@ function syncEditor(){syncRollBar();
   if(!panelShown()||!$('#dev').dataset.editor)return;
   if(!mode){togglePanel(false);return}
   if(editorOwner!==sel.o){const tucked=sheetMin();editorOwner=sel.o;togglePanel(true,mode);if(tucked)setSheetMin(true)}
-  const title=$('#editor-title'),labelled=`${sel.type==='cog'?'disc':sel.type==='pit'?'box':sel.type} ${sel.o.id} · ${mode}`;
+  const title=$('#editor-title'),labelled=`${sel.type==='cog'?'disc':sel.type==='pit'?'sphere':sel.type} ${sel.o.id} · ${mode}`;
   if(title.textContent!==labelled)title.textContent=labelled;
 }
 const GESTURE_READOUT={
@@ -151,29 +151,60 @@ function mount(){
   $('#edit-part').onpointerup=$('#edit-part').onclick=openEditor;
   $('#delete-part').onclick=()=>removeSel();$('#to-start').onclick=()=>{toStart();buzz(10)};
 }
-// The shelf never changes, so it is painted once per size and blitted.
-let shelfArt=null;
+// The shelf is a tray wider than the phone: each part has a slot at least SLOT_MIN wide, and a sideways drag scrolls
+// it (with a fling). A drag up off a slot carries that part in. It never changes, so it is painted once per size and
+// blitted at the scroll.
+const SLOT_MIN=58,FLING_MS=260;
+const slotW=()=>Math.max(SLOT_MIN,CW/PARTS.length),shelfMax=()=>Math.max(0,slotW()*PARTS.length-CW);
+let shelfX=0,shelfFling=null,shelfArt=null;
+const setShelfX=x=>{shelfX=clamp(x,0,shelfMax())};
+const slotAt=x=>PARTS[clamp(Math.floor((x+shelfX)/slotW()),0,PARTS.length-1)];
 function drawShelf(){
-  const top=shelfTop(),h=CH-top;
-  if(!shelfArt||shelfArt.w!==CW||shelfArt.h!==h||shelfArt.dpr!==dpr){
-    const art=document.createElement('canvas');art.width=Math.round(CW*dpr);art.height=Math.round(h*dpr);
-    const main=cx;cx=art.getContext('2d');paintShelf(h);cx=main;shelfArt={w:CW,h,dpr,art};
+  const top=shelfTop(),h=CH-top,cw=slotW()*PARTS.length;
+  if(!shelfArt||shelfArt.cw!==cw||shelfArt.h!==h||shelfArt.dpr!==dpr){
+    const art=document.createElement('canvas');art.width=Math.round(cw*dpr);art.height=Math.round(h*dpr);
+    const main=cx;cx=art.getContext('2d');paintShelf(h,cw);cx=main;shelfArt={cw,h,dpr,art};
   }
-  cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=ui.scrap?.35:1;cx.drawImage(shelfArt.art,0,Math.round(top*dpr));cx.globalAlpha=1;
+  if(shelfFling){const t=performance.now(),dt=Math.min(50,t-shelfFling.t);shelfFling.t=t;setShelfX(shelfX+shelfFling.v*dt);shelfFling.v*=Math.exp(-dt/FLING_MS);
+    if(Math.abs(shelfFling.v)<.02||shelfX<=0||shelfX>=shelfMax())shelfFling=null}
+  setShelfX(shelfX);
+  cx.setTransform(1,0,0,1,0,0);cx.fillStyle=BG;cx.fillRect(0,Math.round(top*dpr),Math.round(CW*dpr),Math.round(h*dpr));
+  cx.globalAlpha=ui.scrap?.35:1;cx.drawImage(shelfArt.art,Math.round(shelfX*dpr),0,Math.round(CW*dpr),Math.round(h*dpr),0,Math.round(top*dpr),Math.round(CW*dpr),Math.round(h*dpr));cx.globalAlpha=1;
   cx.setTransform(dpr,0,0,dpr,0,0);
+  cx.fillStyle=FAINT;cx.fillRect(0,top,CW,1);
+  // more parts past either edge: the tray fades out there
+  for(const[on,x0,x1]of [[shelfX>1,0,28],[shelfX<shelfMax()-1,CW,CW-28]])if(on){const g=cx.createLinearGradient(x0,0,x1,0);g.addColorStop(0,BG);g.addColorStop(1,'rgba(0,0,0,0)');cx.fillStyle=g;cx.fillRect(Math.min(x0,x1),top+1,28,h-1)}
   if(ui.scrap){cx.fillStyle=BAD;cx.globalAlpha=.2+.08*Math.sin(performance.now()/90);cx.fillRect(0,top,CW,h);cx.globalAlpha=1}
-  const sw=CW/PARTS.length;
-  PARTS.forEach((kind,i)=>{if(ui.armed===kind){cx.strokeStyle=HOT;cx.lineWidth=1;cx.strokeRect(sw*i+2,top+2,sw-4,h-4)}});
+  const sw=slotW();
+  PARTS.forEach((kind,i)=>{if(ui.armed===kind){cx.strokeStyle=HOT;cx.lineWidth=1;cx.strokeRect(sw*i-shelfX+2,top+2,sw-4,h-4)}});
 }
-function paintShelf(h){
-  const sw=CW/PARTS.length;
+function paintShelf(h,cw){
+  const sw=slotW();
   cx.setTransform(dpr,0,0,dpr,0,0);
-  cx.fillStyle=BG;cx.fillRect(0,0,CW,h);cx.fillStyle=FAINT;cx.fillRect(0,0,CW,1);
+  cx.fillStyle=BG;cx.fillRect(0,0,cw,h);
   PARTS.forEach((kind,i)=>{
     const x=sw*(i+.5),y=SHELF_H/2,s=ICON_SCALE[kind]||.8;
     cx.save();cx.setTransform(dpr*s,0,0,dpr*s,dpr*x,dpr*y);PX=1/s;drawPartIcon(kind);cx.restore();
   });
 }
+// A press on the shelf: a flat sideways drag scrolls the tray; anything steeper carries the part under the finger
+// in. A scroll that then rises off the tray picks up the part the finger is over as it leaves.
+function shelfGesture(s0){
+  let kind=slotAt(s0.x);const x0=shelfX;let mode=null,inner=null,last={x:s0.x,t:performance.now()},v=0;shelfFling=null;
+  return {o:null,readout:()=>mode==='scroll'?`parts: ${PARTS.indexOf(slotAt(CW/2))+1} of ${PARTS.length}`:`place part: ${kind}`,
+    move(s){
+      if(!mode){mode=s.y<shelfTop()||2*Math.abs(s.y-s0.y)>=Math.abs(s.x-s0.x)||!shelfMax()?'carry':'scroll';if(mode==='carry')inner=G.carry(kind)}
+      else if(mode==='scroll'&&s.y<shelfTop()-8){mode='carry';kind=slotAt(clamp(s.x,0,CW-1));inner=G.carry(kind);buzz(6)}
+      if(mode==='carry')return inner.move(s);
+      setShelfX(x0-(s.x-s0.x));const t=performance.now();if(t>last.t){v=(last.x-s.x)/(t-last.t);last={x:s.x,t}}
+    },
+    up(s){if(mode==='carry')return inner.up(s);if(mode==='scroll'&&performance.now()-last.t<80&&Math.abs(v)>.15)shelfFling={v,t:performance.now()}},
+    cancel(){inner?.cancel?.()},tap(){}};
+}
+// A wheel or trackpad over the shelf scrolls it.
+function shelfWheel(s,e){if(s.y<shelfTop())return false;setShelfX(shelfX+(Math.abs(e.deltaX)>Math.abs(e.deltaY)?e.deltaX:e.deltaY));return true}
+// For the tests: bring a part's slot into view and say where it is.
+function shelfSlot(kind){const i=PARTS.indexOf(kind),sw=slotW();if(sw*i<shelfX||sw*(i+1)>shelfX+CW)setShelfX(sw*(i+.5)-CW/2);return [sw*(i+.5)-shelfX,shelfTop()+SHELF_H/2]}
 const glyphAt=()=>({x:CW-32,y:shelfTop()-32});
 function drawGlyph(){
   const {x,y}=glyphAt(),bpm=S.bpm||Math.abs(W.cogs.map(motorRpm).find(Boolean)||0),a=clock.view*Math.PI*bpm/60;
@@ -183,7 +214,7 @@ function drawGlyph(){
   cx.restore();
 }
 function chromeHit(s){
-  if(s.y>=shelfTop())return ()=>G.carry(PARTS[clamp(Math.floor(s.x/(CW/PARTS.length)),0,PARTS.length-1)]);
+  if(s.y>=shelfTop())return ()=>shelfGesture(s);
   const gl=glyphAt();if(Math.hypot(s.x-gl.x,s.y-gl.y)<26)return ()=>G.glyph();
   const b=activeBezel(),i=b?bezelHit(b,s):-1;return i>=0?()=>G.bezel(b,i,s):null;
 }
@@ -288,6 +319,15 @@ const camSectors=m=>[choiceSector('sweep','shape',[...Object.keys(CAM_SHAPES),'d
   numSector('odds','phase',m,'phase',0,1,.01),numSector('level','low',m,'lo',0,1,.01),numSector('level','high',m,'hi',0,1,.01),
   stepSector('knob','macro',1,WAVE_MACROS,()=>m.macro,x=>{m.macro=x},x=>'M'+x),
   {icon:'link',label:m.to?`linked to reader ${m.to.id}: tap to relink`:'link to a synth reader',action:()=>startLink(m)}];
+// A probe's dial: the axis it reads, the window of its travel, the macro or parameter it drives, and the link.
+function probeSectors(pr){
+  const out=[choiceSector('sweep','axis',PROBE_AXES,()=>pr.axis,x=>{pr.axis=x;pr._key=null},x=>PROBE_AXIS_LABEL[x]),
+    numSector('level','low',pr,'lo',0,1,.01),numSector('level','high',pr,'hi',0,1,.01)];
+  if(pr.to&&pr.to.voice.kind==='wave')out.push(stepSector('knob','macro',1,WAVE_MACROS,()=>pr.macro,x=>{pr.macro=x},x=>'M'+x));
+  else if(pr.to){const defs=probeDefs(pr.to.voice);if(defs.length)out.push(choiceSector('knob','drives',defs.map(d=>d[0]),()=>probeDef(pr)?.[0],x=>{pr.param=x},k=>defs.find(d=>d[0]===k)[1]))}
+  out.push({icon:'link',label:pr.to?`drives ${voicedName(pr.to)}: tap to relink`:'link to a reader, pad or sphere',action:()=>startLink(pr)});
+  return out;
+}
 const dotSectors=d=>[numSector('odds','probability',d,'p',0,1,.01),numSector('level','velocity',d,'v',0,1,.01),numSector('div','length steps',d,'len',1,ui.dotOf.track.div,1)];
 const ROOM_ICON={wet:'wet',size:'size',decay:'tail',highMult:'air',shimmer:'shimmer'};
 function roomSectors(){
@@ -315,6 +355,7 @@ function activeBezel(){
   else if(sel.type==='pad')b=ring(o,o.r*S.zoom,voiceSectors(o,true));
   else if(sel.type==='reader')b=ring(mid(o),stringLen(o)*S.zoom/2,readerSectors(o));
   else if(sel.type==='cam')b=ring(camTip(o),0,camSectors(o));
+  else if(sel.type==='probe'){if(probeAlive(o))b=ring(probePoint(o),0,probeSectors(o))}
   else if(sel.type==='string')b=ring(mid(o),stringLen(o)*S.zoom/2,stringSectors(o));
   else if(sel.type==='dot')b=ring(ui.dotAt,0,dotSectors(o));
   else if(sel.type==='cog'&&o.track){
@@ -357,4 +398,4 @@ function bezelHit(b,s){
   return Math.floor(wrap(Math.atan2(s.y-b.cy,s.x-b.cx)+Math.PI/2)/(TAU/b.sectors.length));
 }
 
-const PROBE={shelfTop,SHELF:PARTS,glyphAt,activeBezel,get rollSel(){return rollSel.size}};
+const PROBE={shelfTop,SHELF:PARTS,shelfSlot,get shelfX(){return shelfX},glyphAt,activeBezel,get rollSel(){return rollSel.size}};

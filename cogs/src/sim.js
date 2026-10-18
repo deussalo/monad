@@ -71,7 +71,7 @@ const LOOKAHEAD_MIN=.12;
 const S_DEFAULT={...S},SPACE_DEFAULT={...SPACE};
 
 /* ---------- world ---------- */
-const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],cams:[],pits:[],next:1};
+const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],cams:[],pits:[],probes:[],next:1};
 let simT=0,sel=null,group=[],marquee=null;
 const view={x:0,y:0};
 const stats={events:0,late:0,skipped:0,steps:0,stepsTick:0,log:[]};
@@ -206,7 +206,7 @@ function armHit(p,t){
   const nl=Math.hypot(px-pad.x,py-pad.y)||1,nx=(px-pad.x)/nl,ny=(py-pad.y)/nl;
   const vn=Math.abs(c.w*s*(-Math.sin(edge)*nx+Math.cos(edge)*ny));
   pad.hits++;pad.lastV=vn;pad.flash=arm.flash=t;flex(arm,t,vn);
-  const v=pad.voice,key=pad.id*128+(v.note|0);
+  const v=probed(pad.voice,t),key=pad.id*128+(v.note|0);
   fire(v,t,vn,pad,'arm'+arm.id+'>pad'+pad.id,1,(when,amp,pan,vx,dark)=>playVoice(v,v.note,when,amp,pan,key,vx,0,dark));
 }
 
@@ -225,7 +225,7 @@ function dotCross(c,dot,rd,dt){
   if(dot.p<1&&chance(c.id,dot.ring,dot.a,turn)>=dot.p)return;
   const midi=rd.tines?scaleNote(rd.combBase,rd.combScale,Math.min(rd.tines-1,Math.floor(hit.u*rd.tines))):ringNote(c.track,dot.ring);
   rd.hits++;rd.lastV=hit.vn;rd.lastMidi=voiceMidi(rd.voice,midi);dot.flash=rd.flash=t;
-  const v=rd.voice,key=rd.id*128+midi,hold=dot.len>1?dot.len*TAU/c.track.div/Math.abs(c.w):0;
+  const v=probed(rd.voice,t),key=rd.id*128+midi,hold=dot.len>1?dot.len*TAU/c.track.div/Math.abs(c.w):0;
   fire(v,t,hit.vn,hit,'cog'+c.id+'.ring'+dot.ring+'>reader'+rd.id,dot.v,
     (when,amp,pan,vx,dark)=>playVoice(v,midi,when,amp,pan,key,vx,hold,dark));
 }
@@ -438,7 +438,8 @@ function serialize(){
     belts:W.belts.map(b=>({id:b.id,a:b.a.id,b:b.b.id,cross:b.cross})),
     strings:W.strings.map(({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})=>({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})),
     cams:W.cams.map(m=>({id:m.id,cog:m.cog.id,ang:m.ang,phase:m.phase,shape:m.shape,prof:[...m.prof],to:m.to?m.to.id:null,macro:m.macro,lo:m.lo,hi:m.hi})),
-    pits:W.pits.map(p=>({id:p.id,x:p.x,y:p.y,w:p.w,h:p.h,voice:p.voice,notes:[...p.notes],balls:p.balls.map(b=>({id:b.id,note:b.note,bx:b.x,by:b.y,bvx:b.vx,bvy:b.vy}))}))};
+    pits:W.pits.map(p=>({id:p.id,x:p.x,y:p.y,w:p.w,h:p.h,voice:p.voice,notes:[...p.notes],balls:p.balls.map(b=>({id:b.id,note:b.note,bx:b.x,by:b.y,bvx:b.vx,bvy:b.vy}))})),
+    probes:W.probes.filter(probeAlive).map(probeOut)};
 }
 // Every part is built and checked before any of the live world is replaced.
 function deserialize(j){
@@ -473,9 +474,13 @@ function deserialize(j){
   // ball pits: a box takes its palette and its balls; one saved without its place starts at the middle, still
   next.pits=(j.pits||[]).map(p=>{
     const notes=(Array.isArray(p.notes)?p.notes:[]).map(n=>clamp(n|0,0,127)).filter((n,i,a)=>a.indexOf(n)===i).sort((a,b)=>a-b);
-    const o={id:p.id,x:+p.x||0,y:+p.y||0,w:Math.max(60,+p.w||240),h:Math.max(60,+p.h||160),voice:importedVoice(p),notes:notes.length?notes:[...PIT_NOTES],balls:[],nb:1,bag:[],hits:0,lastV:0};
+    const o={id:p.id,x:+p.x||0,y:+p.y||0,w:0,h:0,voice:importedVoice(p),notes:notes.length?notes:[...PIT_NOTES],balls:[],nb:1,bag:[],hits:0,lastV:0};
+    // a sphere; a box saved before it was one becomes the sphere of its mean side
+    o.w=o.h=Math.max(60,p.w&&p.h?(+p.w + +p.h)/2:+p.w||220);
     for(const b of p.balls||[]){const n=clamp(b.note|0,0,127),q=makeBall(o,n,b.bx??o.x,b.by??o.y,+b.bvx||0,+b.bvy||0,b.id|0);if(b.trail)q.trail=b.trail;o.balls.push(q)}
     o.nb=1+Math.max(0,...o.balls.map(b=>b.id));return o});
+  // probes: one whose host is missing is dropped, a link to a missing part comes loose
+  next.probes=probesIn(j,next);
   Object.assign(W,next);
   W.next=1+Math.max(0,...Object.values(next).flat().map(o=>o.id));
   Object.assign(S,j.S);Object.assign(SPACE,j.SPACE);Object.assign(view,j.view);

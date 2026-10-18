@@ -43,7 +43,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
         for (let k = 1; k <= 10; k++) { const d = d0 + (d1 - d0) * k / 10; await T('touchMove', [[c[0] - d / 2, c[1]], [c[0] + d / 2, c[1]]]); }
         await T('touchEnd', []); await wait(200);
       },
-      shelf: kind => probe(k => [innerWidth / __cogs.SHELF.length * (__cogs.SHELF.indexOf(k) + .5), __cogs.shelfTop() + 38], kind),
+      shelf: kind => probe(k => __cogs.shelfSlot(k), kind),
       async fromShelf(kind, ...worldPath) { const pts = [await t.shelf(kind)]; for (const w of worldPath) pts.push(await scr(w)); await t.stroke(pts); await wait(100); },
       async drag(a, z) { await t.stroke([await scr(a), await scr(z)]); await wait(100); },
       async room() { if (await probe(() => !!__cogs.sel)) await t.tap(await t.empty()); if (!(await probe(() => !!__cogs.activeBezel()))) await t.tap(await t.empty()); },
@@ -606,6 +606,27 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await m.tap(await probe(() => { const s = __cogs.toScreen({ x: 90, y: 90 }); return [s.x, s.y]; })); await wait(300);
   const pl = await probe(() => ({ cam: __cogs.serialize().cams[0], sel: __cogs.sel, sheet: document.querySelector('#dev').dataset.editor, open: !document.querySelector('#dev').hidden, arm: waveUi.arm }));
   check('link, then tap the reader: linked on macro 1, and the reader\'s patch sheet opens with M1 armed', pl.cam.to === 2 && pl.cam.macro === 1 && pl.sel.type === 'reader' && pl.open && pl.sheet === 'patch' && pl.arm === 'm1', [pl.cam.to, pl.cam.macro, pl.sel, pl.sheet, pl.open, pl.arm]);
+  await probe(() => { waveUi.arm = null; }); await p.tap('#editor-close'); await wait(200);
+
+  console.log('TRAY AND PROBE');
+  await m.tap(await m.empty());
+  const tray0 = await probe(() => { __cogs.shelfSlot('motor'); return { x: __cogs.shelfX, n: __cogs.SHELF.length }; });
+  const ty = await probe(() => __cogs.shelfTop() + 38);
+  await m.stroke([[330, ty], [120, ty + 4]]); await wait(100);
+  const tray1 = await probe(() => ({ x: __cogs.shelfX, n: __cogs.W.cogs.length + __cogs.W.cams.length + __cogs.W.readers.length }));
+  check('the tray is wider than the phone; a flat swipe scrolls it and places nothing', tray0.x === 0 && tray0.n === 12 && tray1.x > 150 && tray1.n === 3, [tray0, tray1]);
+  await m.fromShelf('probe', [20, 6], [22, 0]);
+  const pp = await probe(() => __cogs.serialize().probes);
+  check('drag a probe off the tray onto the turning cog: it pins to that point', pp.length === 1 && pp[0].host === 'cog' && pp[0].on === 1 && Math.abs(pp[0].r - 22) < 1, pp.map(q => [q.host, q.on, +q.r.toFixed(1)]));
+  await m.tap(await m.empty());
+  await m.tap(await probe(() => { const s = __cogs.toScreen(probePoint(W.probes[0])); return [s.x, s.y]; }));
+  const pb = await probe(() => { const b = __cogs.activeBezel(); return b && { cx: b.cx, cy: b.cy, R: b.R, n: b.sectors.length, labels: b.sectors.map(s => s.label), sel: __cogs.sel?.type }; });
+  is('tap it: its dial: axis, low, high, link', pb && [pb.sel, pb.labels], ['probe', ['axis', 'low', 'high', 'link to a reader, pad or sphere']]);
+  await m.shot('15-probe-dial');
+  await m.tap(sector(pb, 3, .5));
+  await m.tap(await probe(() => { const s = __cogs.toScreen({ x: 90, y: 90 }); return [s.x, s.y]; })); await wait(300);
+  const pk = await probe(() => ({ to: __cogs.serialize().probes[0].to, macro: W.probes[0].macro, sel: __cogs.sel, arm: waveUi.arm }));
+  check('link it to the synth reader: the cam has M1, so the probe takes M2', pk.to === 'reader:2' && pk.macro === 2 && pk.sel.type === 'reader' && pk.arm === 'm2', pk);
   await probe(() => { waveUi.arm = null; }); await p.tap('#editor-close'); await wait(200);
 
   console.log('DESKTOP: KEYS, MARQUEE, GROUP, WHEEL');

@@ -127,11 +127,12 @@ function draw(){
   for(const m of W.cams)drawCam(m);
   for(const m of W.cams)drawCamLink(m);
   for(const p of W.pits)drawBalls(p);
+  for(const pr of W.probes)drawProbe(pr);
   if(ui.pitBand){const{a,p}=ui.pitBand;cx.setLineDash([6*PX,5*PX]);strokes(a.x,a.y,p.x,p.y,[[2*PX,DIM]]);cx.setLineDash([])}
   if(ui.carry&&ui.carry.band){const{a,p}=ui.carry.band;cx.setLineDash([6*PX,5*PX]);strokes(a.x,a.y,p.x,p.y,[[2*PX,DIM]]);cx.setLineDash([])}
   if(sel){const o=sel.o;
     if(sel.type==='cog')halo(o.x,o.y,radius(o)+3.2);else if(sel.type==='pad')halo(o.x,o.y,o.r+2.4);
-    else if(sel.type==='arm'){const t=armTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='cam'){const t=camTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='reader'||sel.type==='string'){halo(o.x1,o.y1,3.8);halo(o.x2,o.y2,3.8)}else if(sel.type==='pit')drawPitSel(o)}
+    else if(sel.type==='arm'){const t=armTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='cam'){const t=camTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='probe'){if(probeAlive(o)){const t=probePoint(o);halo(t.x,t.y,3.6)}}else if(sel.type==='reader'||sel.type==='string'){halo(o.x1,o.y1,3.8);halo(o.x2,o.y2,3.8)}else if(sel.type==='pit')drawPitSel(o)}
   if(S.ids){cx.fillStyle=DIM;cx.font=`${10*PX}px monospace`;
     for(const c of W.cogs)cx.fillText('c'+c.id,c.x+4*PX,c.y-4*PX);
     for(const p of W.pads)cx.fillText('p'+p.id,p.x+p.r+2*PX,p.y);
@@ -146,7 +147,7 @@ function drawGhost(s){
   drawArm({cog:{x:-24,y:0,th:0,w:0},a:0,r0:0,len:24});cx.restore();cx.globalAlpha=1;
 }
 // Two readers: the note reader plays a disc's rings as its notes, the comb plays them on its own tines.
-const PART_KEYS={m:'motor',c:'cog',d:'disc',a:'arm',b:'belt',p:'pad',t:'string',r:'reader',k:'comb',e:'cam',o:'box'},KEY_OF=Object.fromEntries(Object.entries(PART_KEYS).map(([k,v])=>[v,k]));
+const PART_KEYS={m:'motor',c:'cog',d:'disc',a:'arm',b:'belt',p:'pad',t:'string',r:'reader',k:'comb',e:'cam',o:'sphere',y:'probe'},KEY_OF=Object.fromEntries(Object.entries(PART_KEYS).map(([k,v])=>[v,k]));
 const PARTS=Object.values(PART_KEYS);
 const MODEL={
   motor:{n:12,x:0,y:0,th:.13,w:1,layer:0,motor:{rpm:30,revs:0},track:null},
@@ -158,10 +159,11 @@ function drawPartIcon(kind){
   if(MODEL[kind])drawCog(MODEL[kind]);
   else if(kind==='arm')drawArm({cog:{x:-14,y:14,th:0,w:0},a:-Math.PI/4,r0:0,len:40});
   else if(kind==='cam'){const c={x:0,y:4,n:12,th:0,w:0},m={...newCam(0),cog:c,ang:-Math.PI/2,shape:'ramp up',prof:camShape('ramp up')};drawCog(c);drawCam(m)}
+  else if(kind==='probe')drawProbeIcon();
   else if(kind==='pad')drawPad({x:0,y:0,r:11,voice:{kind:'kick'}});
   else if(kind==='belt'){cx.strokeStyle=DIM;cx.lineWidth=PX;circle(-12,0,9);circle(14,0,6);cx.setLineDash([3,3]);strokes(-12,-9,14,-6,[[1.5,DIM]]);strokes(-12,9,14,6,[[1.5,DIM]]);cx.setLineDash([])}
   else if(kind==='string')drawString({x1:-20,y1:14,x2:20,y2:-14,kind:'string'});
-  else if(kind==='box'){const p={x:0,y:0,w:36,h:26,balls:[]};drawPit(p);for(const[x,y,m]of [[-8,3,52],[5,-4,60],[9,6,67]]){cx.fillStyle=ballColor(m);circle(x,y,ballR(m)*.55,true)}}
+  else if(kind==='sphere')drawBoxIcon();
   else drawReader({x1:-17,y1:17,x2:17,y2:-17,tines:kind==='comb'?6:0});
 }
 const ICON_SCALE={disc:.235,cog:.82,motor:.82,pad:1.3};
@@ -243,6 +245,7 @@ function removeObj(type,o){
   else if(type==='reader'){W.readers=W.readers.filter(x=>x!==o);for(const m of W.cams)if(m.to===o)m.to=null}
   else if(type==='dot')setDot(ui.dotOf.track,o,false);
   else W[type+'s']=W[type+'s'].filter(x=>x!==o);
+  pruneProbes();
   if(sel&&sel.o===o)select(null);
   buzz(18);changed(true);
 }
@@ -250,7 +253,7 @@ function removeSel(){
   const items=group.length?group:sel?[sel]:[];group=[];
   for(const{type,o}of items)if(type!=='belt'||W.belts.includes(o))removeObj(type,o);
 }
-const PART_LISTS=['cog','arm','pad','reader','string','belt','cam','pit'],UNSEAT_PX=36;
+const PART_LISTS=['cog','arm','pad','reader','string','belt','cam','pit','probe'],UNSEAT_PX=36;
 const shelfTopOr=()=>typeof shelfTop==='function'?shelfTop():CH;
 // A copied cog takes its arms; a belt comes when both its cogs do.
 let partClip=null;
@@ -293,6 +296,7 @@ function boxSelect(a,b){
   for(const type of ['reader','string'])for(const o of W[type+'s'])if(inside(mid(o)))g.push({type,o});
   for(const o of W.arms)if(inside(armTip(o)))g.push({type:'arm',o});
   for(const o of W.cams)if(inside(camTip(o)))g.push({type:'cam',o});
+  for(const o of W.probes)if(probeAlive(o)&&inside(probePoint(o)))g.push({type:'probe',o});
   for(const o of W.belts)if(g.some(x=>x.o===o.a)&&g.some(x=>x.o===o.b))g.push({type:'belt',o});
   return g;
 }
@@ -303,9 +307,10 @@ function drawGroup(){
   cx.setLineDash([]);
   for(const{type,o}of group){
     if(type==='cog'||type==='pad'){const s=toScreen(o);circle(s.x,s.y,(type==='cog'?radius(o):o.r)*S.zoom+5)}
-    else if(type==='pit'){const a=toScreen({x:o.x-o.w/2,y:o.y-o.h/2});cx.strokeRect(a.x-5,a.y-5,o.w*S.zoom+10,o.h*S.zoom+10)}
+    else if(type==='pit'){const c=toScreen(o);circle(c.x,c.y,pitR(o)*S.zoom+5)}
     else if(type==='arm'){const s=toScreen(armTip(o));circle(s.x,s.y,7)}
     else if(type==='cam'){const s=toScreen(camTip(o));circle(s.x,s.y,7)}
+    else if(type==='probe'){if(probeAlive(o)){const s=toScreen(probePoint(o));circle(s.x,s.y,8)}}
     else if(type!=='belt'){const a=toScreen({x:o.x1,y:o.y1}),b=toScreen({x:o.x2,y:o.y2});circle(a.x,a.y,6);circle(b.x,b.y,6);line(a.x,a.y,b.x,b.y)}
   }
 }
@@ -361,7 +366,8 @@ function newPart(kind,p){
   if(kind==='reader'||kind==='comb')return {type:'reader',o:{id,x1:0,y1:0,x2:0,y2:0,voice:readerVoice(),tines:kind==='comb'?12:0,combBase:60,combScale:'major',hits:0,lastV:0}};
   if(kind==='string')return {type:'string',o:{id,x1:0,y1:0,x2:0,y2:0,...STRING_DEFAULT,hits:0,lastV:0}};
   if(kind==='cam')return {type:'cam',o:newCam(id)};
-  if(kind==='box')return {type:'pit',o:newPit(id,p)};
+  if(kind==='sphere')return {type:'pit',o:newPit(id,p)};
+  if(kind==='probe')return {type:'probe',o:newProbe(id)};
   return {type:'arm',o:{id,cog:null,a:0,r0:0,len:4,flex:.5}};
 }
 function placePart(type,o,p){
@@ -375,6 +381,8 @@ function placePart(type,o,p){
     else{Object.assign(o,{x1:p.x-30,y1:p.y,x2:p.x+30,y2:p.y});o.on=null}}
   // a cam rides the cog it is dropped on; its follower stands where it was let go
   else if(type==='cam'){const c=pickCog(p);o.cog=c;if(c)o.ang=Math.atan2(p.y-c.y,p.x-c.x)}
+  // a probe pins onto whatever moving thing it is dropped on
+  else if(type==='probe')probeAttach(o,p);
   else{const c=pickCog(p);o.cog=c;if(c){o.a=wrap(Math.atan2(p.y-c.y,p.x-c.x)-renderTh(c));o.len=Math.max(4,Math.hypot(p.x-c.x,p.y-c.y))}}
 }
 
@@ -414,7 +422,7 @@ const G={
         const p=screenToWorld(s);
         if(offStage(s)){out();carry.ghost=null;return}
         made=made||newPart(kind,p);placePart(made.type,made.o,p);
-        const live=made.type!=='arm'&&made.type!=='cam'||made.o.cog;
+        const live=made.type==='arm'||made.type==='cam'?made.o.cog:made.type==='probe'?made.o.on:true;
         if(live&&!present()){list().push(made.o);if(made.type==='cog')solve();buzz(6)}else if(!live)out();
         carry.ghost=live?null:s;
       },
@@ -427,6 +435,13 @@ const G={
     return {o:m,readout:()=>`cam ${m.id} lift: ${Math.round(camLift(m)*100)}%`,
       move(s){trackScrap(s);const q=screenToWorld(s),c=m.cog;m.ang=Math.atan2(q.y-c.y,q.x-c.x)},
       up(){endScrap('cam',m)},tap(){choose('cam',m)},dbl(s){focus('cog',m.cog,s)}};
+  },
+  // A probe: drag it onto anything else that moves; tap for its dial, double tap to focus on what it rides.
+  probe(pr){
+    return {o:pr,readout:()=>`probe ${pr.id} on ${probeHostName(pr)}: ${Math.round(probeNow(pr)*100)}%`,
+      move(s){trackScrap(s);if(!ui.scrap)probeAttach(pr,screenToWorld(s),true)},
+      up(){endScrap('probe',pr)},tap(){choose('probe',pr)},
+      dbl(s){if(probeAlive(pr))pr.host==='ball'?focus('pit',pr.on,s):focus('cog',probeCog(pr),s)}};
   },
   arm(a){
     return {o:a,move(s){trackScrap(s);const q=screenToWorld(s),c=a.cog;a.a=wrap(Math.atan2(q.y-c.y,q.x-c.x)-renderTh(c));a.len=Math.max(4,Math.hypot(q.x-c.x,q.y-c.y)-a.r0)},
@@ -528,6 +543,8 @@ function begin(s){
   let best=null;const near=(d,reach,make)=>{if(d<=reach&&(!best||d<best.d))best={d,make}};
   for(const a of W.arms)near(dist(armTip(a))-3.3*Z,20,()=>G.arm(a));
   for(const m of W.cams)near(dist(camTip(m))-3*Z,20,()=>G.cam(m));
+  // a probe sits on top of what it rides, so it wins a tie with it
+  for(const pr of W.probes)if(probeAlive(pr))near(dist(probePoint(pr))-6*Z,20,()=>G.probe(pr));
   for(const o of W.pads){const d=dist(o),r=o.r*Z;near(d-r,Math.max(8,22-r),()=>G.pad(o,s,r>=18&&d>=r-8))}
   for(const[type,list]of [['reader',W.readers],['string',W.strings]])for(const o of list){
     near(dist({x:o.x1,y:o.y1}),22,()=>G.span(type,o,s,1));near(dist({x:o.x2,y:o.y2}),22,()=>G.span(type,o,s,2));
@@ -597,7 +614,7 @@ const endPointer=e=>{
 cv.addEventListener('pointerup',endPointer);cv.addEventListener('pointercancel',endPointer);
 // Trackpad pinch arrives as wheel with ctrlKey and small deltas; a mouse notch is ~100 px, or 3 lines.
 cv.addEventListener('wheel',e=>{
-  e.preventDefault();ui.cam=null;const s=local(e),dy=e.deltaY*(e.deltaMode===1?33:e.deltaMode===2?CH:1);
+  e.preventDefault();const s=local(e);if(typeof shelfWheel==='function'&&shelfWheel(s,e))return;ui.cam=null;const dy=e.deltaY*(e.deltaMode===1?33:e.deltaMode===2?CH:1);
   zoomAt(s,S.zoom*Math.exp(-dy*(e.ctrlKey?.01:.002)),screenToWorld(s));
 },{passive:false});
 document.addEventListener('pointerup',initAudio);
@@ -1096,7 +1113,7 @@ function openCogsFile(text){
   const world=j.cogsFile?j.world:j;
   if(!world||!Array.isArray(world.cogs))throw new Error('not a cogs file: no machine in it');
   deserialize(world);
-  const parts=W.cogs.length+W.arms.length+W.pads.length+W.readers.length+W.belts.length+W.strings.length+W.cams.length;
+  const parts=W.cogs.length+W.arms.length+W.pads.length+W.readers.length+W.belts.length+W.strings.length+W.cams.length+W.probes.length;
   said.push(`machine loaded: ${parts} part${parts===1?'':'s'}`);
   if(j.cogsFile&&j.patches)lib(mergePatches(j.patches));
   return said.filter(Boolean).join('; ');
@@ -1170,7 +1187,7 @@ function buildInspector(){
   rows.length=panelRows;readouts.length=panelReadouts;
   roll=null;camStrips=[];
   const o=sel&&sel.o,f=inspector,cogKind=c=>c.track?'disc':c.motor?'motor':'cog';
-  inspector.replaceChildren(el('legend',{textContent:sel?`${sel.type==='cog'?cogKind(o):sel.type==='pit'?'box':sel.type} ${sel.o.id}`:'selection'}));
+  inspector.replaceChildren(el('legend',{textContent:sel?`${sel.type==='cog'?cogKind(o):sel.type==='pit'?'sphere':sel.type} ${sel.o.id}`:'selection'}));
   if(sel&&sel.type==='cog'){
     numRow(f,'teeth',6,240,1,()=>o.n,v=>{resizer(o).set(v);changed(true)});
     if(motorOf(o)){
@@ -1196,6 +1213,8 @@ function buildInspector(){
     }else if(!o.motor)f.append(el('button',{textContent:'add track',onclick:()=>{o.track=newTrack();buildInspector();changed()}}));
   }else if(sel&&sel.type==='cam'){
     camRows(f,o);
+  }else if(sel&&sel.type==='probe'){
+    probeRows(f,o);
   }else if(sel&&sel.type==='arm'){
     numRow(f,'angle deg',0,360,.1,()=>o.a*180/Math.PI,v=>{o.a=v*Math.PI/180;changed()});
     numRow(f,'r0',0,500,.5,...bind(o,'r0',changed));

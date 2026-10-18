@@ -1,4 +1,6 @@
-/* ---------- the ball pit: a box of balls, each a note, that sound on the walls and on each other ---------- */
+/* ---------- the ball pit: a sphere of balls, each a note, that sound on its wall and on each other ---------- */
+// The sphere is a circle on the stage: its diameter is both w and h (they are kept equal), so its bounding box, its
+// fit and the probe's axes read it as they read any part.
 // Monad's container brought into the machine. Tap inside a box to drop a ball, drag to throw one; arms and cogs in
 // the box knock them about. The box's palette is its notes: each new ball takes the next of them (a shuffled bag, so
 // every note comes round before one repeats) and its size from its pitch, low notes big. The box's voice plays them.
@@ -8,7 +10,8 @@ const PIT={wall:.92,ball:.9,arm:.85,drag:.12,minV:18,cool:.045,maxV:1200,dt:1/24
 const PIT_NOTES=[60,62,64,67,69,72];
 const ballR=m=>clamp(11*Math.pow(2,(60-m)/24),6,22);
 const pitRect=p=>({L:p.x-p.w/2,R:p.x+p.w/2,T:p.y-p.h/2,B:p.y+p.h/2});
-const newPit=(id,p)=>({id,x:p.x,y:p.y,w:240,h:160,voice:readerVoice(),notes:[...PIT_NOTES],balls:[],nb:1,bag:[],hits:0,lastV:0});
+const pitR=p=>p.w/2;
+const newPit=(id,p)=>({id,x:p.x,y:p.y,w:220,h:220,voice:readerVoice(),notes:[...PIT_NOTES],balls:[],nb:1,bag:[],hits:0,lastV:0});
 function pitNote(p){
   if(!p.bag.length){p.bag=[...p.notes];for(let i=p.bag.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[p.bag[i],p.bag[j]]=[p.bag[j],p.bag[i]]}}
   return p.bag.pop()??60;
@@ -30,7 +33,7 @@ function pitReach(p){
 }
 function ballHit(p,b,vn,t,at){
   if(t-b.at<PIT.cool)return;b.at=t;b.flash=t;p.hits++;p.lastV=vn;p.flash=t;
-  const v=p.voice,note=b.note,key=p.id*128+note;
+  const v=probed(p.voice,t),note=b.note,key=p.id*128+note;
   fire(v,t,vn,at,'ball'+p.id+'.'+b.id,1,(when,amp,pan,vx,dark)=>playVoice(v,note,when,amp,pan,key,vx,0,dark));
 }
 function pitStep(q,dt,t){
@@ -69,15 +72,14 @@ function pitStep(q,dt,t){
       const tx=-ny,ty=nx,vt=(b.vx-rx)*tx+(b.vy-ry)*ty;b.vx-=.25*vt*tx;b.vy-=.25*vt*ty;
     }
   }
-  // the walls last, so nothing leaves the box
+  // the wall last, so nothing leaves the sphere: a ball past it is put back on it and bounced off its normal
+  const Rw=pitR(p);
   for(const b of bs){
-    let vn=0,hx=b.x,hy=b.y;
-    if(b.x<L+b.r){if(b.vx<0){vn=Math.max(vn,-b.vx);b.vx=-b.vx*PIT.wall}b.x=L+b.r;hx=L}
-    else if(b.x>R-b.r){if(b.vx>0){vn=Math.max(vn,b.vx);b.vx=-b.vx*PIT.wall}b.x=R-b.r;hx=R}
-    if(b.y<T+b.r){if(b.vy<0){vn=Math.max(vn,-b.vy);b.vy=-b.vy*PIT.wall}b.y=T+b.r;hy=T}
-    else if(b.y>B-b.r){if(b.vy>0){vn=Math.max(vn,b.vy);b.vy=-b.vy*PIT.wall}b.y=B-b.r;hy=B}
-    if(b.r*2>R-L)b.x=(L+R)/2;if(b.r*2>B-T)b.y=(T+B)/2;
-    if(vn>PIT.minV)ballHit(p,b,vn,t,{x:hx,y:hy});
+    let dx=b.x-p.x,dy=b.y-p.y;const lim=Rw-b.r;let d=Math.hypot(dx,dy);
+    if(lim<=0){b.x=p.x;b.y=p.y}
+    else if(d>lim){if(d<1e-9){dx=1;d=1}const nx=dx/d,ny=dy/d,vn=b.vx*nx+b.vy*ny;
+      b.x=p.x+nx*lim;b.y=p.y+ny*lim;
+      if(vn>0){b.vx-=(1+PIT.wall)*vn*nx;b.vy-=(1+PIT.wall)*vn*ny;if(vn>PIT.minV)ballHit(p,b,vn,t,{x:p.x+nx*Rw,y:p.y+ny*Rw})}}
     const tr=b.trail,last=tr[tr.length-1];
     if(!last||t+dt-last[0]>=PIT.trail){tr.push([t+dt,b.x,b.y]);if(tr.length>4&&tr[1][0]<clock.view-.05)tr.shift();if(tr.length>240)tr.splice(0,tr.length-240)}
   }
@@ -91,35 +93,49 @@ function ballAt(b,t=clock.view){
 }
 // A ball dropped or thrown now: it shows here now, and the sim, already ahead, takes it where it will be by then.
 function dropBall(p,at,vx,vy,note=pitNote(p)){
-  const {L,R,T,B}=pitRect(p),r=ballR(note),cl=(x,a,b)=>clamp(x,a+r,Math.max(a+r,b-r));
-  const x=cl(at.x,L,R),y=cl(at.y,T,B),ahead=Math.max(0,simT-clock.view);
-  const b=makeBall(p,note,cl(x+vx*ahead,L,R),cl(y+vy*ahead,T,B),vx,vy);b.trail.push([clock.view,x,y]);
+  const r=ballR(note),lim=Math.max(0,pitR(p)-r),cl=q=>{const dx=q.x-p.x,dy=q.y-p.y,d=Math.hypot(dx,dy);return d<=lim?q:{x:p.x+dx/d*lim,y:p.y+dy/d*lim}};
+  const {x,y}=cl(at),ahead=Math.max(0,simT-clock.view),w=cl({x:x+vx*ahead,y:y+vy*ahead});
+  const b=makeBall(p,note,w.x,w.y,vx,vy);b.trail.push([clock.view,x,y]);
   if(p.balls.length>=PIT.max)p.balls.shift();
   p.balls.push(b);return b;
 }
 const pitBallAt=(p,w)=>{for(let i=p.balls.length-1;i>=0;i--){const b=p.balls[i],q=ballAt(b);if(Math.hypot(q.x-w.x,q.y-w.y)<=b.r+4/S.zoom)return b}return null};
 
 /* drawing */
-const ballColor=m=>`hsl(${(m%12)*30},62%,62%)`;
 function drawPit(p){
-  const {L,T}=pitRect(p),r=Math.min(10,p.w/8,p.h/8);
-  cx.fillStyle=PAD;cx.globalAlpha=.35;cx.beginPath();cx.roundRect(L,T,p.w,p.h,r);cx.fill();cx.globalAlpha=1;
-  cx.lineWidth=2*PX;cx.strokeStyle=hot(p.flash,DIM);cx.beginPath();cx.roundRect(L,T,p.w,p.h,r);cx.stroke();cx.globalAlpha=1;cx.lineWidth=PX;
+  const R=pitR(p);
+  cx.fillStyle=PAD;cx.globalAlpha=.35;circle(p.x,p.y,R,true);cx.globalAlpha=1;
+  cx.lineWidth=2*PX;cx.strokeStyle=hot(p.flash,DIM);circle(p.x,p.y,R);cx.globalAlpha=1;
+  // a glass sphere: a faint highlight arc inside its upper left, and a fainter shadow arc low right
+  cx.lineWidth=1.5*PX;cx.strokeStyle=FG;cx.globalAlpha=.18;cx.beginPath();cx.arc(p.x,p.y,R*.86,Math.PI*1.08,Math.PI*1.42);cx.stroke();
+  cx.globalAlpha=.08;cx.beginPath();cx.arc(p.x,p.y,R*.9,Math.PI*.1,Math.PI*.55);cx.stroke();cx.globalAlpha=1;cx.lineWidth=PX;
+}
+// A ball as the machine's other parts are drawn: a raised disc with a fine rim, its note a notch round the rim like
+// an hour hand (C at the top), its name inside when there is room. A strike lights the rim and rings out, as a pad's.
+function drawBall(q,r,note,flash,big){
+  const g=glow(flash);
+  if(flash!=null&&clock.view>=flash&&clock.view-flash<.4){const k=(clock.view-flash)/.4;cx.globalAlpha=(1-k)*.5;cx.strokeStyle=HOT;cx.lineWidth=PX;circle(q.x,q.y,r+2*PX+k*10*PX);cx.globalAlpha=1}
+  cx.fillStyle=PAD;circle(q.x,q.y,r,true);
+  cx.lineWidth=PX;cx.strokeStyle=g>.03?HOT:FG;circle(q.x,q.y,r);
+  const a=(note%12)/12*TAU-Math.PI/2,ca=Math.cos(a),sa=Math.sin(a);
+  cx.strokeStyle=g>.03?HOT:DIM;cx.lineWidth=1.5*PX;line(q.x+ca*r*.55,q.y+sa*r*.55,q.x+ca*r,q.y+sa*r);cx.lineWidth=PX;
+  if(big&&r*S.zoom>=14){cx.fillStyle=DIM;cx.font=`${Math.min(11,r*S.zoom*.5)*PX}px monospace`;cx.textAlign='center';cx.textBaseline='middle';cx.fillText(NOTE_NAMES[note%12],q.x,q.y);cx.textAlign='start';cx.textBaseline='alphabetic'}
 }
 function drawBalls(p){
   const big=S.zoom>=1.2;
-  for(const b of p.balls){
-    const q=ballAt(b),g=glow(b.flash);
-    if(g>.03){cx.globalAlpha=.5*g;cx.fillStyle=ballColor(b.note);circle(q.x,q.y,b.r+5*g*PX,true)}
-    cx.globalAlpha=1;cx.fillStyle=ballColor(b.note);circle(q.x,q.y,b.r,true);
-    if(g>.03){cx.globalAlpha=.7*g;cx.fillStyle=FG;circle(q.x,q.y,b.r,true);cx.globalAlpha=1}
-    if(big&&b.r*S.zoom>=14){cx.fillStyle=BG;cx.font=`${Math.min(11,b.r*S.zoom*.55)*PX}px monospace`;cx.textAlign='center';cx.textBaseline='middle';cx.fillText(NOTE_NAMES[b.note%12],q.x,q.y);cx.textAlign='start';cx.textBaseline='alphabetic'}
-  }
+  for(const b of p.balls)drawBall(ballAt(b),b.r,b.note,b.flash,big);
 }
-// the corner that resizes a selected box
-const pitCorner=p=>({x:p.x+p.w/2,y:p.y+p.h/2});
+// Its shelf icon: the sphere, balls of three sizes inside, and the path of one that has just struck the wall.
+function drawBoxIcon(){
+  const p={x:0,y:0,w:40,h:40,balls:[]};drawPit(p);
+  cx.strokeStyle=DIM;cx.lineWidth=PX;cx.setLineDash([2,2]);line(-8,8,6,-17);line(6,-17,13,-3);cx.setLineDash([]);
+  {const a=-Math.PI/2+.33;cx.strokeStyle=HOT;cx.lineWidth=1.5*PX;cx.beginPath();cx.arc(0,0,20,a-.3,a+.3);cx.stroke();cx.lineWidth=PX}
+  for(const[x,y,m]of [[-7,8,48],[11,-2,60],[4,11,72]])drawBall({x,y},ballR(m)*.42,m,null,false);
+}
+// the handle on the rim, low right, that sizes a selected sphere
+const pitCorner=p=>({x:p.x+pitR(p)*Math.SQRT1_2,y:p.y+pitR(p)*Math.SQRT1_2});
 function drawPitSel(p){
-  const {L,T}=pitRect(p);cx.lineWidth=1.5*PX;cx.strokeStyle=SEL;cx.beginPath();cx.roundRect(L-4*PX,T-4*PX,p.w+8*PX,p.h+8*PX,Math.min(12,p.w/8)+4*PX);cx.stroke();
+  cx.lineWidth=1.5*PX;cx.strokeStyle=SEL;circle(p.x,p.y,pitR(p)+4*PX);
   const k=pitCorner(p);cx.fillStyle=SEL;circle(k.x,k.y,5*PX,true);cx.lineWidth=PX;
 }
 
@@ -131,11 +147,10 @@ Object.assign(G,{
     return {o:p,move(s){trackScrap(s);const q=screenToWorld(s);shiftPit(p,q.x-at.x,q.y-at.y);at=q},
       up(){endScrap('pit',p)},tap(){choose('pit',p)},dbl(s){focus('pit',p,s)}};
   },
-  // the corner: size the box, its top left staying put; balls left outside are pushed back in by the walls
+  // the handle: size the sphere about its centre; balls left outside are pushed back in by the wall
   pitSize(p){
-    const {L,T}=pitRect(p);
-    return {o:p,readout:()=>`box: ${Math.round(p.w)} × ${Math.round(p.h)}`,
-      move(s){const q=screenToWorld(s),w=Math.max(60,q.x-L),h=Math.max(60,q.y-T);p.w=w;p.h=h;p.x=L+w/2;p.y=T+h/2},
+    return {o:p,readout:()=>`sphere: ${Math.round(p.w)} across`,
+      move(s){const q=screenToWorld(s);p.w=p.h=Math.max(60,2*Math.hypot(q.x-p.x,q.y-p.y))},
       up(){changed()},tap(){choose('pit',p)}};
   },
   // inside: a tap drops a ball, a drag throws one the way the finger went; on a ball, a tap flicks it,
@@ -158,17 +173,16 @@ Object.assign(G,{
         pick();changed();buzz(6)}};
   },
 });
-// What lies under a press in a box: its resize corner when selected, its wall, or its inside.
+// What lies under a press on a sphere: its size handle when selected, its wall, or its inside.
 function pitTouch(p,s,near){
-  const q=screenToWorld(s),Z=S.zoom,{L,R,T,B}=pitRect(p);
+  const q=screenToWorld(s),Z=S.zoom,d=Math.hypot(q.x-p.x,q.y-p.y);
   if(isSel(p)){const k=pitCorner(p);near(Math.hypot(q.x-k.x,q.y-k.y)*Z,18,()=>G.pitSize(p))}
-  const inside=q.x>=L&&q.x<=R&&q.y>=T&&q.y<=B,edge=Math.min(Math.abs(q.x-L),Math.abs(q.x-R),Math.abs(q.y-T),Math.abs(q.y-B))*Z;
-  const along=q.x>=L-14/Z&&q.x<=R+14/Z&&q.y>=T-14/Z&&q.y<=B+14/Z;
-  if(along&&edge<=12)near(edge+6,18,()=>G.pitBox(p,s));
+  const inside=d<=pitR(p),edge=Math.abs(d-pitR(p))*Z;
+  if(edge<=12)near(edge+6,18,()=>G.pitBox(p,s));
   return inside?p:null;
 }
 
-/* the box's sheet: its palette, a two-octave keyboard to choose the notes its balls take */
+/* the sphere's sheet: its palette, a two-octave keyboard to choose the notes its balls take */
 const pitKeysAt={oct:4};
 function pitPalette(f,p){
   const cv=el('canvas',{className:'pit-keys'}),H=64,WHITE=[0,2,4,5,7,9,11],BLACK={1:0,3:1,6:3,8:4,10:5};
@@ -176,10 +190,10 @@ function pitPalette(f,p){
   const geom=()=>{const Wd=cv.clientWidth||300;return {Wd,ww:Wd/14}};
   const draw=()=>{const {Wd,ww}=geom();if(cv.width!==Math.round(Wd*dpr)){cv.width=Math.round(Wd*dpr);cv.height=H*dpr}
     const x=cv.getContext('2d'),on=new Set(p.notes),base=12*(pitKeysAt.oct+1),col=k=>getComputedStyle(document.documentElement).getPropertyValue(k).trim();
-    const fg=col('--fg'),bg=col('--bg'),pad=col('--pad');
+    const fg=col('--fg'),bg=col('--bg'),pad=col('--pad'),hotc=col('--hot');
     x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,Wd,H);
-    for(let i=0;i<14;i++){const m=base+12*Math.floor(i/7)+WHITE[i%7];x.fillStyle=on.has(m)?ballColor(m):fg;x.beginPath();x.roundRect(i*ww+1,0,ww-2,H,[0,0,4,4]);x.fill()}
-    for(let o=0;o<2;o++)for(const[k,after]of Object.entries(BLACK)){const m=base+12*o+ +k,xx=(o*7+after+1)*ww-ww*.3;x.fillStyle=on.has(m)?ballColor(m):bg;x.beginPath();x.roundRect(xx,0,ww*.6,H*.6,[0,0,3,3]);x.fill();
+    for(let i=0;i<14;i++){const m=base+12*Math.floor(i/7)+WHITE[i%7];x.fillStyle=on.has(m)?hotc:fg;x.beginPath();x.roundRect(i*ww+1,0,ww-2,H,[0,0,4,4]);x.fill()}
+    for(let o=0;o<2;o++)for(const[k,after]of Object.entries(BLACK)){const m=base+12*o+ +k,xx=(o*7+after+1)*ww-ww*.3;x.fillStyle=on.has(m)?hotc:bg;x.beginPath();x.roundRect(xx,0,ww*.6,H*.6,[0,0,3,3]);x.fill();
       if(!on.has(m)){x.strokeStyle=pad;x.lineWidth=1;x.stroke()}}
     lab.textContent='C'+pitKeysAt.oct;count.textContent=`${p.notes.length} note${p.notes.length===1?'':'s'} · ${p.balls.length} ball${p.balls.length===1?'':'s'}`};
   const noteAt=e=>{const r=cv.getBoundingClientRect(),{ww}=geom(),px=e.clientX-r.left,py=e.clientY-r.top,base=12*(pitKeysAt.oct+1);

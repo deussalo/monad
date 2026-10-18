@@ -31,16 +31,16 @@ const routesTo=(v,path)=>v.mods.filter(m=>m.dst===path);
 let wavePalAt=-1,wavePalMap=null;
 const wavePal=k=>{const t=performance.now();if(!wavePalMap||t-wavePalAt>250){wavePalAt=t;wavePalMap=new Map();wavePalMap.cs=getComputedStyle(document.documentElement)}
   let c=wavePalMap.get(k);if(c===undefined){c=wavePalMap.cs.getPropertyValue(k).trim()||'#888';wavePalMap.set(k,c)}return c};
-// Macro knobs a cam turns: they show where it has them, live, while the sheet is open.
+// Macro knobs a cam or probe turns: they show where it has them, live, while the sheet is open.
 const waveLive=new Set();
-const camDriver=(v,path)=>{const m=path.match(/^m(\d)$/);return m&&W.cams.length?camsOn(v).find(c=>c.macro===+m[1]&&c.cog):null};
+const camDriver=(v,path)=>{const m=path.match(/^m(\d)$/);return m?macroDriver(v,+m[1]):null};
 function waveKnob(v,path,edited){
   const P=WAVE_PARAMS[WAVE_INDEX.get(path)],S_=52,cv=el('canvas'),val=el('b'),name=el('span',{textContent:P[1]});
   const box=el('div',{className:'knob'},cv,name,val);box.dataset.path=path;
   cv.width=cv.height=S_*dpr;cv.style.width=cv.style.height=S_+'px';
   const A0=Math.PI*.75,SW=Math.PI*1.5;
   const draw=()=>{
-    const cam=camDriver(v,path),x=cv.getContext('2d'),c=S_/2,n=cam?cam.lo+(cam.hi-cam.lo)*camLift(cam):waveNorm(P,waveGet(v,path)),col=wavePal;
+    const cam=camDriver(v,path),x=cv.getContext('2d'),c=S_/2,n=cam?cam.now():waveNorm(P,waveGet(v,path)),col=wavePal;
     x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,S_,S_);x.lineCap='round';
     x.lineWidth=4;x.strokeStyle=col('--line');x.beginPath();x.arc(c,c,c-6,A0,A0+SW);x.stroke();
     const z=P[2]<0&&P[3]>0?waveNorm(P,0):0;
@@ -57,7 +57,7 @@ function waveKnob(v,path,edited){
     if(k.dot){const la=A0+SW*clamp(waveMod.at.get(path),0,1);x.fillStyle=col('--sel');x.beginPath();x.arc(c+Math.cos(la)*(c-6),c+Math.sin(la)*(c-6),3.5,0,TAU);x.fill()}
     const a=A0+SW*n;x.strokeStyle=col('--fg');x.lineWidth=2;x.beginPath();x.moveTo(c+Math.cos(a)*(c-16),c+Math.sin(a)*(c-16));x.lineTo(c+Math.cos(a)*(c-4),c+Math.sin(a)*(c-4));x.stroke();
     const rt=waveUi.arm&&routesTo(v,path).find(m=>m.src===waveUi.arm);
-    val.textContent=cam?`cam ${cam.id} ${Math.round(n*100)}%`:rt?`${srcLabel(rt.src)} ${rt.amt>0?'+':''}${Math.round(rt.amt*100)}`:waveText(P,waveGet(v,path));
+    val.textContent=cam?`${cam.label} ${Math.round(n*100)}%`:rt?`${srcLabel(rt.src)} ${rt.amt>0?'+':''}${Math.round(rt.amt*100)}`:waveText(P,waveGet(v,path));
     box.classList.toggle('armed',!!waveUi.arm||waveUi.pin);box.classList.toggle('pinned',!!v.dial?.includes(path));box.classList.toggle('routed',routesTo(v,path).length>0);
   };
   let drag=null,lastTap=0;
