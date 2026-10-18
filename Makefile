@@ -10,4 +10,4 @@ ci:
 .PHONY: cogs
 cogs:
 	@node cogs/build.js
-	@export LD_LIBRARY_PATH="$(PLAYWRIGHT_LIBS):$$LD_LIBRARY_PATH"; node cogs/verify.js; phone=$$?; node cogs/verify-desk.js; desk=$$?; node cogs/verify-wave.js; wave=$$?; node cogs/verify-pit.js; pit=$$?; node cogs/verify-probe.js; probe=$$?; exit $$((phone|desk|wave|pit|probe))
+	@export LD_LIBRARY_PATH="$(PLAYWRIGHT_LIBS):$$LD_LIBRARY_PATH"; node cogs/verify.js; phone=$$?; node cogs/verify-desk.js; desk=$$?; node cogs/verify-wave.js; wave=$$?; node cogs/verify-pit.js; pit=$$?; node cogs/verify-probe.js; probe=$$?; node cogs/verify-field.js; field=$$?; exit $$((phone|desk|wave|pit|probe|field))

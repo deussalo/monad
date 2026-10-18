@@ -71,7 +71,7 @@ const LOOKAHEAD_MIN=.12;
 const S_DEFAULT={...S},SPACE_DEFAULT={...SPACE};
 
 /* ---------- world ---------- */
-const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],cams:[],pits:[],probes:[],next:1};
+const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],cams:[],pits:[],probes:[],fields:[],next:1};
 let simT=0,sel=null,group=[],marquee=null;
 const view={x:0,y:0};
 const stats={events:0,late:0,skipped:0,steps:0,stepsTick:0,log:[]};
@@ -297,11 +297,12 @@ function initAudio(){
   // Chrome refuses blob: worklet modules on file:// pages; a data: URL loads there and over https.
   const url='data:text/javascript;charset=utf-8,'+encodeURIComponent($('#engine').textContent);
   ac.audioWorklet.addModule(url).then(()=>{
-    engineNode=new AudioWorkletNode(ac,'cogs-engine',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[2],
+    // outputs past the first are the field sends, one stereo pair per field slot, into the fields node
+    engineNode=new AudioWorkletNode(ac,'cogs-engine',{numberOfInputs:1,numberOfOutputs:1+FIELD_SLOTS_N,outputChannelCount:Array(1+FIELD_SLOTS_N).fill(2),
       channelCount:2,channelCountMode:'explicit',processorOptions:{voices:64,lines:16,space:{...SPACE}}});
     engineNode.port.onmessage=e=>{if(e.data.type==='stats')engineStats=e.data};
     engineNode.onprocessorerror=()=>{engineState='processor error'};
-    drumBus=ac.createGain();drumBus.connect(engineNode);engineNode.connect(master);startWave();
+    drumBus=ac.createGain();drumBus.connect(engineNode);engineNode.connect(master,0);startWave();startFields();
     engineState='ready';
   }).catch(err=>{engineState='failed: '+String(err.message).slice(0,160)});
   ac.resume();
@@ -310,7 +311,8 @@ function flushStrikes(){const d=new Float64Array(strikes);strikes.length=0;engin
 const contactTime=(hard,x)=>clamp((.0016-.0014*hard)*Math.pow(Math.max(.02,x),-.35),.00012,.004);
 function strike(f,g,t,when,amp,pan,key,contact,attack){
   if(!strikes.length)queueMicrotask(flushStrikes);
-  strikes.push(when*ac.sampleRate,key,amp*.3,contact,attack,pan,f.length,...f,...g,...t);
+  const fx=fxNow?fxNow.fx:[];
+  strikes.push(when*ac.sampleRate,key,amp*.3,contact,attack,pan,f.length,...f,...g,...t,fx.length/2,...fx,fxNow?fxNow.dry:1);
 }
 // A held note rings for its length, then a damper takes it off over 60 ms.
 function damp(key,when){engineNode.port.postMessage({type:'damp',at:when*ac.sampleRate,key});waveNode?.port.postMessage({type:'off',at:when*ac.sampleRate,key})}
@@ -329,7 +331,11 @@ function synth(v,midi,when,amp,pan,key,x,hold=0,dark=0){
 // Drums are WebAudio graphs on the drum bus: tuned oscillators and filtered noise under one decaying gain.
 function drum(v,when,amp,pan,dark=0){
   const out=ac.createGain(),p=ac.createStereoPanner(),end=when+v.decay,src=[];
-  p.pan.value=pan;p.connect(drumBus);
+  p.pan.value=pan;
+  // in a field: the dry part to the drum bus, and a send to each field it sounds in
+  if(fxNow&&fieldsNode){const dg=ac.createGain();dg.gain.value=fxNow.dry;p.connect(dg);dg.connect(drumBus);
+    for(let i=0;i<fxNow.fx.length;i+=2){const sg=ac.createGain();sg.gain.value=fxNow.fx[i+1];p.connect(sg);sg.connect(fieldsNode,0,fxNow.fx[i])}}
+  else p.connect(drumBus);
   if(dark>.02){const lp=ac.createBiquadFilter();lp.type='lowpass';lp.frequency.value=16000*Math.exp(-dark*3.2);out.connect(lp);lp.connect(p)}else out.connect(p);
   out.gain.setValueAtTime(amp,when);out.gain.exponentialRampToValueAtTime(1e-4,end);
   const osc=(type,f0,gain,f1=f0,sweepT=0,at=when,to=end)=>{const o=ac.createOscillator(),og=ac.createGain();o.type=type;o.frequency.setValueAtTime(f0,at);
@@ -357,7 +363,7 @@ function fire(v,t,vn,at,src,gain,play){
   let when=t+clock.off-clock.shift;
   if(when<ac.currentTime){stats.late++;when=ac.currentTime}
   const p=heard(at);
-  play(when,amp*p.gain,p.pan,vx,p.dark);
+  withFields(at,when,t,()=>play(when,amp*p.gain,p.pan,vx,p.dark));
 }
 
 /* ---------- clock ---------- */
@@ -439,7 +445,7 @@ function serialize(){
     strings:W.strings.map(({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})=>({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})),
     cams:W.cams.map(m=>({id:m.id,cog:m.cog.id,ang:m.ang,phase:m.phase,shape:m.shape,prof:[...m.prof],to:m.to?m.to.id:null,macro:m.macro,lo:m.lo,hi:m.hi})),
     pits:W.pits.map(p=>({id:p.id,x:p.x,y:p.y,w:p.w,h:p.h,voice:p.voice,notes:[...p.notes],balls:p.balls.map(b=>({id:b.id,note:b.note,bx:b.x,by:b.y,bvx:b.vx,bvy:b.vy}))})),
-    probes:W.probes.filter(probeAlive).map(probeOut)};
+    probes:W.probes.filter(probeAlive).map(probeOut),fields:W.fields.map(fieldOut)};
 }
 // Every part is built and checked before any of the live world is replaced.
 function deserialize(j){
@@ -481,6 +487,7 @@ function deserialize(j){
     o.nb=1+Math.max(0,...o.balls.map(b=>b.id));return o});
   // probes: one whose host is missing is dropped, a link to a missing part comes loose
   next.probes=probesIn(j,next);
+  next.fields=(j.fields||[]).map(fieldIn);
   Object.assign(W,next);
   W.next=1+Math.max(0,...Object.values(next).flat().map(o=>o.id));
   Object.assign(S,j.S);Object.assign(SPACE,j.SPACE);Object.assign(view,j.view);

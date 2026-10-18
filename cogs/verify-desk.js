@@ -36,7 +36,7 @@ const SHOTS = process.env.COGS_SHOTS || '';
   console.log('ENGINE');
   const steal = await probe(async () => {
     const url = 'data:text/javascript;charset=utf-8,' + encodeURIComponent(document.querySelector('#engine').textContent);
-    const strike = (at, k, amp) => [at, k, amp, .0008, 0, 0, 3, 220, 330, 440, 1, .5, .3, 2, 2, 2];
+    const strike = (at, k, amp) => [at, k, amp, .0008, 0, 0, 3, 220, 330, 440, 1, .5, .3, 2, 2, 2, 0, 1];
     const render = async (voices, strikes) => {
       const ac = new OfflineAudioContext(2, 128 * 40, 48000);
       await ac.audioWorklet.addModule(url);

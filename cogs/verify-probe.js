@@ -80,7 +80,7 @@ const FILE = process.argv[2] || ('file://' + path.join(__dirname, 'desk.html'));
   });
   check('on a cam\'s follower: it reads its reach, which is the cam\'s own shape', hosts.cam[0] === 'cam' && hosts.cam[1] === 'reach' && hosts.worst < .02, hosts);
   check('on a bare cog: it rides that point of the cog', hosts.cog[0] === 'cog' && hosts.cog[1] === 20 && Math.abs(hosts.cog[2] - 11.2) < .2, hosts.cog);
-  check('on a ball: its height in the box (40 px above the middle of 160: 0.75)', hosts.ball[0] === 'ball' && hosts.ball[1] === 24 && hosts.ball[2] === 1 && Math.abs(hosts.ball[3] - .75) < .01, hosts.ball);
+  check('on a ball: its height in the sphere (40 px above the middle of 220: 0.682)', hosts.ball[0] === 'ball' && hosts.ball[1] === 24 && hosts.ball[2] === 1 && Math.abs(hosts.ball[3] - 150 / 220) < .01, hosts.ball);
   const ballProg = await probe(() => { const pb = W.probes.find(p => p.id === 25); pb.to = W.readers[0]; pb.macro = 3; const q = probeProgram(pb); return q && [q.p.rate, q.p.table.length, q.p.glide, q.p.step]; });
   is('a ball on a synth streams its value, gliding 30 ms', ballProg, [0, 1, .03, true]);
 
