@@ -1,10 +1,4 @@
 const TAU=Math.PI*2,LN1000=6.907755278982137,MAXM=12,BLOCK=128;
-const isPrime=n=>{for(let d=2;d*d<=n;d++)if(n%d===0)return false;return n>1};
-const primeAtLeast=n=>{n=Math.max(2,Math.round(n));while(!isPrime(n))n++;return n};
-const pow2AtLeast=n=>{let p=1;while(p<n)p<<=1;return p};
-const softLimit=x=>x/(1+Math.abs(x));
-// Sylvester Hadamard row r of length n, used for orthogonal tap/injection signs.
-const hadamardSign=(r,c)=>{let b=r&c,p=0;while(b){p^=b&1;b>>=1}return p?-1:1};
 // A strike: at, key, amp, contact, attack, pan, n, n freqs, n gains, n decays, then its field sends (count, then slot
 // and amount for each) and its dry level (a field can take some of the dry away).
 const FX_SLOTS=8;
@@ -12,33 +6,6 @@ const strikeSize=(d,o)=>{const e=o+7+3*d[o+6];return 9+3*d[o+6]+2*d[e]};
 const packStrikes=list=>{const out=[];for(const m of list){out.push(m.at||0,m.k,m.amp,m.c,m.a,m.p,m.f.length,...m.f);
   for(let i=0;i<m.f.length;i++)out.push(m.g[i]);for(let i=0;i<m.f.length;i++)out.push(m.t[i]);
   const fx=m.fx||[];out.push(fx.length/2,...fx,m.dry??1)}return new Float64Array(out)};
-
-class Allpass{
-  constructor(len){this.buf=new Float32Array(len);this.len=len;this.i=0}
-  run(x,g){const b=this.buf,i=this.i,d=b[i],v=x-g*d;b[i]=v;this.i=i+1===this.len?0:i+1;return d+g*v}
-}
-
-class Svf{
-  constructor(){this.s1=0;this.s2=0;this.lp=0;this.hp=0}
-  // Topology-preserving SVF (Zavalishin); returns [lp,hp] via fields to avoid allocation.
-  run(x,g,k){const h=(x-(2*k+g)*this.s1-this.s2)/(1+g*(g+2*k)),b=g*h+this.s1,l=g*b+this.s2;
-    this.s1=g*h+b;this.s2=g*b+l;this.lp=l;this.hp=h;return l}
-}
-
-class PitchShifter{
-  constructor(fs){this.size=pow2AtLeast(fs*.2);this.mask=this.size-1;this.buf=new Float32Array(this.size);
-    this.w=0;this.p=0;this.win=Math.round(fs*.07)}
-  read(d){const pos=this.w-d,i=Math.floor(pos),f=pos-i,m=this.mask;return this.buf[i&m]*(1-f)+this.buf[(i+1)&m]*f}
-  run(x,ratio){
-    this.buf[this.w&this.mask]=x;
-    const W=this.win;let p=this.p+(1-ratio)/W;p-=Math.floor(p);this.p=p;
-    let q=p+.5;if(q>=1)q-=1;
-    const a=Math.sin(Math.PI*p),b=Math.sin(Math.PI*q);
-    const y=this.read(p*W+1)*a*a+this.read(q*W+1)*b*b;
-    this.w++;return y;
-  }
-}
-
 
 class CogsEngine extends AudioWorkletProcessor{
   constructor(options){
