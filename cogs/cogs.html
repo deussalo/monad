@@ -226,9 +226,13 @@ const pow2AtLeast=n=>{let p=1;while(p<n)p<<=1;return p};
 const softLimit=x=>x/(1+Math.abs(x));
 // Sylvester Hadamard row r of length n, used for orthogonal tap/injection signs.
 const hadamardSign=(r,c)=>{let b=r&c,p=0;while(b){p^=b&1;b>>=1}return p?-1:1};
-const strikeSize=(d,o)=>7+3*d[o+6];
+// A strike: at, key, amp, contact, attack, pan, n, n freqs, n gains, n decays, then its field sends (count, then slot
+// and amount for each) and its dry level (a field can take some of the dry away).
+const FX_SLOTS=8;
+const strikeSize=(d,o)=>{const e=o+7+3*d[o+6];return 9+3*d[o+6]+2*d[e]};
 const packStrikes=list=>{const out=[];for(const m of list){out.push(m.at||0,m.k,m.amp,m.c,m.a,m.p,m.f.length,...m.f);
-  for(let i=0;i<m.f.length;i++)out.push(m.g[i]);for(let i=0;i<m.f.length;i++)out.push(m.t[i])}return new Float64Array(out)};
+  for(let i=0;i<m.f.length;i++)out.push(m.g[i]);for(let i=0;i<m.f.length;i++)out.push(m.t[i]);
+  const fx=m.fx||[];out.push(fx.length/2,...fx,m.dry??1)}return new Float64Array(out)};
 
 class Allpass{
   constructor(len){this.buf=new Float32Array(len);this.len=len;this.i=0}
@@ -394,6 +398,10 @@ class CogsEngine extends AudioWorkletProcessor{
     this.pl=new Float64Array(V);this.pr=new Float64Array(V);this.plT=new Float64Array(V);this.prT=new Float64Array(V);this.e=new Float64Array(V);
     this.exc=new Float64Array(BLOCK);this.live=new Int32Array(MAXM);this.vb=new Float64Array(BLOCK);
     this.dryL=new Float32Array(BLOCK);this.dryR=new Float32Array(BLOCK);
+    // field sends: each voice's amount into each slot, its dry level, and a buffer per slot
+    this.snd=new Float64Array(V*FX_SLOTS);this.hasSnd=new Uint8Array(V);this.vdry=new Float64Array(V).fill(1);
+    this.auxL=Array.from({length:FX_SLOTS},()=>new Float32Array(BLOCK));this.auxR=Array.from({length:FX_SLOTS},()=>new Float32Array(BLOCK));
+    this.vL=new Float32Array(BLOCK);this.vR=new Float32Array(BLOCK);this.auxUsed=new Uint8Array(FX_SLOTS);
     this.maxStarts=4*V;this.maxWait=8*BLOCK;
     this.reset(o);this.warm(o);
     this.damps=[];
@@ -420,7 +428,8 @@ class CogsEngine extends AudioWorkletProcessor{
   }
   reset(o){
     for(const a of [this.on,this.key,this.nm,this.zr,this.zi,this.kr,this.ki,this.xg,this.cN,this.cLen,this.env,this.envStep,this.fade,this.fadeStep,
-      this.pl,this.pr,this.plT,this.prT,this.e,this.exc,this.live,this.vb,this.dryL,this.dryR,this.pendAt,this.dl])a.fill(0);
+      this.pl,this.pr,this.plT,this.prT,this.e,this.exc,this.live,this.vb,this.dryL,this.dryR,this.pendAt,this.dl,this.snd,this.hasSnd])a.fill(0);
+    this.vdry.fill(1);
     this.pend.fill(null);this.space.clear(o.space);
     this.queue=[packStrikes((o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0)))];this.queueAt=0;this.queueOff=0;this.damps=[];
     this.frame=0;this.quietBlocks=0;this.steals=0;this.drops=0;this.strikes=0;this.statAt=0;this.idle=false;this.muted=false;this.idleReported=false;this.waitFrom=-1;
@@ -437,6 +446,9 @@ class CogsEngine extends AudioWorkletProcessor{
     this.nm[v]=k;
     const len=Math.max(8,Math.round((d[o+3]||.002)*fs));this.cLen[v]=len;this.cN[v]=len;
     const p=Math.max(-1,Math.min(1,d[o+5]||0)),a=(p+1)*Math.PI/4;this.plT[v]=Math.cos(a);this.prT[v]=Math.sin(a);this.dl[v]=off||0;
+    const e=t+n,ns=d[e]|0,sb=v*FX_SLOTS;for(let k=0;k<FX_SLOTS;k++)this.snd[sb+k]=0;
+    for(let i=0;i<ns;i++){const k=d[e+1+2*i]|0;if(k>=0&&k<FX_SLOTS)this.snd[sb+k]=d[e+2+2*i]}
+    this.hasSnd[v]=ns>0?1:0;const dry=d[e+1+2*ns];this.vdry[v]=Number.isFinite(dry)?dry:1;
   }
   offset(d,o){return Math.max(0,Math.min(BLOCK-1,Math.round(d[o]-this.frame)))}
   // false: every voice is already fading out, so the strike has to wait.
@@ -519,8 +531,15 @@ class CogsEngine extends AudioWorkletProcessor{
     const dL=this.dryL,dR=this.dryR;dL.fill(0);dR.fill(0);
     const inp=inputs[0];let inE=0;
     if(inp&&inp.length){const a=inp[0],b=inp[1]||a;for(let s=0;s<n;s++){dL[s]+=a[s];dR[s]+=b[s];inE+=a[s]*a[s]}}
-    let voices=0;
-    for(let v=0;v<this.V;v++)if(this.on[v]){voices++;this.renderVoice(v,n,dL,dR)}
+    let voices=0;const aL=this.auxL,aR=this.auxR,used=this.auxUsed;used.fill(0);
+    for(let v=0;v<this.V;v++)if(this.on[v]){voices++;
+      // a voice in a field renders on its own, then goes to the dry mix at its dry level and to each field it is in
+      if(!this.hasSnd[v]&&this.vdry[v]===1){this.renderVoice(v,n,dL,dR);continue}
+      const vL=this.vL,vR=this.vR;vL.fill(0,0,n);vR.fill(0,0,n);this.renderVoice(v,n,vL,vR);
+      const g=this.vdry[v];for(let s=0;s<n;s++){dL[s]+=vL[s]*g;dR[s]+=vR[s]*g}
+      const sb=v*FX_SLOTS;for(let k=0;k<FX_SLOTS;k++){const a=this.snd[sb+k];if(!a)continue;
+        if(!used[k]){used[k]=1;aL[k].fill(0);aR[k].fill(0)}const L1=aL[k],R1=aR[k];for(let s=0;s<n;s++){L1[s]+=vL[s]*a;R1[s]+=vR[s]*a}}}
+    for(let k=0;k<FX_SLOTS&&k+1<outputs.length;k++){const o=outputs[k+1];if(!o||!o[0])continue;if(used[k]){o[0].set(aL[k].subarray(0,n));(o[1]||o[0]).set(aR[k].subarray(0,n))}}
     // The tail outlives its input by the predelay plus a full pass of the longest line,
     // so idling waits for that many consecutive silent blocks.
     const quiet=voices===0&&inE<1e-12&&this.space.energy<1e-14&&this.space.cur.freeze<.5;
@@ -797,7 +816,9 @@ class WaveSynth extends AudioWorkletProcessor{
     this.tables={};for(const n of WAVE_TABLES)if(n!=='harmonics')this.tables[n]=buildTable(waveSpectra(n));
     this.patches=new Map();this.bpm=120;this.streams=0;this.uniScale=1;this.bws=new Float64Array(8);this.queue=[];this.offs=[];this.motions=new Map();this.frame=0;this.statAt=0;this.ver=0;this.watch=0;this.wAge=-1;this.wAt=0;this.wN=new Float64Array(NP);this.wSent=false;
     this.voices=Array.from({length:WVOICES},()=>this.voice());
-    this.mixL=new Float32Array(WSLICE);this.mixR=new Float32Array(WSLICE);this.ol=new Float32Array(WSLICE);this.or=new Float32Array(WSLICE);
+    this.mixL=new Float32Array(WSLICE);this.mixR=new Float32Array(WSLICE);
+    // field sends: a note struck in a field goes, before the patch's FX rack, to that field's slot
+    this.auxL=Array.from({length:8},()=>new Float32Array(128));this.auxR=Array.from({length:8},()=>new Float32Array(128));this.auxUsed=new Uint8Array(8);this.ol=new Float32Array(WSLICE);this.or=new Float32Array(WSLICE);
     this.port.onmessage=e=>{const m=e.data;
       if(m.type==='patch')this.setPatch(m.id,m.p);else if(m.type==='note')this.queue.push(m);else if(m.type==='off')this.offs.push(m);
       else if(m.type==='motion')this.motion(m);
@@ -851,7 +872,7 @@ class WaveSynth extends AudioWorkletProcessor{
     if(cp.mode&&mine){
       for(const v of this.voices)if(v!==mine&&v.on&&v.cp.id===cp.id)v.kill=1;
       const v=mine,from=gl>0&&(cp.always||held)?this.pitch(v,m.at):m.midi;
-      v.from=from;v.midi=m.midi;v.t0=m.at;v.key=m.key;v.age=this.frame;v.amp=m.amp;v.vel=Math.min(1,Math.max(0,m.vel??m.amp));v.glideT=this.glideTime(cp,from,m.midi);
+      v.from=from;v.midi=m.midi;v.t0=m.at;v.fx=m.fx||null;v.dry=m.dry??1;v.key=m.key;v.age=this.frame;v.amp=m.amp;v.vel=Math.min(1,Math.max(0,m.vel??m.amp));v.glideT=this.glideTime(cp,from,m.midi);
       v.offAt=m.at+Math.max(m.hold||0,cp.val[P_GATE])*sampleRate;cp.last=m.midi;
       if(cp.mode===1||!held){for(const o of v.osc){o.env.st=1;o.fenv.st=1}for(const e of v.envs)e.st=1}
       v.released=false;return;
@@ -859,7 +880,7 @@ class WaveSynth extends AudioWorkletProcessor{
     if(live>=WPOLY&&oldest)oldest.kill=1;
     const v=free||oldest;if(!v)return;
     v.on=true;v.kill=0;v.cp=cp;v.ver=-1;v.age=this.frame;v.key=m.key;v.midi=m.midi;v.from=gl>0&&(cp.always||held)&&cp.last!=null?cp.last:m.midi;v.glideT=this.glideTime(cp,v.from,m.midi);cp.last=m.midi;
-    v.amp=m.amp;v.pan=m.pan||0;v.dark=m.dark||0;v.vel=Math.min(1,Math.max(0,m.vel??m.amp));v.rand=Math.random();
+    v.amp=m.amp;v.pan=m.pan||0;v.dark=m.dark||0;v.fx=m.fx||null;v.dry=m.dry??1;v.vel=Math.min(1,Math.max(0,m.vel??m.amp));v.rand=Math.random();
     v.t0=m.at;v.offAt=m.at+Math.max(m.hold||0,cp.val[P_GATE])*sampleRate;v.released=false;v.dl=v.dr=0;
     v.vals.set(cp.val);
     for(let i=0;i<WAVE_OSCS;i++){const o=v.osc[i];o.env.st=1;o.env.lv=0;o.fenv.st=1;o.fenv.lv=0;o.z.fill(0);
@@ -989,10 +1010,23 @@ const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
     // the voice's level, the room's distance darkening and its place in the stereo field
     const amp=v.amp*vals[P_VOL]*.25,pa=(Math.max(-1,Math.min(1,v.pan))+1)*Math.PI/4,pl=Math.cos(pa)*Math.SQRT2*amp,pr=Math.sin(pa)*Math.SQRT2*amp;
     const dc=v.dark>.02?1-Math.exp(-TAU*16000*Math.exp(-v.dark*3.2)/fs):1;let dl=v.dl,dr=v.dr,kill=v.kill;
-    for(let s=0;s<n;s++){
+    const fx=v.fx,dg=v.dry??1;
+    if(!fx&&dg===1)for(let s=0;s<n;s++){
       let xl=this.mixL[s],xr=this.mixR[s];if(dc<1){dl+=(xl-dl)*dc;dr+=(xr-dr)*dc;xl=dl;xr=dr}
       let g=1;if(kill){kill=Math.max(0,kill-1/(.005*fs));g=kill}
       L[at+s]+=xl*pl*g;R[at+s]+=xr*pr*g;
+    }
+    else{
+      // in a field: the dry part to the patch's bus, and the whole of it to each field's slot by its send
+      const ml=this.mixL,mr=this.mixR;
+      for(let s=0;s<n;s++){
+        let xl=ml[s],xr=mr[s];if(dc<1){dl+=(xl-dl)*dc;dr+=(xr-dr)*dc;xl=dl;xr=dr}
+        let g=1;if(kill){kill=Math.max(0,kill-1/(.005*fs));g=kill}
+        ml[s]=xl*pl*g;mr[s]=xr*pr*g;L[at+s]+=ml[s]*dg;R[at+s]+=mr[s]*dg;
+      }
+      if(fx)for(let i=0;i<fx.length;i+=2){const k=fx[i],a=fx[i+1];if(!(k>=0&&k<8)||!a)continue;
+        const AL=this.auxL[k],AR=this.auxR[k];if(!this.auxUsed[k]){this.auxUsed[k]=1;AL.fill(0);AR.fill(0)}
+        for(let s=0;s<n;s++){AL[at+s]+=ml[s]*a;AR[at+s]+=mr[s]*a}}
     }
     v.dl=dl;v.dr=dr;
     if(v.kill){v.kill=kill;if(kill<=0)v.on=false}
@@ -1003,6 +1037,7 @@ const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
     // last block's demand sets this block's unison budget
     {const per=this.streams/Math.max(1,n/WSLICE);this.uniScale=per>WSTREAMS?WSTREAMS/per:1;this.streams=0}
     const watching=this.watch&&end-this.wAt>=sampleRate/30;if(watching)this.wAge=-1;
+    this.auxUsed.fill(0);
     for(let at=0;at<n;at+=WSLICE){
       const sl=Math.min(WSLICE,n-at),t=currentFrame+at+sl;
       if(this.motions.size)this.runMotions(currentFrame+at);
@@ -1017,6 +1052,7 @@ const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
       for(let s=0;s<n;s++){L[s]+=cp.busL[s];R[s]+=cp.busR[s]}
       cp.live=false;
     }
+    for(let k=0;k<8&&k+1<outputs.length;k++){const o=outputs[k+1];if(this.auxUsed[k]&&o&&o[0]){o[0].set(this.auxL[k].subarray(0,n));(o[1]||o[0]).set(this.auxR[k].subarray(0,n))}}
     if(watching){this.wAt=end;const cp=this.patches.get(this.watch);
       if(this.wAge>=0&&cp){this.port.postMessage({type:'mod',id:this.watch,d:cp.modded,n:cp.modded.map(d=>this.wN[d])});this.wSent=true}
       else if(this.wSent){this.port.postMessage({type:'mod',id:this.watch,d:[],n:[]});this.wSent=false}}
@@ -1025,6 +1061,121 @@ const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
   }
 }
 registerProcessor('cogs-wave',WaveSynth);
+/* ---------- the fields: an effect send for every FX field on the stage ---------- */
+// One input per field slot (stereo): every sound struck inside a field arrives here scaled by how far in it is.
+// Each slot runs its field's effect (delay, reverb or distortion) and they are summed to one stereo return.
+// Where in the field the latest sounds were struck (q: 0 at the rim, 1 at the centre) bends the effect's
+// parameters, by as much as the field is diffuse: a ball rattling through a delay field bends its echoes.
+const FIELD_SLOTS=8,FIELD_MODE_IDX={delay:0,reverb:1,dist:2};
+const FIELD_SYNCS={'1/16':.25,'1/8':.5,'1/8.':.75,'1/4':1,'1/4.':1.5,'1/2':2,'1/2.':3};
+const FDIST={tube:0,fold:1,fuzz:2,crush:3};
+class FieldSlot{
+  constructor(fs){
+    this.fs=fs;this.p=null;this.mode=-1;this.q=.5;this.tq=.5;this.k=0;this.quiet=1e9;this.events=[];
+    const N=Math.ceil(fs*3.2);this.dl=new Float32Array(N);this.dr=new Float32Array(N);this.dN=N;this.dw=0;this.dT=-1;this.dlp=[0,0];this.dhp=[0,0];
+    this.verb=null;this.dz=[0,0,0,0,0,0];this.crush=[0,0,0];this.env=0;
+  }
+  set(p){
+    const m=FIELD_MODE_IDX[p.mode]??0;
+    if(m!==this.mode){this.mode=m;this.dl.fill(0);this.dr.fill(0);this.dT=-1;this.dz.fill(0);this.crush.fill(0);if(this.verb)this.verb.clear(this.verbParams(p,0))}
+    this.p=p;
+  }
+  // q glides to the latest strike's place: fast enough to follow a moving thing, slow enough to bend, not click
+  hit(q,amt){this.tq+=Math.max(.35,Math.min(1,amt))*(q-this.tq)}
+  verbParams(p,k){return {...(p.verb||{}),wet:1,size:Math.min(1,Math.max(0,(p.size??.6)+.35*k)),decay:Math.max(.2,(p.decay??2.5)*Math.pow(2,1.3*k)),predelay:Math.max(0,(p.predelay??10)*(1-.6*k))}}
+  run(inL,inR,L,R,n,bpm){
+    const p=this.p,fs=this.fs;if(!p)return;
+    let inE=0;if(inL)for(let s=0;s<n;s+=4)inE+=Math.abs(inL[s])+Math.abs(inR[s]);
+    if(inE>1e-7)this.quiet=0;else this.quiet+=n;
+    const tail=this.mode===0?(60/bpm*(FIELD_SYNCS[p.sync]||0)||p.time||.4)*(4+30*(p.fb||0))*fs:this.mode===1?(p.decay||2.5)*2.5*fs+fs:.05*fs;
+    if(this.quiet>tail)return;
+    const gq=1-Math.exp(-n/(fs*.06));this.q+=(this.tq-this.q)*gq;
+    const D=Math.max(0,Math.min(1,p.diffuse??.5)),k=this.k=D*(2*this.q-1),lv=p.level??.8;
+    const zl=inL||ZERO,zr=inR||ZERO;
+    if(this.mode===0)this.delay(p,k,zl,zr,L,R,n,bpm,lv);
+    else if(this.mode===1)this.reverb(p,k,zl,zr,L,R,n,lv);
+    else this.dist(p,k,zl,zr,L,R,n,lv);
+  }
+  // A tape-ish delay: its length glides, so where the strikes fall bends the echoes' pitch as they move.
+  delay(p,k,inL,inR,L,R,n,bpm,lv){
+    const fs=this.fs,N=this.dN,bl=this.dl,br=this.dr,sync=FIELD_SYNCS[p.sync]||0;
+    const T0=sync?60/bpm*sync:Math.max(.02,p.time||.375),T=Math.min(N-4,Math.max(8,T0*Math.pow(2,.5*k)*fs));
+    if(this.dT<0)this.dT=T;
+    const fb=Math.min(.95,Math.max(0,(p.fb??.45)+.25*k)),tone=Math.max(0,Math.min(1,(p.tone??.5)-.25*k));
+    const lc=1-Math.exp(-TAU*Math.min(.45*fs,500*Math.pow(2,tone*5))/fs),hc=1-Math.exp(-TAU*90/fs),ping=p.ping!==false,gT=1-Math.exp(-1/(fs*.12));
+    let w=this.dw,dT=this.dT,[l1,l2]=this.dlp,[h1,h2]=this.dhp;
+    for(let s=0;s<n;s++){
+      dT+=(T-dT)*gT;
+      const pos=w-dT,i=Math.floor(pos),f=pos-i,a=((i%N)+N)%N,b=a+1===N?0:a+1;
+      const yl=bl[a]+(bl[b]-bl[a])*f,yr=br[a]+(br[b]-br[a])*f;
+      l1+=(yl-l1)*lc;l2+=(yr-l2)*lc;h1+=(l1-h1)*hc;h2+=(l2-h2)*hc;
+      const el=Math.tanh((l1-h1)*fb),er=Math.tanh((l2-h2)*fb);
+      if(ping){const m=(inL[s]+inR[s])*.5;bl[w]=m+er;br[w]=el}else{bl[w]=inL[s]+el;br[w]=inR[s]+er}
+      L[s]+=yl*lv;R[s]+=yr*lv;w=w+1===N?0:w+1;
+    }
+    this.dw=w;this.dT=dT;this.dlp=[l1,l2];this.dhp=[h1,h2];
+  }
+  reverb(p,k,inL,inR,L,R,n,lv){
+    if(!this.verb){const V=typeof Verb==='function'?Verb:FieldMiniVerb;this.verb=new V(this.fs,this.verbParams(p,k))}
+    this.verb.set(this.verbParams(p,k));
+    const tl=this.tl||(this.tl=new Float32Array(128)),tr=this.tr||(this.tr=new Float32Array(128));tl.fill(0,0,n);tr.fill(0,0,n);
+    this.verb.process(inL,inR,tl,tr,n);
+    for(let s=0;s<n;s++){L[s]+=tl[s]*lv;R[s]+=tr[s]*lv}
+  }
+  // Drive, shaped by its kind, then a tone low-pass and a DC block; nearer the centre drives harder and darker.
+  dist(p,k,inL,inR,L,R,n,lv){
+    const fs=this.fs,kind=FDIST[p.kind]??0,dr=Math.max(0,Math.min(1,(p.drive??.5)+.35*k)),g=1+dr*dr*40,inv=1/Math.pow(g,kind===2?.75:.5);
+    const tone=Math.max(0,Math.min(1,(p.tone??.6)-.2*k)),lc=1-Math.exp(-TAU*Math.min(.45*fs,700*Math.pow(2,tone*4.8))/fs),hc=1-Math.exp(-TAU*25/fs);
+    const z=this.dz,c=this.crush,hold=1+Math.floor(dr*20),bits=Math.pow(2,15-dr*12);
+    for(let s=0;s<n;s++){
+      for(let ch=0;ch<2;ch++){
+        let x=(ch?inR[s]:inL[s])*g,y;
+        if(kind===0)y=Math.tanh(x+.18)-.178;
+        else if(kind===1)y=Math.sin(x*.6);
+        else if(kind===2)y=Math.max(-1,Math.min(1,x*1.5));
+        else{if(c[2]%hold===0)c[ch]=Math.round(Math.tanh(x*.3)*bits)/bits;y=c[ch]}
+        y*=kind===3?.6:inv;
+        z[ch]+=(y-z[ch])*lc;z[2+ch]+=(z[ch]-z[2+ch])*hc;const o=z[ch]-z[2+ch];
+        if(ch)R[s]+=o*lv;else L[s]+=o*lv;
+      }
+      c[2]++;
+    }
+  }
+}
+const ZERO=new Float32Array(128);
+// Until the main reverb arrives in the same script, a small FDN stands in for it.
+class FieldMiniVerb{
+  constructor(fs,p){this.fs=fs;const ms=[29.7,37.1,41.1,43.7,53.3,59.9,67.1,73.3];this.len=ms.map(m=>Math.round(m*fs/1000));
+    this.buf=this.len.map(l=>new Float32Array(Math.ceil(l*2.2)+4));this.i=0;this.lp=new Float64Array(8);this.ap=[new Float32Array(Math.round(fs*.0047)),new Float32Array(Math.round(fs*.0113)),new Float32Array(Math.round(fs*.0037)),new Float32Array(Math.round(fs*.0091))];this.api=[0,0,0,0];this.set(p)}
+  clear(){for(const b of this.buf)b.fill(0);for(const a of this.ap)a.fill(0);this.lp.fill(0)}
+  set(p){this.p=p;const sz=.5+(p.size??.6);this.L=this.len.map(l=>Math.min(Math.round(l*sz),l*2.2|0));this.g=this.L.map(l=>Math.exp(-6.9*l/this.fs/Math.max(.2,p.decay||2.5)))}
+  process(inL,inR,oL,oR,n){
+    const N=8,b=this.buf,L=this.L,g=this.g,lp=this.lp,y=new Float64Array(N);
+    for(let s=0;s<n;s++){
+      let x=(inL[s]+inR[s])*.5;for(let j=0;j<4;j++){const a=this.ap[j],i=this.api[j]%a.length,d=a[i],v=x-.6*d;a[i]=v;this.api[j]++;x=d+.6*v}
+      let sum=0;for(let j=0;j<N;j++){const B=b[j],r=B[(this.i-L[j]+B.length*4)%B.length];lp[j]+=(r-lp[j])*.45;y[j]=lp[j]*g[j];sum+=y[j]}
+      sum*=2/N;let l=0,r=0;for(let j=0;j<N;j++){const B=b[j];B[this.i%B.length]=y[j]-sum+x*.35;if(j&1)r+=y[j];else l+=y[j]}
+      this.i++;oL[s]+=l*.5;oR[s]+=r*.5;
+    }
+  }
+}
+class CogsFields extends AudioWorkletProcessor{
+  constructor(){
+    super();this.slots=Array.from({length:FIELD_SLOTS},()=>new FieldSlot(sampleRate));this.bpm=120;this.events=[];
+    this.port.onmessage=e=>{const m=e.data;
+      if(m.type==='field'){const sl=this.slots[m.slot];if(sl){if(m.p)sl.set(m.p);else{sl.p=null;sl.verb=null}}}
+      else if(m.type==='hits'){for(let i=0;i<m.d.length;i+=4)this.events.push([m.d[i],m.d[i+1],m.d[i+2],m.d[i+3]])}
+      else if(m.type==='tempo')this.bpm=m.bpm>0?m.bpm:120};
+  }
+  process(inputs,outputs){
+    const out=outputs[0],L=out[0],R=out[1]||out[0],n=L.length,end=currentFrame+n;
+    if(this.events.length){const keep=[];for(const ev of this.events){if(ev[1]<end){const sl=this.slots[ev[0]];if(sl)sl.hit(ev[2],ev[3])}else keep.push(ev)}this.events=keep}
+    for(let k=0;k<FIELD_SLOTS;k++){const sl=this.slots[k];if(!sl.p)continue;const inp=inputs[k],a=inp&&inp[0],b=inp&&(inp[1]||inp[0]);sl.run(a,b,L,R,n,this.bpm)}
+    if(currentFrame-(this.statAt||0)>=sampleRate*.1){this.statAt=currentFrame;this.port.postMessage({type:'stats',q:this.slots.map(s=>s.p?+s.q.toFixed(3):0),k:this.slots.map(s=>+s.k.toFixed(3)),quiet:this.slots.map(s=>s.quiet)})}
+    return true;
+  }
+}
+registerProcessor('cogs-fields',CogsFields);
 </script>
 <script>
 'use strict';
@@ -1101,7 +1252,7 @@ const LOOKAHEAD_MIN=.12;
 const S_DEFAULT={...S},SPACE_DEFAULT={...SPACE};
 
 /* ---------- world ---------- */
-const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],cams:[],pits:[],probes:[],next:1};
+const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],cams:[],pits:[],probes:[],fields:[],next:1};
 let simT=0,sel=null,group=[],marquee=null;
 const view={x:0,y:0};
 const stats={events:0,late:0,skipped:0,steps:0,stepsTick:0,log:[]};
@@ -1327,11 +1478,12 @@ function initAudio(){
   // Chrome refuses blob: worklet modules on file:// pages; a data: URL loads there and over https.
   const url='data:text/javascript;charset=utf-8,'+encodeURIComponent($('#engine').textContent);
   ac.audioWorklet.addModule(url).then(()=>{
-    engineNode=new AudioWorkletNode(ac,'cogs-engine',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[2],
+    // outputs past the first are the field sends, one stereo pair per field slot, into the fields node
+    engineNode=new AudioWorkletNode(ac,'cogs-engine',{numberOfInputs:1,numberOfOutputs:1+FIELD_SLOTS_N,outputChannelCount:Array(1+FIELD_SLOTS_N).fill(2),
       channelCount:2,channelCountMode:'explicit',processorOptions:{voices:64,lines:16,space:{...SPACE}}});
     engineNode.port.onmessage=e=>{if(e.data.type==='stats')engineStats=e.data};
     engineNode.onprocessorerror=()=>{engineState='processor error'};
-    drumBus=ac.createGain();drumBus.connect(engineNode);engineNode.connect(master);startWave();
+    drumBus=ac.createGain();drumBus.connect(engineNode);engineNode.connect(master,0);startWave();startFields();
     engineState='ready';
   }).catch(err=>{engineState='failed: '+String(err.message).slice(0,160)});
   ac.resume();
@@ -1340,7 +1492,8 @@ function flushStrikes(){const d=new Float64Array(strikes);strikes.length=0;engin
 const contactTime=(hard,x)=>clamp((.0016-.0014*hard)*Math.pow(Math.max(.02,x),-.35),.00012,.004);
 function strike(f,g,t,when,amp,pan,key,contact,attack){
   if(!strikes.length)queueMicrotask(flushStrikes);
-  strikes.push(when*ac.sampleRate,key,amp*.3,contact,attack,pan,f.length,...f,...g,...t);
+  const fx=fxNow?fxNow.fx:[];
+  strikes.push(when*ac.sampleRate,key,amp*.3,contact,attack,pan,f.length,...f,...g,...t,fx.length/2,...fx,fxNow?fxNow.dry:1);
 }
 // A held note rings for its length, then a damper takes it off over 60 ms.
 function damp(key,when){engineNode.port.postMessage({type:'damp',at:when*ac.sampleRate,key});waveNode?.port.postMessage({type:'off',at:when*ac.sampleRate,key})}
@@ -1359,7 +1512,11 @@ function synth(v,midi,when,amp,pan,key,x,hold=0,dark=0){
 // Drums are WebAudio graphs on the drum bus: tuned oscillators and filtered noise under one decaying gain.
 function drum(v,when,amp,pan,dark=0){
   const out=ac.createGain(),p=ac.createStereoPanner(),end=when+v.decay,src=[];
-  p.pan.value=pan;p.connect(drumBus);
+  p.pan.value=pan;
+  // in a field: the dry part to the drum bus, and a send to each field it sounds in
+  if(fxNow&&fieldsNode){const dg=ac.createGain();dg.gain.value=fxNow.dry;p.connect(dg);dg.connect(drumBus);
+    for(let i=0;i<fxNow.fx.length;i+=2){const sg=ac.createGain();sg.gain.value=fxNow.fx[i+1];p.connect(sg);sg.connect(fieldsNode,0,fxNow.fx[i])}}
+  else p.connect(drumBus);
   if(dark>.02){const lp=ac.createBiquadFilter();lp.type='lowpass';lp.frequency.value=16000*Math.exp(-dark*3.2);out.connect(lp);lp.connect(p)}else out.connect(p);
   out.gain.setValueAtTime(amp,when);out.gain.exponentialRampToValueAtTime(1e-4,end);
   const osc=(type,f0,gain,f1=f0,sweepT=0,at=when,to=end)=>{const o=ac.createOscillator(),og=ac.createGain();o.type=type;o.frequency.setValueAtTime(f0,at);
@@ -1387,7 +1544,7 @@ function fire(v,t,vn,at,src,gain,play){
   let when=t+clock.off-clock.shift;
   if(when<ac.currentTime){stats.late++;when=ac.currentTime}
   const p=heard(at);
-  play(when,amp*p.gain,p.pan,vx,p.dark);
+  withFields(at,when,t,()=>play(when,amp*p.gain,p.pan,vx,p.dark));
 }
 
 /* ---------- clock ---------- */
@@ -1469,7 +1626,7 @@ function serialize(){
     strings:W.strings.map(({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})=>({id,x1,y1,x2,y2,kind,f200,quant,decay,damp,hard,level,velSense})),
     cams:W.cams.map(m=>({id:m.id,cog:m.cog.id,ang:m.ang,phase:m.phase,shape:m.shape,prof:[...m.prof],to:m.to?m.to.id:null,macro:m.macro,lo:m.lo,hi:m.hi})),
     pits:W.pits.map(p=>({id:p.id,x:p.x,y:p.y,w:p.w,h:p.h,voice:p.voice,notes:[...p.notes],balls:p.balls.map(b=>({id:b.id,note:b.note,bx:b.x,by:b.y,bvx:b.vx,bvy:b.vy}))})),
-    probes:W.probes.filter(probeAlive).map(probeOut)};
+    probes:W.probes.filter(probeAlive).map(probeOut),fields:W.fields.map(fieldOut)};
 }
 // Every part is built and checked before any of the live world is replaced.
 function deserialize(j){
@@ -1511,6 +1668,7 @@ function deserialize(j){
     o.nb=1+Math.max(0,...o.balls.map(b=>b.id));return o});
   // probes: one whose host is missing is dropped, a link to a missing part comes loose
   next.probes=probesIn(j,next);
+  next.fields=(j.fields||[]).map(fieldIn);
   Object.assign(W,next);
   W.next=1+Math.max(0,...Object.values(next).flat().map(o=>o.id));
   Object.assign(S,j.S);Object.assign(SPACE,j.SPACE);Object.assign(view,j.view);
@@ -1550,6 +1708,8 @@ const DEFAULT_WORLD=
 "pits":[
   ],
 "probes":[
+  ],
+"fields":[
   ]}
 ;
 function demo(){deserialize(structuredClone(DEFAULT_WORLD));const f=fitTarget();Object.assign(view,{x:f.x,y:f.y});S.zoom=f.z}
@@ -1778,7 +1938,7 @@ function wavePost(v){
 }
 function waveNote(v,midi,when,amp,pan,key,x,hold=0,dark=0){
   const id=wavePost(v);if(!id)return;waveNotes++;waveLast=voiceMidi(v,midi);
-  waveNode.port.postMessage({type:'note',id,at:when*ac.sampleRate,key,midi:voiceMidi(v,midi),amp,vel:clamp(x??amp,0,1),pan,hold,dark});
+  waveNode.port.postMessage({type:'note',id,at:when*ac.sampleRate,key,midi:voiceMidi(v,midi),amp,vel:clamp(x??amp,0,1),pan,hold,dark,...(fxNow?{fx:fxNow.fx,dry:fxNow.dry}:{})});
 }
 // Live modulation for the open editor: the worklet sends, 30 times a second, where its newest note has each routed
 // knob (normalised); the editor draws a dot there. Nothing is sent while no editor watches.
@@ -1790,10 +1950,10 @@ function waveModIn(m){
   if(!waveModHooks.size)waveWatch(null);
 }
 function startWave(){
-  waveNode=new AudioWorkletNode(ac,'cogs-wave',{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[2]});
+  waveNode=new AudioWorkletNode(ac,'cogs-wave',{numberOfInputs:0,numberOfOutputs:1+FIELD_SLOTS_N,outputChannelCount:Array(1+FIELD_SLOTS_N).fill(2)});
   waveNode.port.onmessage=e=>{if(e.data.type==='stats')waveVoices=e.data.voices;else if(e.data.type==='mod')waveModIn(e.data)};
   waveWatching=0;
-  waveNode.connect(engineNode);
+  waveNode.connect(engineNode,0);
 }
 /* ---------- look ---------- */
 const css=k=>getComputedStyle(document.documentElement).getPropertyValue(k).trim();
@@ -1913,6 +2073,7 @@ function draw(){
   cx.globalAlpha=1;drawGround();
   const z=S.zoom*dpr;PX=1/S.zoom;
   cx.setTransform(z,0,0,z,dpr*CW/2-view.x*z,dpr*CH/2-view.y*z);
+  for(const f of W.fields)drawField(f);
   for(const p of W.pits)drawPit(p);
   for(const c of [...W.cogs].sort((a,b)=>a.layer-b.layer))drawCog(c);
   for(const b of W.belts)drawBelt(b);
@@ -1929,7 +2090,7 @@ function draw(){
   if(ui.carry&&ui.carry.band){const{a,p}=ui.carry.band;cx.setLineDash([6*PX,5*PX]);strokes(a.x,a.y,p.x,p.y,[[2*PX,DIM]]);cx.setLineDash([])}
   if(sel){const o=sel.o;
     if(sel.type==='cog')halo(o.x,o.y,radius(o)+3.2);else if(sel.type==='pad')halo(o.x,o.y,o.r+2.4);
-    else if(sel.type==='arm'){const t=armTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='cam'){const t=camTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='probe'){if(probeAlive(o)){const t=probePoint(o);halo(t.x,t.y,3.6)}}else if(sel.type==='reader'||sel.type==='string'){halo(o.x1,o.y1,3.8);halo(o.x2,o.y2,3.8)}else if(sel.type==='pit')drawPitSel(o)}
+    else if(sel.type==='arm'){const t=armTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='cam'){const t=camTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='probe'){if(probeAlive(o)){const t=probePoint(o);halo(t.x,t.y,3.6)}}else if(sel.type==='reader'||sel.type==='string'){halo(o.x1,o.y1,3.8);halo(o.x2,o.y2,3.8)}else if(sel.type==='pit')drawPitSel(o);else if(sel.type==='field')drawFieldSel(o)}
   if(S.ids){cx.fillStyle=DIM;cx.font=`${10*PX}px monospace`;
     for(const c of W.cogs)cx.fillText('c'+c.id,c.x+4*PX,c.y-4*PX);
     for(const p of W.pads)cx.fillText('p'+p.id,p.x+p.r+2*PX,p.y);
@@ -1944,7 +2105,7 @@ function drawGhost(s){
   drawArm({cog:{x:-24,y:0,th:0,w:0},a:0,r0:0,len:24});cx.restore();cx.globalAlpha=1;
 }
 // Two readers: the note reader plays a disc's rings as its notes, the comb plays them on its own tines.
-const PART_KEYS={m:'motor',c:'cog',d:'disc',a:'arm',b:'belt',p:'pad',t:'string',r:'reader',k:'comb',e:'cam',o:'sphere',y:'probe'},KEY_OF=Object.fromEntries(Object.entries(PART_KEYS).map(([k,v])=>[v,k]));
+const PART_KEYS={m:'motor',c:'cog',d:'disc',a:'arm',b:'belt',p:'pad',t:'string',r:'reader',k:'comb',e:'cam',o:'sphere',y:'probe',f:'field'},KEY_OF=Object.fromEntries(Object.entries(PART_KEYS).map(([k,v])=>[v,k]));
 const PARTS=Object.values(PART_KEYS);
 const MODEL={
   motor:{n:12,x:0,y:0,th:.13,w:1,layer:0,motor:{rpm:30,revs:0},track:null},
@@ -1957,6 +2118,7 @@ function drawPartIcon(kind){
   else if(kind==='arm')drawArm({cog:{x:-14,y:14,th:0,w:0},a:-Math.PI/4,r0:0,len:40});
   else if(kind==='cam'){const c={x:0,y:4,n:12,th:0,w:0},m={...newCam(0),cog:c,ang:-Math.PI/2,shape:'ramp up',prof:camShape('ramp up')};drawCog(c);drawCam(m)}
   else if(kind==='probe')drawProbeIcon();
+  else if(kind==='field')drawFieldIcon();
   else if(kind==='pad')drawPad({x:0,y:0,r:11,voice:{kind:'kick'}});
   else if(kind==='belt'){cx.strokeStyle=DIM;cx.lineWidth=PX;circle(-12,0,9);circle(14,0,6);cx.setLineDash([3,3]);strokes(-12,-9,14,-6,[[1.5,DIM]]);strokes(-12,9,14,6,[[1.5,DIM]]);cx.setLineDash([])}
   else if(kind==='string')drawString({x1:-20,y1:14,x2:20,y2:-14,kind:'string'});
@@ -1969,6 +2131,7 @@ function bounds(){
   for(const c of W.cogs)add(c.x,c.y,radius(c)+4);for(const p of W.pads)add(p.x,p.y,p.r+3);
   for(const r of [...W.readers,...W.strings]){add(r.x1,r.y1,4);add(r.x2,r.y2,4)}for(const a of W.arms){const t=armTip(a);add(t.x,t.y,4)}
   for(const p of W.pits){xs.push(p.x-p.w/2-4,p.x+p.w/2+4);ys.push(p.y-p.h/2-4,p.y+p.h/2+4)}
+  for(const f of W.fields)add(f.x,f.y,f.r*.7);
   if(!xs.length)return null;
   const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);return {cx:(x0+x1)/2,cy:(y0+y1)/2,w:x1-x0,h:y1-y0};
 }
@@ -2031,6 +2194,7 @@ function focus(type,o,s){
   else if(type==='reader'||type==='string'){z=170/Math.max(20,stringLen(o));at=mid(o)}
   else if(type==='arm'){z=150/(o.r0+o.len);at=o.cog}
   else if(type==='pit'){z=Math.min(CW*.8/o.w,(shelfTopOr()-40)*.8/o.h);at=o}
+  else if(type==='field'){z=Math.min(CW*.8,(shelfTopOr()-40)*.8)/(2*o.r);at=o}
   else if(o.track){z=14/ringGap(o);const w=screenToWorld(s);if(S.zoom<z*.9){fly(w.x-(s.x-CW/2)/z,w.y-(s.y-CH/2)/z,z);return}}
   else{z=120/radius(o);at=o}
   if(S.zoom>=z*.9){flyFit();return}
@@ -2050,7 +2214,7 @@ function removeSel(){
   const items=group.length?group:sel?[sel]:[];group=[];
   for(const{type,o}of items)if(type!=='belt'||W.belts.includes(o))removeObj(type,o);
 }
-const PART_LISTS=['cog','arm','pad','reader','string','belt','cam','pit','probe'],UNSEAT_PX=36;
+const PART_LISTS=['cog','arm','pad','reader','string','belt','cam','pit','probe','field'],UNSEAT_PX=36;
 const shelfTopOr=()=>typeof shelfTop==='function'?shelfTop():CH;
 // A copied cog takes its arms; a belt comes when both its cogs do.
 let partClip=null;
@@ -2058,18 +2222,18 @@ function copyParts(){
   const items=group.length?group:sel&&sel.type!=='dot'?[sel]:[];if(!items.length)return false;
   const ids=new Set(items.map(x=>x.o.id)),j=serialize(),own=o=>ids.has(o.id);
   partClip={cogs:j.cogs.filter(own),arms:j.arms.filter(a=>own(a)||ids.has(a.cog)),pads:j.pads.filter(own),readers:j.readers.filter(own),
-    strings:j.strings.filter(own),belts:j.belts.filter(b=>ids.has(b.a)&&ids.has(b.b)),cams:j.cams.filter(m=>own(m)||ids.has(m.cog)),pits:j.pits.filter(own)};
+    strings:j.strings.filter(own),belts:j.belts.filter(b=>ids.has(b.a)&&ids.has(b.b)),cams:j.cams.filter(m=>own(m)||ids.has(m.cog)),pits:j.pits.filter(own),fields:(j.fields||[]).filter(own)};
   return true;
 }
 // Paste lands centred under the pointer, or a step down-right of the original when the pointer is off the stage.
 function pasteParts(){
   if(!partClip)return false;
   const j=serialize(),id=new Map(),fresh=o=>{const n=W.next+id.size;id.set(o.id,n);return n},c=structuredClone(partClip);
-  c.pits=c.pits||[];
-  const pts=[...c.cogs,...c.pads,...c.pits,...[...c.readers,...c.strings].map(mid)],step=30/S.zoom;
+  c.pits=c.pits||[];c.fields=c.fields||[];
+  const pts=[...c.cogs,...c.pads,...c.pits,...c.fields,...[...c.readers,...c.strings].map(mid)],step=30/S.zoom;
   let dx=step,dy=step;
   if(pts.length&&ui.hover){const xs=pts.map(p=>p.x),ys=pts.map(p=>p.y),at=screenToWorld(ui.hover);dx=at.x-(Math.min(...xs)+Math.max(...xs))/2;dy=at.y-(Math.min(...ys)+Math.max(...ys))/2}
-  for(const o of [...c.cogs,...c.pads]){o.id=fresh(o);o.x+=dx;o.y+=dy}
+  for(const o of [...c.cogs,...c.pads,...c.fields]){o.id=fresh(o);o.x+=dx;o.y+=dy}
   for(const o of c.pits){o.id=fresh(o);o.x+=dx;o.y+=dy;for(const b of o.balls){b.bx+=dx;b.by+=dy}}
   for(const o of [...c.readers,...c.strings]){o.id=fresh(o);o.x1+=dx;o.y1+=dy;o.x2+=dx;o.y2+=dy}
   for(const o of c.readers)o.on=id.has(o.on)?id.get(o.on):null;
@@ -2090,6 +2254,7 @@ function boxSelect(a,b){
   for(const o of W.cogs)if(inside(o))g.push({type:'cog',o});
   for(const o of W.pads)if(inside(o))g.push({type:'pad',o});
   for(const o of W.pits)if(inside(o))g.push({type:'pit',o});
+  for(const o of W.fields)if(inside(o))g.push({type:'field',o});
   for(const type of ['reader','string'])for(const o of W[type+'s'])if(inside(mid(o)))g.push({type,o});
   for(const o of W.arms)if(inside(armTip(o)))g.push({type:'arm',o});
   for(const o of W.cams)if(inside(camTip(o)))g.push({type:'cam',o});
@@ -2105,6 +2270,7 @@ function drawGroup(){
   for(const{type,o}of group){
     if(type==='cog'||type==='pad'){const s=toScreen(o);circle(s.x,s.y,(type==='cog'?radius(o):o.r)*S.zoom+5)}
     else if(type==='pit'){const c=toScreen(o);circle(c.x,c.y,pitR(o)*S.zoom+5)}
+    else if(type==='field'){const c=toScreen(o);circle(c.x,c.y,12)}
     else if(type==='arm'){const s=toScreen(armTip(o));circle(s.x,s.y,7)}
     else if(type==='cam'){const s=toScreen(camTip(o));circle(s.x,s.y,7)}
     else if(type==='probe'){if(probeAlive(o)){const s=toScreen(probePoint(o));circle(s.x,s.y,8)}}
@@ -2165,11 +2331,12 @@ function newPart(kind,p){
   if(kind==='cam')return {type:'cam',o:newCam(id)};
   if(kind==='sphere')return {type:'pit',o:newPit(id,p)};
   if(kind==='probe')return {type:'probe',o:newProbe(id)};
+  if(kind==='field')return {type:'field',o:newField(id,p)};
   return {type:'arm',o:{id,cog:null,a:0,r0:0,len:4,flex:.5}};
 }
 function placePart(type,o,p){
   if(type==='cog')placeCog(o,p);
-  else if(type==='pad'){o.x=p.x;o.y=p.y}
+  else if(type==='pad'||type==='field'){o.x=p.x;o.y=p.y}
   else if(type==='pit')shiftPit(o,p.x-o.x,p.y-o.y);
   else if(type==='string')Object.assign(o,{x1:p.x-60,y1:p.y,x2:p.x+60,y2:p.y});
   else if(type==='reader'){const d=pickCog(p,c=>c.track);
@@ -2239,6 +2406,14 @@ const G={
       move(s){trackScrap(s);if(!ui.scrap)probeAttach(pr,screenToWorld(s),true)},
       up(){endScrap('probe',pr)},tap(){choose('probe',pr)},
       dbl(s){if(probeAlive(pr))pr.host==='ball'?focus('pit',pr.on,s):focus('cog',probeCog(pr),s)}};
+  },
+  // An FX field: its centre moves it (and back to the shelf deletes it); the handle on its rim, shown when it is
+  // selected, pulls the radius. Tap for its dial.
+  field(f,s0,edge){
+    const p0=screenToWorld(s0),dx=f.x-p0.x,dy=f.y-p0.y;
+    return {o:f,readout:()=>edge?`fx ${f.id} radius ${Math.round(f.r)}`:`fx ${f.id}: ${FIELD_MODE_LABEL[f.mode]}`,
+      move(s){const q=screenToWorld(s);if(edge)f.r=clamp(Math.hypot(q.x-f.x,q.y-f.y),30,800);else{trackScrap(s);f.x=q.x+dx;f.y=q.y+dy}},
+      up(){if(edge)changed();else endScrap('field',f)},tap(){choose('field',f)},dbl(s){focus('field',f,s)}};
   },
   arm(a){
     return {o:a,move(s){trackScrap(s);const q=screenToWorld(s),c=a.cog;a.a=wrap(Math.atan2(q.y-c.y,q.x-c.x)-renderTh(c));a.len=Math.max(4,Math.hypot(q.x-c.x,q.y-c.y)-a.r0)},
@@ -2348,6 +2523,8 @@ function begin(s){
     near(segDist(p,o.x1,o.y1,o.x2,o.y2)*Z+8,22,()=>G.span(type,o,s,0))}
   for(const o of W.belts)for(const l of beltLines(o))near(segDist(p,...l)*Z+10,22,()=>G.belt(o));
   let box=null;for(const o of W.pits)box=pitTouch(o,s,near)||box;
+  // a field has no edge to grab: its centre ring, and its radius handle while it is selected
+  for(const f of W.fields){near(dist(f)-4,18,()=>G.field(f,s,false));if(isSel(f))near(dist(fieldHandle(f)),20,()=>G.field(f,s,true))}
   const c=pickCog(p,()=>true,14/Z),d=c&&dist(c),Rs=c&&radius(c)*Z;
   if(c&&Rs>=30)near(Math.abs(d-Rs),14,()=>G.rim(c,s));
   if(best)return best.make();
@@ -2984,7 +3161,7 @@ function buildInspector(){
   rows.length=panelRows;readouts.length=panelReadouts;
   roll=null;camStrips=[];
   const o=sel&&sel.o,f=inspector,cogKind=c=>c.track?'disc':c.motor?'motor':'cog';
-  inspector.replaceChildren(el('legend',{textContent:sel?`${sel.type==='cog'?cogKind(o):sel.type==='pit'?'sphere':sel.type} ${sel.o.id}`:'selection'}));
+  inspector.replaceChildren(el('legend',{textContent:sel?`${sel.type==='cog'?cogKind(o):sel.type==='pit'?'sphere':sel.type==='field'?'fx':sel.type} ${sel.o.id}`:'selection'}));
   if(sel&&sel.type==='cog'){
     numRow(f,'teeth',6,240,1,()=>o.n,v=>{resizer(o).set(v);changed(true)});
     if(motorOf(o)){
@@ -3012,6 +3189,8 @@ function buildInspector(){
     camRows(f,o);
   }else if(sel&&sel.type==='probe'){
     probeRows(f,o);
+  }else if(sel&&sel.type==='field'){
+    fieldRows(f,o);
   }else if(sel&&sel.type==='arm'){
     numRow(f,'angle deg',0,360,.1,()=>o.a*180/Math.PI,v=>{o.a=v*Math.PI/180;changed()});
     numRow(f,'r0',0,500,.5,...bind(o,'r0',changed));
@@ -3077,7 +3256,7 @@ function frame(ts){
   if(!clock.paused)clock.view=Math.max(clock.view,heardAt(ts/1000));
   if(meter){meter.getFloatTimeDomainData(meterBuf);let m=0;for(const x of meterBuf)m=Math.max(m,Math.abs(x));peak=Math.max(m,peak*.95)}
   // under an open sheet the machine shows only dimmed behind the scrim: it is drawn at a quarter of the frame rate
-  stepCamera();if(!worldCovered()||++coveredSkip>=4){coveredSkip=0;draw();drawGroup()}else syncEditor();listen();
+  postFields();stepCamera();if(!worldCovered()||++coveredSkip>=4){coveredSkip=0;draw();drawGroup()}else syncEditor();listen();
   const now=performance.now();
   if(roll&&roll.cv.offsetParent)drawRoll();
   postMotions();if(inspectorLive()){if(camStrips.length)camDrawStrips();for(const d of waveLive)d()}
@@ -3617,6 +3796,157 @@ function probesIn(j,next){
       macro:clamp(p.macro|0||1,1,WAVE_MACROS),param:typeof p.param==='string'?p.param:null,lo:clamp(+p.lo||0,0,1),hi:clamp(p.hi==null?1:+p.hi,0,1)};
   }).filter(Boolean);
 }
+/* ---------- the FX field: a borderless sphere of effect ---------- */
+// A field is a region of the stage with no wall. Anything that sounds inside it (a ball, a pad an arm strikes, a pin
+// a reader reads) is also sent to the field's effect: a delay, a reverb or a distortion. How far in it is sets how
+// much is sent, and also bends the effect's parameters (nearer the centre: longer and darker echoes, a bigger and
+// longer room, harder drive), so things moving through a field are heard moving through it.
+// The diffuseness is how strongly the distance counts: at 0 the field is the same everywhere inside, with a sharp
+// edge; at 1 it fades from full at the centre to nothing at the rim, and its parameters move the most. It is drawn
+// as exactly that: a glow whose falloff is the send's.
+// Each field takes one of FIELD_SLOTS slots of the fields worklet; a field past them is silent (and says so).
+const FIELD_SLOTS_N=8;
+const FIELD_MODES=['delay','reverb','dist'],FIELD_MODE_LABEL={delay:'delay',reverb:'reverb',dist:'distortion'};
+const FIELD_SYNC_OPTS=['free','1/16','1/8','1/8.','1/4','1/4.','1/2','1/2.'];
+const FIELD_DIST_KINDS=['tube','fold','fuzz','crush'];
+const FIELD_COLOR={delay:'#5aa9e6',reverb:'#a98be0',dist:'#e66a4a'};
+const FIELD_DEFAULT={r:150,mode:'delay',diffuse:.5,level:.8,insert:0,sync:'1/8.',time:.375,fb:.45,tone:.5,ping:1,size:.6,decay:2.5,predelay:10,verbMode:0,verbColor:2,kind:'tube',drive:.5};
+// The knobs of each mode as [key,label,min,max,step] or [key,label,[options]]; then those of every field.
+const FIELD_DEFS={
+  delay:[['sync','time',FIELD_SYNC_OPTS],['time','free time s',.02,2.5,.005],['fb','feedback',0,.95,.01],['tone','tone',0,1,.01],['ping','ping-pong',[0,1]]],
+  reverb:[['size','size',0,1,.01],['decay','decay s',.2,20,.01],['predelay','predelay ms',0,200,1]],
+  dist:[['kind','kind',FIELD_DIST_KINDS],['drive','drive',0,1,.01],['tone','tone',0,1,.01]]};
+const FIELD_COMMON=[['diffuse','diffuse',0,1,.01],['level','return',0,1.5,.01],['insert','takes dry',0,1,.01],['r','radius',30,800,1]];
+// The reverb's own algorithm and colour, when the main reverb (verb.js) is in: its names, as it lists them.
+const fieldVerbDefs=()=>typeof VERB_MODES!=='undefined'?[['verbMode','algorithm',VERB_MODES.map((_,i)=>i)],...(typeof VERB_COLORS!=='undefined'?[['verbColor','color',VERB_COLORS.map((_,i)=>i)]]:[])]:[];
+const fieldDefs=f=>[...(f.mode==='reverb'?fieldVerbDefs():[]),...FIELD_DEFS[f.mode]];
+const fieldOptLabel=(k,x)=>k==='verbMode'?VERB_MODES[x]:k==='verbColor'?VERB_COLORS[x]:k==='ping'?(x?'on':'off'):k==='kind'?x:String(x);
+const newField=(id,p)=>({id,x:p.x,y:p.y,...FIELD_DEFAULT,slot:-1,flashes:[]});
+const FIELD_KEYS=Object.keys(FIELD_DEFAULT);
+
+// The send at a point: 1 inside the core, falling smoothly to 0 at the rim; the core is the radius less the diffuseness.
+function fieldSend(f,p){
+  const r=Math.hypot(p.x-f.x,p.y-f.y)/f.r;if(r>=1)return 0;
+  const core=1-clamp(f.diffuse,0,1);if(r<=core)return 1;
+  const u=(r-core)/(1-core);return 1-u*u*(3-2*u);
+}
+const fieldQ=(f,p)=>clamp(1-Math.hypot(p.x-f.x,p.y-f.y)/f.r,0,1);
+// Every field a sound at `at` is in: [slot, amount] pairs, the dry level left (each takes `insert` of what it sends),
+// and the hits that move each field's parameters.
+function fieldSendsAt(at){
+  if(!W.fields.length||!at)return null;
+  let fx=null,dry=1,hits=null;
+  for(const f of W.fields){if(f.slot<0)continue;const a=fieldSend(f,at);if(a<=.001)continue;
+    (fx||(fx=[])).push(f.slot,+a.toFixed(4));(hits||(hits=[])).push([f,fieldQ(f,at),a]);dry*=1-clamp(f.insert,0,1)*a}
+  return fx?{fx,dry,hits}:null;
+}
+// The sends for the sound being played now: fire() sets them around its play(), the voices read them.
+let fxNow=null;
+const fieldHitsOut=[];
+function fieldHit(f,q,a,when,at,t){
+  fieldHitsOut.push(f.slot,when*ac.sampleRate,+q.toFixed(4),+a.toFixed(4));
+  if(fieldHitsOut.length===4)queueMicrotask(()=>{if(fieldsNode)fieldsNode.port.postMessage({type:'hits',d:fieldHitsOut.slice()});fieldHitsOut.length=0});
+  f.flashes.push({x:at.x,y:at.y,t,a});if(f.flashes.length>16)f.flashes.shift();
+}
+function withFields(at,when,t,play){
+  const s=fieldsNode?fieldSendsAt(at):null;
+  if(!s){play();return}
+  for(const[f,q,a]of s.hits)fieldHit(f,q,a,when,at,t);
+  fxNow=s;try{play()}finally{fxNow=null}
+}
+
+/* the audio: one worklet node for every field, each field on its own input */
+let fieldsNode=null,fieldsStats=null;const fieldsPosted=new Map();let fieldsBpm=0;
+function startFields(){
+  fieldsNode=new AudioWorkletNode(ac,'cogs-fields',{numberOfInputs:FIELD_SLOTS_N,numberOfOutputs:1,outputChannelCount:[2],channelCount:2,channelCountMode:'explicit'});
+  fieldsNode.port.onmessage=e=>{if(e.data.type==='stats')fieldsStats=e.data};
+  fieldsNode.connect(master);
+  for(let k=0;k<FIELD_SLOTS_N;k++){engineNode.connect(fieldsNode,k+1,k);if(waveNode)waveNode.connect(fieldsNode,k+1,k)}
+  fieldsPosted.clear();fieldsBpm=0;
+}
+// Each field to its slot: the lowest free one, kept while it lives. A slot whose field is gone is cleared.
+function fieldSlots(){
+  const used=new Set();
+  for(const f of W.fields)if(f.slot>=0&&f.slot<FIELD_SLOTS_N&&!used.has(f.slot))used.add(f.slot);else f.slot=-1;
+  for(const f of W.fields)if(f.slot<0){for(let k=0;k<FIELD_SLOTS_N;k++)if(!used.has(k)){f.slot=k;used.add(k);break}}
+}
+const fieldParams=f=>({mode:f.mode,diffuse:f.diffuse,level:f.level,sync:f.sync==='free'?null:f.sync,time:f.time,fb:f.fb,tone:f.tone,ping:!!f.ping,
+  size:f.size,decay:f.decay,predelay:f.predelay,kind:f.kind,drive:f.drive,verb:{mode:f.verbMode,color:f.verbColor}});
+// Called every frame: only what changed is posted.
+function postFields(){
+  fieldSlots();
+  if(!fieldsNode)return;
+  const bpm=S.bpm||120;if(bpm!==fieldsBpm){fieldsBpm=bpm;fieldsNode.port.postMessage({type:'tempo',bpm})}
+  const live=new Set();
+  for(const f of W.fields){if(f.slot<0)continue;live.add(f.slot);const p=fieldParams(f),sig=JSON.stringify(p);
+    if(fieldsPosted.get(f.slot)!==sig){fieldsPosted.set(f.slot,sig);fieldsNode.port.postMessage({type:'field',slot:f.slot,p})}}
+  for(const k of [...fieldsPosted.keys()])if(!live.has(k)){fieldsPosted.delete(k);fieldsNode.port.postMessage({type:'field',slot:k,p:null})}
+}
+// Where the field's parameters are now, from the worklet: 0 at the rim, 1 at the centre.
+const fieldFocus=f=>fieldsStats&&f.slot>=0?fieldsStats.q[f.slot]:null;
+
+/* drawing: a glow with no edge, its falloff the send's; ripples where things sounded in it */
+function drawField(f){
+  const col=FIELD_COLOR[f.mode]||FIELD_COLOR.delay,core=1-clamp(f.diffuse,0,1),silent=f.slot<0;
+  const g=cx.createRadialGradient(f.x,f.y,0,f.x,f.y,f.r);
+  const a=silent?.05:.16;
+  g.addColorStop(0,hexA(col,a*1.25));
+  if(core>.02)g.addColorStop(core*.98,hexA(col,a));
+  for(let i=1;i<=4;i++){const u=i/5,r=core+(1-core)*u;g.addColorStop(Math.min(.999,r),hexA(col,a*(1-u*u*(3-2*u))))}
+  g.addColorStop(1,hexA(col,0));
+  cx.fillStyle=g;circle(f.x,f.y,f.r,true);
+  // where the effect's parameters are now: a faint ring at that distance from the centre
+  const q=fieldFocus(f);
+  // (dotted and faint, and only while sound is in it: the field itself has no line round it)
+  if(q!=null&&f.diffuse>.02&&fieldsStats&&fieldsStats.quiet[f.slot]<ac.sampleRate*.3){cx.strokeStyle=hexA(col,.22);cx.lineWidth=PX;cx.setLineDash([1*PX,5*PX]);circle(f.x,f.y,Math.max(10*PX,(1-q)*f.r));cx.setLineDash([])}
+  for(const h of f.flashes){if(clock.view<h.t)continue;const k=(clock.view-h.t)/.5;if(k>1)continue;
+    cx.globalAlpha=(1-k)*.6*Math.min(1,h.a*1.5);cx.strokeStyle=col;cx.lineWidth=1.5*PX;circle(h.x,h.y,(4+k*26)*PX);cx.globalAlpha=1}
+  if(f.flashes.length&&clock.view-f.flashes[f.flashes.length-1].t>.5)f.flashes.length=0;
+  // the centre: the mode's glyph in a small ring, which is what is grabbed
+  cx.strokeStyle=col;cx.lineWidth=1.2*PX;cx.globalAlpha=silent?.4:.9;circle(f.x,f.y,9*PX);
+  fieldGlyph(f.mode,f.x,f.y,6*PX);cx.globalAlpha=1;cx.lineWidth=PX;
+}
+function fieldGlyph(mode,x,y,s){
+  cx.beginPath();
+  if(mode==='delay'){for(let i=0;i<3;i++){const r=s*(.35+i*.35);cx.moveTo(x-s*.6+r*Math.cos(-.9),y+r*Math.sin(-.9));cx.arc(x-s*.6,y,r,-.9,.9)}}
+  else if(mode==='reverb'){cx.arc(x,y,s*.3,0,TAU);cx.moveTo(x+s*.75,y);cx.arc(x,y,s*.75,0,TAU)}
+  else{cx.moveTo(x-s,y);for(let i=0;i<4;i++)cx.lineTo(x-s+(i+.5)*s/2,y+(i%2?s*.7:-s*.7));cx.lineTo(x+s,y)}
+  cx.stroke();
+}
+// Selected: the rim it fades to, dashed, with a handle on it to pull the radius, and the core it is full within.
+function drawFieldSel(f){
+  const col=FIELD_COLOR[f.mode];cx.strokeStyle=col;cx.lineWidth=PX;cx.globalAlpha=.6;cx.setLineDash([4*PX,5*PX]);circle(f.x,f.y,f.r);
+  const core=1-clamp(f.diffuse,0,1);if(core>.02&&core<.98){cx.globalAlpha=.3;circle(f.x,f.y,f.r*core)}
+  cx.setLineDash([]);cx.globalAlpha=1;halo(f.x,f.y,9);
+  const h=fieldHandle(f);cx.fillStyle=col;circle(h.x,h.y,4*PX,true);cx.strokeStyle=FG;circle(h.x,h.y,4*PX);
+}
+const fieldHandle=f=>({x:f.x+f.r*Math.SQRT1_2,y:f.y+f.r*Math.SQRT1_2});
+function drawFieldIcon(){
+  const g=cx.createRadialGradient(0,0,0,0,0,22);g.addColorStop(0,hexA(FIELD_COLOR.delay,.45));g.addColorStop(.5,hexA(FIELD_COLOR.delay,.25));g.addColorStop(1,hexA(FIELD_COLOR.delay,0));
+  cx.fillStyle=g;circle(0,0,22,true);cx.strokeStyle=FIELD_COLOR.delay;cx.lineWidth=1.2;circle(0,0,7);fieldGlyph('delay',0,0,5);
+}
+const hexA=(hex,a)=>{const n=parseInt(hex.slice(1),16);return `rgba(${n>>16},${n>>8&255},${n&255},${clamp(a,0,1).toFixed(3)})`};
+
+/* settings */
+function setFieldMode(f,m){if(!FIELD_MODES.includes(m))return;f.mode=m;if(m==='dist'&&f.insert===0)f.insert=.8;else if(m!=='dist'&&f.insert===.8)f.insert=0;f.tone=m==='dist'?.6:.5}
+function fieldRows(fs,f){
+  selRow(fs,'effect',FIELD_MODES,()=>f.mode,x=>{setFieldMode(f,x);changed();buildInspector()},x=>FIELD_MODE_LABEL[x]);
+  for(const d of fieldDefs(f)){
+    if(Array.isArray(d[2]))selRow(fs,d[1],d[2].map(String),()=>String(f[d[0]]),x=>{f[d[0]]=typeof d[2][0]==='number'?+x:x;changed()},x=>fieldOptLabel(d[0],typeof d[2][0]==='number'?+x:x));
+    else numRow(fs,d[1],d[2],d[3],d[4],()=>f[d[0]],x=>{f[d[0]]=x;changed()},FIELD_DEFAULT[d[0]]);
+  }
+  for(const d of FIELD_COMMON)numRow(fs,d[1],d[2],d[3],d[4],()=>f[d[0]],x=>{f[d[0]]=x;changed()},FIELD_DEFAULT[d[0]]);
+  roRow(fs,'now',()=>f.slot<0?`silent: only ${FIELD_SLOTS_N} fields sound at once`:fieldFocus(f)==null?'-':`parameters at ${Math.round(fieldFocus(f)*100)}% in`);
+}
+// Serialized: its place and its settings; the slot and the ripples are its own business.
+const fieldOut=f=>{const o={id:f.id,x:f.x,y:f.y};for(const k of FIELD_KEYS)o[k]=f[k];return o};
+function fieldIn(j){
+  const f=newField(j.id,{x:+j.x||0,y:+j.y||0});
+  for(const k of FIELD_KEYS){const d=FIELD_DEFAULT[k],x=j[k];if(x==null)continue;if(typeof d==='number'&&Number.isFinite(+x))f[k]=+x;else if(typeof d==='string'&&typeof x==='string')f[k]=x}
+  if(!FIELD_MODES.includes(f.mode))f.mode='delay';if(!FIELD_SYNC_OPTS.includes(f.sync))f.sync='1/8.';if(!FIELD_DIST_KINDS.includes(f.kind))f.kind='tube';
+  f.r=clamp(f.r,30,800);f.diffuse=clamp(f.diffuse,0,1);f.insert=clamp(f.insert,0,1);
+  return f;
+}
 /* ---------- MIDI in: a keyboard plays the selected reader (or pad) ---------- */
 // Two ways in. Bluetooth: Web Bluetooth straight to a BLE-MIDI keyboard (a Korg microKEY Air, or anything that speaks
 // the BLE-MIDI service), no pairing app needed; Chrome on Android or desktop. MIDI: Web MIDI, for USB keyboards and
@@ -4087,7 +4417,7 @@ function syncEditor(){syncRollBar();
   if(!panelShown()||!$('#dev').dataset.editor)return;
   if(!mode){togglePanel(false);return}
   if(editorOwner!==sel.o){const tucked=sheetMin();editorOwner=sel.o;togglePanel(true,mode);if(tucked)setSheetMin(true)}
-  const title=$('#editor-title'),labelled=`${sel.type==='cog'?'disc':sel.type==='pit'?'sphere':sel.type} ${sel.o.id} · ${mode}`;
+  const title=$('#editor-title'),labelled=`${sel.type==='cog'?'disc':sel.type==='pit'?'sphere':sel.type==='field'?'fx':sel.type} ${sel.o.id} · ${mode}`;
   if(title.textContent!==labelled)title.textContent=labelled;
 }
 const GESTURE_READOUT={
@@ -4326,6 +4656,14 @@ function probeSectors(pr){
   out.push({icon:'link',label:pr.to?`drives ${voicedName(pr.to)}: tap to relink`:'link to a reader, pad or sphere',action:()=>startLink(pr)});
   return out;
 }
+// An FX field's dial: its effect, that effect's knobs, then how diffuse it is, its return and how much dry it takes.
+function fieldSectors(f){
+  const out=[choiceSector('fxmode','effect',FIELD_MODES,()=>f.mode,x=>setFieldMode(f,x),x=>FIELD_MODE_LABEL[x])];
+  const icon={sync:'tempo',time:'tempo',fb:'tail',tone:'tone',ping:'spread',size:'size',decay:'tail',predelay:'attack',kind:'bend',drive:'hard',verbMode:'size',verbColor:'air'};
+  for(const d of fieldDefs(f))out.push(Array.isArray(d[2])?choiceSector(icon[d[0]]||'knob',d[1],d[2],()=>f[d[0]],x=>{f[d[0]]=x},x=>fieldOptLabel(d[0],x)):numSector(icon[d[0]]||'knob',d[1],f,d[0],d[2],d[3],d[4]));
+  out.push(numSector('spread','diffuse',f,'diffuse',0,1,.01),numSector('level','return',f,'level',0,1.5,.01),numSector('wet','takes dry',f,'insert',0,1,.01));
+  return out;
+}
 const dotSectors=d=>[numSector('odds','probability',d,'p',0,1,.01),numSector('level','velocity',d,'v',0,1,.01),numSector('div','length steps',d,'len',1,ui.dotOf.track.div,1)];
 const ROOM_ICON={wet:'wet',size:'size',decay:'tail',highMult:'air',shimmer:'shimmer'};
 function roomSectors(){
@@ -4354,6 +4692,7 @@ function activeBezel(){
   else if(sel.type==='reader')b=ring(mid(o),stringLen(o)*S.zoom/2,readerSectors(o));
   else if(sel.type==='cam')b=ring(camTip(o),0,camSectors(o));
   else if(sel.type==='probe'){if(probeAlive(o))b=ring(probePoint(o),0,probeSectors(o))}
+  else if(sel.type==='field')b=ring(o,0,fieldSectors(o));
   else if(sel.type==='string')b=ring(mid(o),stringLen(o)*S.zoom/2,stringSectors(o));
   else if(sel.type==='dot')b=ring(ui.dotAt,0,dotSectors(o));
   else if(sel.type==='cog'&&o.track){
@@ -4387,6 +4726,7 @@ function drawBezel(b){
     }
     const ix=b.cx+Math.cos(am)*(R-4),iy=b.cy+Math.sin(am)*(R-4);
     if(p.icon==='kind'){cx.strokeStyle=ink;cx.lineWidth=1.2;circle(ix,iy,8);emblem(p.get(),ix,iy,8)}
+    else if(p.icon==='fxmode'){cx.strokeStyle=ink;cx.lineWidth=1.2;circle(ix,iy,8);const z=PX;PX=1;fieldGlyph(p.get(),ix,iy,5);PX=z}
     else{cx.save();cx.translate(ix-9,iy-9);cx.scale(.75,.75);cx.strokeStyle=ink;cx.lineWidth=1.8;cx.lineJoin=cx.lineCap='round';cx.stroke(iconPath(p.icon));cx.restore()}
   });
   cx.restore();

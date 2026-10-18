@@ -116,6 +116,7 @@ function draw(){
   cx.globalAlpha=1;drawGround();
   const z=S.zoom*dpr;PX=1/S.zoom;
   cx.setTransform(z,0,0,z,dpr*CW/2-view.x*z,dpr*CH/2-view.y*z);
+  for(const f of W.fields)drawField(f);
   for(const p of W.pits)drawPit(p);
   for(const c of [...W.cogs].sort((a,b)=>a.layer-b.layer))drawCog(c);
   for(const b of W.belts)drawBelt(b);
@@ -132,7 +133,7 @@ function draw(){
   if(ui.carry&&ui.carry.band){const{a,p}=ui.carry.band;cx.setLineDash([6*PX,5*PX]);strokes(a.x,a.y,p.x,p.y,[[2*PX,DIM]]);cx.setLineDash([])}
   if(sel){const o=sel.o;
     if(sel.type==='cog')halo(o.x,o.y,radius(o)+3.2);else if(sel.type==='pad')halo(o.x,o.y,o.r+2.4);
-    else if(sel.type==='arm'){const t=armTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='cam'){const t=camTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='probe'){if(probeAlive(o)){const t=probePoint(o);halo(t.x,t.y,3.6)}}else if(sel.type==='reader'||sel.type==='string'){halo(o.x1,o.y1,3.8);halo(o.x2,o.y2,3.8)}else if(sel.type==='pit')drawPitSel(o)}
+    else if(sel.type==='arm'){const t=armTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='cam'){const t=camTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='probe'){if(probeAlive(o)){const t=probePoint(o);halo(t.x,t.y,3.6)}}else if(sel.type==='reader'||sel.type==='string'){halo(o.x1,o.y1,3.8);halo(o.x2,o.y2,3.8)}else if(sel.type==='pit')drawPitSel(o);else if(sel.type==='field')drawFieldSel(o)}
   if(S.ids){cx.fillStyle=DIM;cx.font=`${10*PX}px monospace`;
     for(const c of W.cogs)cx.fillText('c'+c.id,c.x+4*PX,c.y-4*PX);
     for(const p of W.pads)cx.fillText('p'+p.id,p.x+p.r+2*PX,p.y);
@@ -147,7 +148,7 @@ function drawGhost(s){
   drawArm({cog:{x:-24,y:0,th:0,w:0},a:0,r0:0,len:24});cx.restore();cx.globalAlpha=1;
 }
 // Two readers: the note reader plays a disc's rings as its notes, the comb plays them on its own tines.
-const PART_KEYS={m:'motor',c:'cog',d:'disc',a:'arm',b:'belt',p:'pad',t:'string',r:'reader',k:'comb',e:'cam',o:'sphere',y:'probe'},KEY_OF=Object.fromEntries(Object.entries(PART_KEYS).map(([k,v])=>[v,k]));
+const PART_KEYS={m:'motor',c:'cog',d:'disc',a:'arm',b:'belt',p:'pad',t:'string',r:'reader',k:'comb',e:'cam',o:'sphere',y:'probe',f:'field'},KEY_OF=Object.fromEntries(Object.entries(PART_KEYS).map(([k,v])=>[v,k]));
 const PARTS=Object.values(PART_KEYS);
 const MODEL={
   motor:{n:12,x:0,y:0,th:.13,w:1,layer:0,motor:{rpm:30,revs:0},track:null},
@@ -160,6 +161,7 @@ function drawPartIcon(kind){
   else if(kind==='arm')drawArm({cog:{x:-14,y:14,th:0,w:0},a:-Math.PI/4,r0:0,len:40});
   else if(kind==='cam'){const c={x:0,y:4,n:12,th:0,w:0},m={...newCam(0),cog:c,ang:-Math.PI/2,shape:'ramp up',prof:camShape('ramp up')};drawCog(c);drawCam(m)}
   else if(kind==='probe')drawProbeIcon();
+  else if(kind==='field')drawFieldIcon();
   else if(kind==='pad')drawPad({x:0,y:0,r:11,voice:{kind:'kick'}});
   else if(kind==='belt'){cx.strokeStyle=DIM;cx.lineWidth=PX;circle(-12,0,9);circle(14,0,6);cx.setLineDash([3,3]);strokes(-12,-9,14,-6,[[1.5,DIM]]);strokes(-12,9,14,6,[[1.5,DIM]]);cx.setLineDash([])}
   else if(kind==='string')drawString({x1:-20,y1:14,x2:20,y2:-14,kind:'string'});
@@ -172,6 +174,7 @@ function bounds(){
   for(const c of W.cogs)add(c.x,c.y,radius(c)+4);for(const p of W.pads)add(p.x,p.y,p.r+3);
   for(const r of [...W.readers,...W.strings]){add(r.x1,r.y1,4);add(r.x2,r.y2,4)}for(const a of W.arms){const t=armTip(a);add(t.x,t.y,4)}
   for(const p of W.pits){xs.push(p.x-p.w/2-4,p.x+p.w/2+4);ys.push(p.y-p.h/2-4,p.y+p.h/2+4)}
+  for(const f of W.fields)add(f.x,f.y,f.r*.7);
   if(!xs.length)return null;
   const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);return {cx:(x0+x1)/2,cy:(y0+y1)/2,w:x1-x0,h:y1-y0};
 }
@@ -234,6 +237,7 @@ function focus(type,o,s){
   else if(type==='reader'||type==='string'){z=170/Math.max(20,stringLen(o));at=mid(o)}
   else if(type==='arm'){z=150/(o.r0+o.len);at=o.cog}
   else if(type==='pit'){z=Math.min(CW*.8/o.w,(shelfTopOr()-40)*.8/o.h);at=o}
+  else if(type==='field'){z=Math.min(CW*.8,(shelfTopOr()-40)*.8)/(2*o.r);at=o}
   else if(o.track){z=14/ringGap(o);const w=screenToWorld(s);if(S.zoom<z*.9){fly(w.x-(s.x-CW/2)/z,w.y-(s.y-CH/2)/z,z);return}}
   else{z=120/radius(o);at=o}
   if(S.zoom>=z*.9){flyFit();return}
@@ -253,7 +257,7 @@ function removeSel(){
   const items=group.length?group:sel?[sel]:[];group=[];
   for(const{type,o}of items)if(type!=='belt'||W.belts.includes(o))removeObj(type,o);
 }
-const PART_LISTS=['cog','arm','pad','reader','string','belt','cam','pit','probe'],UNSEAT_PX=36;
+const PART_LISTS=['cog','arm','pad','reader','string','belt','cam','pit','probe','field'],UNSEAT_PX=36;
 const shelfTopOr=()=>typeof shelfTop==='function'?shelfTop():CH;
 // A copied cog takes its arms; a belt comes when both its cogs do.
 let partClip=null;
@@ -261,18 +265,18 @@ function copyParts(){
   const items=group.length?group:sel&&sel.type!=='dot'?[sel]:[];if(!items.length)return false;
   const ids=new Set(items.map(x=>x.o.id)),j=serialize(),own=o=>ids.has(o.id);
   partClip={cogs:j.cogs.filter(own),arms:j.arms.filter(a=>own(a)||ids.has(a.cog)),pads:j.pads.filter(own),readers:j.readers.filter(own),
-    strings:j.strings.filter(own),belts:j.belts.filter(b=>ids.has(b.a)&&ids.has(b.b)),cams:j.cams.filter(m=>own(m)||ids.has(m.cog)),pits:j.pits.filter(own)};
+    strings:j.strings.filter(own),belts:j.belts.filter(b=>ids.has(b.a)&&ids.has(b.b)),cams:j.cams.filter(m=>own(m)||ids.has(m.cog)),pits:j.pits.filter(own),fields:(j.fields||[]).filter(own)};
   return true;
 }
 // Paste lands centred under the pointer, or a step down-right of the original when the pointer is off the stage.
 function pasteParts(){
   if(!partClip)return false;
   const j=serialize(),id=new Map(),fresh=o=>{const n=W.next+id.size;id.set(o.id,n);return n},c=structuredClone(partClip);
-  c.pits=c.pits||[];
-  const pts=[...c.cogs,...c.pads,...c.pits,...[...c.readers,...c.strings].map(mid)],step=30/S.zoom;
+  c.pits=c.pits||[];c.fields=c.fields||[];
+  const pts=[...c.cogs,...c.pads,...c.pits,...c.fields,...[...c.readers,...c.strings].map(mid)],step=30/S.zoom;
   let dx=step,dy=step;
   if(pts.length&&ui.hover){const xs=pts.map(p=>p.x),ys=pts.map(p=>p.y),at=screenToWorld(ui.hover);dx=at.x-(Math.min(...xs)+Math.max(...xs))/2;dy=at.y-(Math.min(...ys)+Math.max(...ys))/2}
-  for(const o of [...c.cogs,...c.pads]){o.id=fresh(o);o.x+=dx;o.y+=dy}
+  for(const o of [...c.cogs,...c.pads,...c.fields]){o.id=fresh(o);o.x+=dx;o.y+=dy}
   for(const o of c.pits){o.id=fresh(o);o.x+=dx;o.y+=dy;for(const b of o.balls){b.bx+=dx;b.by+=dy}}
   for(const o of [...c.readers,...c.strings]){o.id=fresh(o);o.x1+=dx;o.y1+=dy;o.x2+=dx;o.y2+=dy}
   for(const o of c.readers)o.on=id.has(o.on)?id.get(o.on):null;
@@ -293,6 +297,7 @@ function boxSelect(a,b){
   for(const o of W.cogs)if(inside(o))g.push({type:'cog',o});
   for(const o of W.pads)if(inside(o))g.push({type:'pad',o});
   for(const o of W.pits)if(inside(o))g.push({type:'pit',o});
+  for(const o of W.fields)if(inside(o))g.push({type:'field',o});
   for(const type of ['reader','string'])for(const o of W[type+'s'])if(inside(mid(o)))g.push({type,o});
   for(const o of W.arms)if(inside(armTip(o)))g.push({type:'arm',o});
   for(const o of W.cams)if(inside(camTip(o)))g.push({type:'cam',o});
@@ -308,6 +313,7 @@ function drawGroup(){
   for(const{type,o}of group){
     if(type==='cog'||type==='pad'){const s=toScreen(o);circle(s.x,s.y,(type==='cog'?radius(o):o.r)*S.zoom+5)}
     else if(type==='pit'){const c=toScreen(o);circle(c.x,c.y,pitR(o)*S.zoom+5)}
+    else if(type==='field'){const c=toScreen(o);circle(c.x,c.y,12)}
     else if(type==='arm'){const s=toScreen(armTip(o));circle(s.x,s.y,7)}
     else if(type==='cam'){const s=toScreen(camTip(o));circle(s.x,s.y,7)}
     else if(type==='probe'){if(probeAlive(o)){const s=toScreen(probePoint(o));circle(s.x,s.y,8)}}
@@ -368,11 +374,12 @@ function newPart(kind,p){
   if(kind==='cam')return {type:'cam',o:newCam(id)};
   if(kind==='sphere')return {type:'pit',o:newPit(id,p)};
   if(kind==='probe')return {type:'probe',o:newProbe(id)};
+  if(kind==='field')return {type:'field',o:newField(id,p)};
   return {type:'arm',o:{id,cog:null,a:0,r0:0,len:4,flex:.5}};
 }
 function placePart(type,o,p){
   if(type==='cog')placeCog(o,p);
-  else if(type==='pad'){o.x=p.x;o.y=p.y}
+  else if(type==='pad'||type==='field'){o.x=p.x;o.y=p.y}
   else if(type==='pit')shiftPit(o,p.x-o.x,p.y-o.y);
   else if(type==='string')Object.assign(o,{x1:p.x-60,y1:p.y,x2:p.x+60,y2:p.y});
   else if(type==='reader'){const d=pickCog(p,c=>c.track);
@@ -442,6 +449,14 @@ const G={
       move(s){trackScrap(s);if(!ui.scrap)probeAttach(pr,screenToWorld(s),true)},
       up(){endScrap('probe',pr)},tap(){choose('probe',pr)},
       dbl(s){if(probeAlive(pr))pr.host==='ball'?focus('pit',pr.on,s):focus('cog',probeCog(pr),s)}};
+  },
+  // An FX field: its centre moves it (and back to the shelf deletes it); the handle on its rim, shown when it is
+  // selected, pulls the radius. Tap for its dial.
+  field(f,s0,edge){
+    const p0=screenToWorld(s0),dx=f.x-p0.x,dy=f.y-p0.y;
+    return {o:f,readout:()=>edge?`fx ${f.id} radius ${Math.round(f.r)}`:`fx ${f.id}: ${FIELD_MODE_LABEL[f.mode]}`,
+      move(s){const q=screenToWorld(s);if(edge)f.r=clamp(Math.hypot(q.x-f.x,q.y-f.y),30,800);else{trackScrap(s);f.x=q.x+dx;f.y=q.y+dy}},
+      up(){if(edge)changed();else endScrap('field',f)},tap(){choose('field',f)},dbl(s){focus('field',f,s)}};
   },
   arm(a){
     return {o:a,move(s){trackScrap(s);const q=screenToWorld(s),c=a.cog;a.a=wrap(Math.atan2(q.y-c.y,q.x-c.x)-renderTh(c));a.len=Math.max(4,Math.hypot(q.x-c.x,q.y-c.y)-a.r0)},
@@ -551,6 +566,8 @@ function begin(s){
     near(segDist(p,o.x1,o.y1,o.x2,o.y2)*Z+8,22,()=>G.span(type,o,s,0))}
   for(const o of W.belts)for(const l of beltLines(o))near(segDist(p,...l)*Z+10,22,()=>G.belt(o));
   let box=null;for(const o of W.pits)box=pitTouch(o,s,near)||box;
+  // a field has no edge to grab: its centre ring, and its radius handle while it is selected
+  for(const f of W.fields){near(dist(f)-4,18,()=>G.field(f,s,false));if(isSel(f))near(dist(fieldHandle(f)),20,()=>G.field(f,s,true))}
   const c=pickCog(p,()=>true,14/Z),d=c&&dist(c),Rs=c&&radius(c)*Z;
   if(c&&Rs>=30)near(Math.abs(d-Rs),14,()=>G.rim(c,s));
   if(best)return best.make();
@@ -1187,7 +1204,7 @@ function buildInspector(){
   rows.length=panelRows;readouts.length=panelReadouts;
   roll=null;camStrips=[];
   const o=sel&&sel.o,f=inspector,cogKind=c=>c.track?'disc':c.motor?'motor':'cog';
-  inspector.replaceChildren(el('legend',{textContent:sel?`${sel.type==='cog'?cogKind(o):sel.type==='pit'?'sphere':sel.type} ${sel.o.id}`:'selection'}));
+  inspector.replaceChildren(el('legend',{textContent:sel?`${sel.type==='cog'?cogKind(o):sel.type==='pit'?'sphere':sel.type==='field'?'fx':sel.type} ${sel.o.id}`:'selection'}));
   if(sel&&sel.type==='cog'){
     numRow(f,'teeth',6,240,1,()=>o.n,v=>{resizer(o).set(v);changed(true)});
     if(motorOf(o)){
@@ -1215,6 +1232,8 @@ function buildInspector(){
     camRows(f,o);
   }else if(sel&&sel.type==='probe'){
     probeRows(f,o);
+  }else if(sel&&sel.type==='field'){
+    fieldRows(f,o);
   }else if(sel&&sel.type==='arm'){
     numRow(f,'angle deg',0,360,.1,()=>o.a*180/Math.PI,v=>{o.a=v*Math.PI/180;changed()});
     numRow(f,'r0',0,500,.5,...bind(o,'r0',changed));
@@ -1280,7 +1299,7 @@ function frame(ts){
   if(!clock.paused)clock.view=Math.max(clock.view,heardAt(ts/1000));
   if(meter){meter.getFloatTimeDomainData(meterBuf);let m=0;for(const x of meterBuf)m=Math.max(m,Math.abs(x));peak=Math.max(m,peak*.95)}
   // under an open sheet the machine shows only dimmed behind the scrim: it is drawn at a quarter of the frame rate
-  stepCamera();if(!worldCovered()||++coveredSkip>=4){coveredSkip=0;draw();drawGroup()}else syncEditor();listen();
+  postFields();stepCamera();if(!worldCovered()||++coveredSkip>=4){coveredSkip=0;draw();drawGroup()}else syncEditor();listen();
   const now=performance.now();
   if(roll&&roll.cv.offsetParent)drawRoll();
   postMotions();if(inspectorLive()){if(camStrips.length)camDrawStrips();for(const d of waveLive)d()}

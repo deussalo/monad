@@ -184,7 +184,9 @@ class WaveSynth extends AudioWorkletProcessor{
     this.tables={};for(const n of WAVE_TABLES)if(n!=='harmonics')this.tables[n]=buildTable(waveSpectra(n));
     this.patches=new Map();this.bpm=120;this.streams=0;this.uniScale=1;this.bws=new Float64Array(8);this.queue=[];this.offs=[];this.motions=new Map();this.frame=0;this.statAt=0;this.ver=0;this.watch=0;this.wAge=-1;this.wAt=0;this.wN=new Float64Array(NP);this.wSent=false;
     this.voices=Array.from({length:WVOICES},()=>this.voice());
-    this.mixL=new Float32Array(WSLICE);this.mixR=new Float32Array(WSLICE);this.ol=new Float32Array(WSLICE);this.or=new Float32Array(WSLICE);
+    this.mixL=new Float32Array(WSLICE);this.mixR=new Float32Array(WSLICE);
+    // field sends: a note struck in a field goes, before the patch's FX rack, to that field's slot
+    this.auxL=Array.from({length:8},()=>new Float32Array(128));this.auxR=Array.from({length:8},()=>new Float32Array(128));this.auxUsed=new Uint8Array(8);this.ol=new Float32Array(WSLICE);this.or=new Float32Array(WSLICE);
     this.port.onmessage=e=>{const m=e.data;
       if(m.type==='patch')this.setPatch(m.id,m.p);else if(m.type==='note')this.queue.push(m);else if(m.type==='off')this.offs.push(m);
       else if(m.type==='motion')this.motion(m);
@@ -238,7 +240,7 @@ class WaveSynth extends AudioWorkletProcessor{
     if(cp.mode&&mine){
       for(const v of this.voices)if(v!==mine&&v.on&&v.cp.id===cp.id)v.kill=1;
       const v=mine,from=gl>0&&(cp.always||held)?this.pitch(v,m.at):m.midi;
-      v.from=from;v.midi=m.midi;v.t0=m.at;v.key=m.key;v.age=this.frame;v.amp=m.amp;v.vel=Math.min(1,Math.max(0,m.vel??m.amp));v.glideT=this.glideTime(cp,from,m.midi);
+      v.from=from;v.midi=m.midi;v.t0=m.at;v.fx=m.fx||null;v.dry=m.dry??1;v.key=m.key;v.age=this.frame;v.amp=m.amp;v.vel=Math.min(1,Math.max(0,m.vel??m.amp));v.glideT=this.glideTime(cp,from,m.midi);
       v.offAt=m.at+Math.max(m.hold||0,cp.val[P_GATE])*sampleRate;cp.last=m.midi;
       if(cp.mode===1||!held){for(const o of v.osc){o.env.st=1;o.fenv.st=1}for(const e of v.envs)e.st=1}
       v.released=false;return;
@@ -246,7 +248,7 @@ class WaveSynth extends AudioWorkletProcessor{
     if(live>=WPOLY&&oldest)oldest.kill=1;
     const v=free||oldest;if(!v)return;
     v.on=true;v.kill=0;v.cp=cp;v.ver=-1;v.age=this.frame;v.key=m.key;v.midi=m.midi;v.from=gl>0&&(cp.always||held)&&cp.last!=null?cp.last:m.midi;v.glideT=this.glideTime(cp,v.from,m.midi);cp.last=m.midi;
-    v.amp=m.amp;v.pan=m.pan||0;v.dark=m.dark||0;v.vel=Math.min(1,Math.max(0,m.vel??m.amp));v.rand=Math.random();
+    v.amp=m.amp;v.pan=m.pan||0;v.dark=m.dark||0;v.fx=m.fx||null;v.dry=m.dry??1;v.vel=Math.min(1,Math.max(0,m.vel??m.amp));v.rand=Math.random();
     v.t0=m.at;v.offAt=m.at+Math.max(m.hold||0,cp.val[P_GATE])*sampleRate;v.released=false;v.dl=v.dr=0;
     v.vals.set(cp.val);
     for(let i=0;i<WAVE_OSCS;i++){const o=v.osc[i];o.env.st=1;o.env.lv=0;o.fenv.st=1;o.fenv.lv=0;o.z.fill(0);
@@ -376,10 +378,23 @@ const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
     // the voice's level, the room's distance darkening and its place in the stereo field
     const amp=v.amp*vals[P_VOL]*.25,pa=(Math.max(-1,Math.min(1,v.pan))+1)*Math.PI/4,pl=Math.cos(pa)*Math.SQRT2*amp,pr=Math.sin(pa)*Math.SQRT2*amp;
     const dc=v.dark>.02?1-Math.exp(-TAU*16000*Math.exp(-v.dark*3.2)/fs):1;let dl=v.dl,dr=v.dr,kill=v.kill;
-    for(let s=0;s<n;s++){
+    const fx=v.fx,dg=v.dry??1;
+    if(!fx&&dg===1)for(let s=0;s<n;s++){
       let xl=this.mixL[s],xr=this.mixR[s];if(dc<1){dl+=(xl-dl)*dc;dr+=(xr-dr)*dc;xl=dl;xr=dr}
       let g=1;if(kill){kill=Math.max(0,kill-1/(.005*fs));g=kill}
       L[at+s]+=xl*pl*g;R[at+s]+=xr*pr*g;
+    }
+    else{
+      // in a field: the dry part to the patch's bus, and the whole of it to each field's slot by its send
+      const ml=this.mixL,mr=this.mixR;
+      for(let s=0;s<n;s++){
+        let xl=ml[s],xr=mr[s];if(dc<1){dl+=(xl-dl)*dc;dr+=(xr-dr)*dc;xl=dl;xr=dr}
+        let g=1;if(kill){kill=Math.max(0,kill-1/(.005*fs));g=kill}
+        ml[s]=xl*pl*g;mr[s]=xr*pr*g;L[at+s]+=ml[s]*dg;R[at+s]+=mr[s]*dg;
+      }
+      if(fx)for(let i=0;i<fx.length;i+=2){const k=fx[i],a=fx[i+1];if(!(k>=0&&k<8)||!a)continue;
+        const AL=this.auxL[k],AR=this.auxR[k];if(!this.auxUsed[k]){this.auxUsed[k]=1;AL.fill(0);AR.fill(0)}
+        for(let s=0;s<n;s++){AL[at+s]+=ml[s]*a;AR[at+s]+=mr[s]*a}}
     }
     v.dl=dl;v.dr=dr;
     if(v.kill){v.kill=kill;if(kill<=0)v.on=false}
@@ -390,6 +405,7 @@ const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
     // last block's demand sets this block's unison budget
     {const per=this.streams/Math.max(1,n/WSLICE);this.uniScale=per>WSTREAMS?WSTREAMS/per:1;this.streams=0}
     const watching=this.watch&&end-this.wAt>=sampleRate/30;if(watching)this.wAge=-1;
+    this.auxUsed.fill(0);
     for(let at=0;at<n;at+=WSLICE){
       const sl=Math.min(WSLICE,n-at),t=currentFrame+at+sl;
       if(this.motions.size)this.runMotions(currentFrame+at);
@@ -404,6 +420,7 @@ const P=OSC_P[i],o=v.osc[i],level=vals[P.level];
       for(let s=0;s<n;s++){L[s]+=cp.busL[s];R[s]+=cp.busR[s]}
       cp.live=false;
     }
+    for(let k=0;k<8&&k+1<outputs.length;k++){const o=outputs[k+1];if(this.auxUsed[k]&&o&&o[0]){o[0].set(this.auxL[k].subarray(0,n));(o[1]||o[0]).set(this.auxR[k].subarray(0,n))}}
     if(watching){this.wAt=end;const cp=this.patches.get(this.watch);
       if(this.wAge>=0&&cp){this.port.postMessage({type:'mod',id:this.watch,d:cp.modded,n:cp.modded.map(d=>this.wN[d])});this.wSent=true}
       else if(this.wSent){this.port.postMessage({type:'mod',id:this.watch,d:[],n:[]});this.wSent=false}}

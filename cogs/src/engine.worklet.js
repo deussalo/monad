@@ -5,9 +5,13 @@ const pow2AtLeast=n=>{let p=1;while(p<n)p<<=1;return p};
 const softLimit=x=>x/(1+Math.abs(x));
 // Sylvester Hadamard row r of length n, used for orthogonal tap/injection signs.
 const hadamardSign=(r,c)=>{let b=r&c,p=0;while(b){p^=b&1;b>>=1}return p?-1:1};
-const strikeSize=(d,o)=>7+3*d[o+6];
+// A strike: at, key, amp, contact, attack, pan, n, n freqs, n gains, n decays, then its field sends (count, then slot
+// and amount for each) and its dry level (a field can take some of the dry away).
+const FX_SLOTS=8;
+const strikeSize=(d,o)=>{const e=o+7+3*d[o+6];return 9+3*d[o+6]+2*d[e]};
 const packStrikes=list=>{const out=[];for(const m of list){out.push(m.at||0,m.k,m.amp,m.c,m.a,m.p,m.f.length,...m.f);
-  for(let i=0;i<m.f.length;i++)out.push(m.g[i]);for(let i=0;i<m.f.length;i++)out.push(m.t[i])}return new Float64Array(out)};
+  for(let i=0;i<m.f.length;i++)out.push(m.g[i]);for(let i=0;i<m.f.length;i++)out.push(m.t[i]);
+  const fx=m.fx||[];out.push(fx.length/2,...fx,m.dry??1)}return new Float64Array(out)};
 
 class Allpass{
   constructor(len){this.buf=new Float32Array(len);this.len=len;this.i=0}
@@ -50,6 +54,10 @@ class CogsEngine extends AudioWorkletProcessor{
     this.pl=new Float64Array(V);this.pr=new Float64Array(V);this.plT=new Float64Array(V);this.prT=new Float64Array(V);this.e=new Float64Array(V);
     this.exc=new Float64Array(BLOCK);this.live=new Int32Array(MAXM);this.vb=new Float64Array(BLOCK);
     this.dryL=new Float32Array(BLOCK);this.dryR=new Float32Array(BLOCK);
+    // field sends: each voice's amount into each slot, its dry level, and a buffer per slot
+    this.snd=new Float64Array(V*FX_SLOTS);this.hasSnd=new Uint8Array(V);this.vdry=new Float64Array(V).fill(1);
+    this.auxL=Array.from({length:FX_SLOTS},()=>new Float32Array(BLOCK));this.auxR=Array.from({length:FX_SLOTS},()=>new Float32Array(BLOCK));
+    this.vL=new Float32Array(BLOCK);this.vR=new Float32Array(BLOCK);this.auxUsed=new Uint8Array(FX_SLOTS);
     this.maxStarts=4*V;this.maxWait=8*BLOCK;
     this.reset(o);this.warm(o);
     this.damps=[];
@@ -77,7 +85,8 @@ class CogsEngine extends AudioWorkletProcessor{
   }
   reset(o){
     for(const a of [this.on,this.key,this.nm,this.zr,this.zi,this.kr,this.ki,this.xg,this.cN,this.cLen,this.env,this.envStep,this.fade,this.fadeStep,
-      this.pl,this.pr,this.plT,this.prT,this.e,this.exc,this.live,this.vb,this.dryL,this.dryR,this.pendAt,this.dl])a.fill(0);
+      this.pl,this.pr,this.plT,this.prT,this.e,this.exc,this.live,this.vb,this.dryL,this.dryR,this.pendAt,this.dl,this.snd,this.hasSnd])a.fill(0);
+    this.vdry.fill(1);
     this.pend.fill(null);this.space.clear(o.space);
     this.queue=[packStrikes((o.schedule||[]).slice().sort((a,b)=>(a.at||0)-(b.at||0)))];this.queueAt=0;this.queueOff=0;this.damps=[];
     this.frame=0;this.quietBlocks=0;this.steals=0;this.drops=0;this.strikes=0;this.statAt=0;this.idle=false;this.muted=false;this.idleReported=false;this.waitFrom=-1;
@@ -94,6 +103,9 @@ class CogsEngine extends AudioWorkletProcessor{
     this.nm[v]=k;
     const len=Math.max(8,Math.round((d[o+3]||.002)*fs));this.cLen[v]=len;this.cN[v]=len;
     const p=Math.max(-1,Math.min(1,d[o+5]||0)),a=(p+1)*Math.PI/4;this.plT[v]=Math.cos(a);this.prT[v]=Math.sin(a);this.dl[v]=off||0;
+    const e=t+n,ns=d[e]|0,sb=v*FX_SLOTS;for(let k=0;k<FX_SLOTS;k++)this.snd[sb+k]=0;
+    for(let i=0;i<ns;i++){const k=d[e+1+2*i]|0;if(k>=0&&k<FX_SLOTS)this.snd[sb+k]=d[e+2+2*i]}
+    this.hasSnd[v]=ns>0?1:0;const dry=d[e+1+2*ns];this.vdry[v]=Number.isFinite(dry)?dry:1;
   }
   offset(d,o){return Math.max(0,Math.min(BLOCK-1,Math.round(d[o]-this.frame)))}
   // false: every voice is already fading out, so the strike has to wait.
@@ -176,8 +188,15 @@ class CogsEngine extends AudioWorkletProcessor{
     const dL=this.dryL,dR=this.dryR;dL.fill(0);dR.fill(0);
     const inp=inputs[0];let inE=0;
     if(inp&&inp.length){const a=inp[0],b=inp[1]||a;for(let s=0;s<n;s++){dL[s]+=a[s];dR[s]+=b[s];inE+=a[s]*a[s]}}
-    let voices=0;
-    for(let v=0;v<this.V;v++)if(this.on[v]){voices++;this.renderVoice(v,n,dL,dR)}
+    let voices=0;const aL=this.auxL,aR=this.auxR,used=this.auxUsed;used.fill(0);
+    for(let v=0;v<this.V;v++)if(this.on[v]){voices++;
+      // a voice in a field renders on its own, then goes to the dry mix at its dry level and to each field it is in
+      if(!this.hasSnd[v]&&this.vdry[v]===1){this.renderVoice(v,n,dL,dR);continue}
+      const vL=this.vL,vR=this.vR;vL.fill(0,0,n);vR.fill(0,0,n);this.renderVoice(v,n,vL,vR);
+      const g=this.vdry[v];for(let s=0;s<n;s++){dL[s]+=vL[s]*g;dR[s]+=vR[s]*g}
+      const sb=v*FX_SLOTS;for(let k=0;k<FX_SLOTS;k++){const a=this.snd[sb+k];if(!a)continue;
+        if(!used[k]){used[k]=1;aL[k].fill(0);aR[k].fill(0)}const L1=aL[k],R1=aR[k];for(let s=0;s<n;s++){L1[s]+=vL[s]*a;R1[s]+=vR[s]*a}}}
+    for(let k=0;k<FX_SLOTS&&k+1<outputs.length;k++){const o=outputs[k+1];if(!o||!o[0])continue;if(used[k]){o[0].set(aL[k].subarray(0,n));(o[1]||o[0]).set(aR[k].subarray(0,n))}}
     // The tail outlives its input by the predelay plus a full pass of the longest line,
     // so idling waits for that many consecutive silent blocks.
     const quiet=voices===0&&inE<1e-12&&this.space.energy<1e-14&&this.space.cur.freeze<.5&&!this.space.pending;

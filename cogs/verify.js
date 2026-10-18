@@ -614,7 +614,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const ty = await probe(() => __cogs.shelfTop() + 38);
   await m.stroke([[330, ty], [120, ty + 4]]); await wait(100);
   const tray1 = await probe(() => ({ x: __cogs.shelfX, n: __cogs.W.cogs.length + __cogs.W.cams.length + __cogs.W.readers.length }));
-  check('the tray is wider than the phone; a flat swipe scrolls it and places nothing', tray0.x === 0 && tray0.n === 12 && tray1.x > 150 && tray1.n === 3, [tray0, tray1]);
+  check('the tray is wider than the phone; a flat swipe scrolls it and places nothing', tray0.x === 0 && tray0.n === 13 && tray1.x > 150 && tray1.n === 3, [tray0, tray1]);
   await m.fromShelf('probe', [20, 6], [22, 0]);
   const pp = await probe(() => __cogs.serialize().probes);
   check('drag a probe off the tray onto the turning cog: it pins to that point', pp.length === 1 && pp[0].host === 'cog' && pp[0].on === 1 && Math.abs(pp[0].r - 22) < 1, pp.map(q => [q.host, q.on, +q.r.toFixed(1)]));

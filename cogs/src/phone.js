@@ -89,7 +89,7 @@ function syncEditor(){syncRollBar();
   if(!panelShown()||!$('#dev').dataset.editor)return;
   if(!mode){togglePanel(false);return}
   if(editorOwner!==sel.o){const tucked=sheetMin();editorOwner=sel.o;togglePanel(true,mode);if(tucked)setSheetMin(true)}
-  const title=$('#editor-title'),labelled=`${sel.type==='cog'?'disc':sel.type==='pit'?'sphere':sel.type} ${sel.o.id} · ${mode}`;
+  const title=$('#editor-title'),labelled=`${sel.type==='cog'?'disc':sel.type==='pit'?'sphere':sel.type==='field'?'fx':sel.type} ${sel.o.id} · ${mode}`;
   if(title.textContent!==labelled)title.textContent=labelled;
 }
 const GESTURE_READOUT={
@@ -328,6 +328,14 @@ function probeSectors(pr){
   out.push({icon:'link',label:pr.to?`drives ${voicedName(pr.to)}: tap to relink`:'link to a reader, pad or sphere',action:()=>startLink(pr)});
   return out;
 }
+// An FX field's dial: its effect, that effect's knobs, then how diffuse it is, its return and how much dry it takes.
+function fieldSectors(f){
+  const out=[choiceSector('fxmode','effect',FIELD_MODES,()=>f.mode,x=>setFieldMode(f,x),x=>FIELD_MODE_LABEL[x])];
+  const icon={sync:'tempo',time:'tempo',fb:'tail',tone:'tone',ping:'spread',size:'size',decay:'tail',predelay:'attack',kind:'bend',drive:'hard',verbMode:'size',verbColor:'air'};
+  for(const d of fieldDefs(f))out.push(Array.isArray(d[2])?choiceSector(icon[d[0]]||'knob',d[1],d[2],()=>f[d[0]],x=>{f[d[0]]=x},x=>fieldOptLabel(d[0],x)):numSector(icon[d[0]]||'knob',d[1],f,d[0],d[2],d[3],d[4]));
+  out.push(numSector('spread','diffuse',f,'diffuse',0,1,.01),numSector('level','return',f,'level',0,1.5,.01),numSector('wet','takes dry',f,'insert',0,1,.01));
+  return out;
+}
 const dotSectors=d=>[numSector('odds','probability',d,'p',0,1,.01),numSector('level','velocity',d,'v',0,1,.01),numSector('div','length steps',d,'len',1,ui.dotOf.track.div,1)];
 const ROOM_ICON={wet:'wet',size:'size',decay:'tail',highMult:'air',shimmer:'shimmer'};
 function roomSectors(){
@@ -356,6 +364,7 @@ function activeBezel(){
   else if(sel.type==='reader')b=ring(mid(o),stringLen(o)*S.zoom/2,readerSectors(o));
   else if(sel.type==='cam')b=ring(camTip(o),0,camSectors(o));
   else if(sel.type==='probe'){if(probeAlive(o))b=ring(probePoint(o),0,probeSectors(o))}
+  else if(sel.type==='field')b=ring(o,0,fieldSectors(o));
   else if(sel.type==='string')b=ring(mid(o),stringLen(o)*S.zoom/2,stringSectors(o));
   else if(sel.type==='dot')b=ring(ui.dotAt,0,dotSectors(o));
   else if(sel.type==='cog'&&o.track){
@@ -389,6 +398,7 @@ function drawBezel(b){
     }
     const ix=b.cx+Math.cos(am)*(R-4),iy=b.cy+Math.sin(am)*(R-4);
     if(p.icon==='kind'){cx.strokeStyle=ink;cx.lineWidth=1.2;circle(ix,iy,8);emblem(p.get(),ix,iy,8)}
+    else if(p.icon==='fxmode'){cx.strokeStyle=ink;cx.lineWidth=1.2;circle(ix,iy,8);const z=PX;PX=1;fieldGlyph(p.get(),ix,iy,5);PX=z}
     else{cx.save();cx.translate(ix-9,iy-9);cx.scale(.75,.75);cx.strokeStyle=ink;cx.lineWidth=1.8;cx.lineJoin=cx.lineCap='round';cx.stroke(iconPath(p.icon));cx.restore()}
   });
   cx.restore();

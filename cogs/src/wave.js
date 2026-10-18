@@ -114,7 +114,7 @@ function wavePost(v){
 }
 function waveNote(v,midi,when,amp,pan,key,x,hold=0,dark=0){
   const id=wavePost(v);if(!id)return;waveNotes++;waveLast=voiceMidi(v,midi);
-  waveNode.port.postMessage({type:'note',id,at:when*ac.sampleRate,key,midi:voiceMidi(v,midi),amp,vel:clamp(x??amp,0,1),pan,hold,dark});
+  waveNode.port.postMessage({type:'note',id,at:when*ac.sampleRate,key,midi:voiceMidi(v,midi),amp,vel:clamp(x??amp,0,1),pan,hold,dark,...(fxNow?{fx:fxNow.fx,dry:fxNow.dry}:{})});
 }
 // Live modulation for the open editor: the worklet sends, 30 times a second, where its newest note has each routed
 // knob (normalised); the editor draws a dot there. Nothing is sent while no editor watches.
@@ -126,8 +126,8 @@ function waveModIn(m){
   if(!waveModHooks.size)waveWatch(null);
 }
 function startWave(){
-  waveNode=new AudioWorkletNode(ac,'cogs-wave',{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[2]});
+  waveNode=new AudioWorkletNode(ac,'cogs-wave',{numberOfInputs:0,numberOfOutputs:1+FIELD_SLOTS_N,outputChannelCount:Array(1+FIELD_SLOTS_N).fill(2)});
   waveNode.port.onmessage=e=>{if(e.data.type==='stats')waveVoices=e.data.voices;else if(e.data.type==='mod')waveModIn(e.data)};
   waveWatching=0;
-  waveNode.connect(engineNode);
+  waveNode.connect(engineNode,0);
 }
