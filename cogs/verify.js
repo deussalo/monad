@@ -269,7 +269,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   console.log('ROOM');
   await m.dev(false); await m.room();
   const room = await probe(() => { const b = __cogs.activeBezel(); return b && { cx: b.cx, cy: b.cy, R: b.R, n: b.sectors.length }; });
-  check('tap empty ground with nothing selected: the room bezel, at any zoom', room && room.n === 13, room);
+  check('tap empty ground with nothing selected: the room bezel, at any zoom', room && room.n === 18, room);
   await m.shot('09-room');
   const wet0 = await probe(() => __cogs.SPACE.wet);
   const mode0 = await probe(() => __cogs.SPACE.mode);
@@ -279,7 +279,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   await up(sector(room, 2, .5), -60);
   const wet1 = await probe(() => __cogs.SPACE.wet);
   check('drag down from the wet sector: drier room', wet1 < wet0, [wet0, wet1]);
-  await m.tap(sector(room, 12, .5)); await wait(400);
+  await m.tap(sector(room, 17, .5)); await wait(400);
   const clip = await probe(() => navigator.clipboard.readText().catch(e => 'clipboard: ' + e.name));
   check('tap the seal: a #w= link reaches the clipboard', /#w=[\w-]+$/.test(clip), clip.slice(0, 40) + '…');
 
@@ -585,7 +585,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   check('probability 0.5: some of 12 play', half > 0 && half < 12, half);
   await m.dev(false); await m.room();
   const room2 = await probe(() => { const b = __cogs.activeBezel(); return b && { cx: b.cx, cy: b.cy, R: b.R, n: b.sectors.length }; });
-  await m.tap(sector(room2, 12, .5)); await wait(400);
+  await m.tap(sector(room2, 17, .5)); await wait(400);
   const url = await probe(() => navigator.clipboard.readText());
   check('share yields a #w= url', /#w=[\w-]+$/.test(url), url.slice(0, 50) + '…');
   const sp = await (await b.newContext(PHONE)).newPage();

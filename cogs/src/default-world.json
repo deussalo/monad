@@ -1,5 +1,6 @@
 {"S":{"bpm":122,"beats":4,"seed":1,"meshTol":4,"coaxTol":6,"snapTol":16,"vRef":500,"velCurve":0.72,"master":0.75,"lookahead":0.2,"maxStep":0.05,"zoom":1,"windows":0,"ids":0,"ratios":0},
 "SPACE":{"dry":1,"mode":0,"color":1,"wet":0.24,"predelay":22,"decay":1.9,"size":0.4881,"attack":0.15,"early":0.7,"late":0.6,"modRate":0.3,"modDepth":0.3333,"highCut":12000,"lowCut":180,"bassMult":0.8,"bassXover":200,"highShelf":-6.0206,"highFreq":4500,"earlyLate":0.6,"width":1.2,"shimmer":0,"shimmerPitch":12,"freeze":0},
+"climax":{"on":1,"drive":2,"sat":30,"classA":1,"excite":3,"air":2,"airFreq":10000,"low":0,"lowFreq":80,"high":0,"highFreq":3000,"mix":1,"out":0},
 "view":{"x":0,"y":0},
 "cogs":[
   {"id":1,"x":0,"y":0,"n":24,"motor":{"rpm":30.5,"revs":1},"layer":0,"th":0,"track":null},

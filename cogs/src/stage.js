@@ -1081,7 +1081,7 @@ function buildPanel(lead){
   lead?.(btn);
   btn('undo',()=>edits.undo());btn('redo',()=>edits.redo());
   btn('audio',initAudio);btn('pause',()=>setPaused(!clock.paused));btn('del',removeSel);
-  btn('demo',demo);btn('clear',()=>deserialize({S:{...S},SPACE:{...SPACE},view:{x:0,y:0},cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[]}));
+  btn('demo',demo);btn('clear',()=>deserialize({S:{...S},SPACE:{...SPACE},climax:{...CLIMAX},view:{x:0,y:0},cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[]}));
   inspector=section('selection');inspector.id='inspector';
   const room=section('room'),sRow=(f,def,o,dflt,after)=>numRow(f,def[1],def[2],def[3],def[4],...bind(o,def[0],after),dflt[def[0]]);
   // the reverb's mode and color are named choices; the rest are sliders
@@ -1089,6 +1089,9 @@ function buildPanel(lead){
     :sRow(f,def,SPACE,SPACE_DEFAULT,roomEdited);
   for(const k of ROOM_SPACE)spRow(room,SPACE_DEFS.find(d=>d[0]===k));
   for(const k of ROOM_S)sRow(room,S_DEFS.find(d=>d[0]===k),S,S_DEFAULT,()=>{applyAudioSettings();changed(k!=='master')});
+  // the master's line amp (climax.js), every knob
+  const clx=section('master · climax');
+  for(const def of CLIMAX_DEFS)(def[4]===1&&def[3]===1?toggleRow(clx,def[1],...bind(CLIMAX,def[0],climaxEdited)):sRow(clx,def,CLIMAX,CLIMAX_DEFAULT,climaxEdited));
   fileSection();
   const adv=el('details',{},el('summary',{textContent:'advanced'}));panel.append(adv);
   const wf=section('world',adv);

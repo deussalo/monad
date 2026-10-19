@@ -10,6 +10,8 @@ const BPM = 140;
 
 const W = { S: { bpm: BPM, beats: 4, seed: 7, meshTol: 4, coaxTol: 6, snapTol: 16, vRef: 500, velCurve: .72, master: .6, lookahead: .2, maxStep: .05, zoom: 1, windows: 0, ids: 0, ratios: 0 },
   SPACE: { dry: 1, wet: .22, predelay: 18, size: .9, decay: 2.2, lowMult: .8, highMult: .45, lowCross: 200, highCross: 4500, diffusion: .75, density: .6, modRate: .3, modDepth: .5, shimmer: 0, shimmerPitch: 12, freeze: 0, width: 1.2, duck: .35, lowCut: 160, highCut: 11000 },
+  // the master's line amp pushed for a dubstep master: hotter drive, more grit, the top end excited, the sub lifted
+  climax: { on: 1, drive: 5, sat: 55, classA: 1, excite: 6, air: 3.5, airFreq: 9000, low: 2.5, lowFreq: 60, high: 1, highFreq: 2500, mix: 1, out: -1 },
   view: { x: 0, y: 0 }, cogs: [], arms: [], pads: [], readers: [], belts: [], strings: [], cams: [], pits: [], probes: [], fields: [] };
 let nid = 1; const id = () => nid++;
 

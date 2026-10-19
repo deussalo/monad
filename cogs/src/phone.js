@@ -346,6 +346,9 @@ function roomSectors(){
   out.push(defSector('level',S,S_DEFS.find(d=>d[0]==='master'),roomEdited));
   out.push(choiceSector('quant','ratio snap',[0,1],()=>S.ratios,x=>{S.ratios=x;changed(true)},onOff));
   out.push(numSector('tempo','tempo bpm',S,'bpm',0,300,1,()=>changed(true)),numSector('beats','beats/bar',S,'beats',1,16,1,()=>changed(true)));
+  // the master's line amp: in or out, then the knobs that colour it
+  out.push(choiceSector('hard','line amp',[0,1],()=>CLIMAX.on,x=>{CLIMAX.on=x;climaxEdited()},onOff));
+  for(const[k,icon]of [['drive','level'],['sat','damp'],['excite','shimmer'],['air','air']])out.push(defSector(icon,CLIMAX,CLIMAX_DEFS.find(d=>d[0]===k),climaxEdited));
   out.push({icon:'seal',label:'share',action:share});
   return out;
 }

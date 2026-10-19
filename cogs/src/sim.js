@@ -85,6 +85,8 @@ const makeVoice=(kind,common={level:.7,velSense:.7})=>kind==='wave'?waveVoice(WA
 const ROOM_SPACE=['mode','color','wet','size','decay','highCut','shimmer','freeze'],ROOM_S=['master','bpm','beats'];
 const LOOKAHEAD_MIN=.12;
 const S_DEFAULT={...S},SPACE_DEFAULT={...SPACE};
+// The master's line amp (climax.js): its knobs, saved with the world as `climax`.
+const CLIMAX={...CLIMAX_DEFAULT};
 
 /* ---------- world ---------- */
 const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],cams:[],pits:[],probes:[],fields:[],next:1};
@@ -294,7 +296,7 @@ function advance(tEnd){
 }
 
 /* ---------- audio ---------- */
-let ac=null,engineNode=null,engineState='off',engineStats={},master=null,distant=null,meter=null,drumBus=null,noise=null,peak=0;
+let ac=null,engineNode=null,engineState='off',engineStats={},master=null,climaxNode=null,distant=null,meter=null,drumBus=null,noise=null,peak=0;
 const strikes=[];
 function initAudio(){
   if(ac){if(ac.state!=='running')ac.resume();return}
@@ -319,6 +321,10 @@ function initAudio(){
     engineNode.port.onmessage=e=>{if(e.data.type==='stats')engineStats=e.data};
     engineNode.onprocessorerror=()=>{engineState='processor error'};
     drumBus=ac.createGain();drumBus.connect(engineNode);engineNode.connect(master,0);startWave();startFields();
+    // the line amp goes in between the master fader and the room's distance filter
+    climaxNode=new AudioWorkletNode(ac,'cogs-climax',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[2],channelCount:2,channelCountMode:'explicit'});
+    climaxNode.port.postMessage({type:'climax',...CLIMAX});
+    master.disconnect(distant);master.connect(climaxNode);climaxNode.connect(distant);
     engineState='ready';
   }).catch(err=>{engineState='failed: '+String(err.message).slice(0,160)});
   ac.resume();
@@ -408,6 +414,7 @@ function toStart(){
 /* ---------- persistence ---------- */
 let saveTimer=0;
 function roomEdited(){applyAudioSettings();changed()}
+function climaxEdited(){climaxNode?.port.postMessage({type:'climax',...CLIMAX});changed()}
 function changed(structural){
   if(structural)solve();
   clearTimeout(saveTimer);saveTimer=setTimeout(()=>storage.put(JSON.stringify(serialize())),400);
@@ -451,7 +458,7 @@ function restore(s){
 addEventListener('pointerdown',()=>{edits.held=true},true);
 for(const type of ['pointerup','pointercancel'])addEventListener(type,()=>{edits.held=false;if(edits.pending)edits.commit()});
 function serialize(){
-  return {S,SPACE,view,
+  return {S,SPACE,climax:CLIMAX,view,
     cogs:W.cogs.map(c=>({id:c.id,x:c.x,y:c.y,n:c.n,motor:c.motor&&{...c.motor},layer:c.layer,th:wrap(c.th),
       track:c.track&&{...c.track,dots:c.track.dots.map(d=>({ring:d.ring,a:d.a,p:d.p,v:d.v,len:d.len}))}})),
     arms:W.arms.map(a=>({id:a.id,cog:a.cog.id,a:a.a,r0:a.r0,len:a.len,flex:a.flex})),
@@ -506,7 +513,8 @@ function deserialize(j){
   next.fields=(j.fields||[]).map(fieldIn);
   Object.assign(W,next);
   W.next=1+Math.max(0,...Object.values(next).flat().map(o=>o.id));
-  Object.assign(S,j.S);Object.assign(SPACE,migrateSpace(j.SPACE));Object.assign(view,j.view);
+  Object.assign(S,j.S);Object.assign(SPACE,migrateSpace(j.SPACE));Object.assign(CLIMAX,climaxIn(j.climax));Object.assign(view,j.view);
+  climaxNode?.port.postMessage({type:'climax',...CLIMAX});
   // Older saves schedule 60 ms ahead, too close for a phone's main thread: notes landed late and the groove dragged.
   S.lookahead=Math.max(S.lookahead,LOOKAHEAD_MIN);
   select(null);solve();applyAudioSettings();syncRows();changed();
