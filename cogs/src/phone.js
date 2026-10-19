@@ -128,7 +128,7 @@ function mount(){
   for(const[kind,describe]of Object.entries(GESTURE_READOUT)){
     const make=G[kind];G[kind]=(...args)=>{const g=make(...args);g.readout=()=>describe(...args);return g};
   }
-  cv.addEventListener('pointerdown',()=>showInteraction(gesture?.g.readout||(()=>`view zoom: ${Math.round(S.zoom*100)}%`),true));
+  cv.addEventListener('pointerdown',()=>showInteraction(twist?.readout||gesture?.g.readout||(()=>`view zoom: ${Math.round(S.zoom*100)}%`),true));
   document.addEventListener('pointerdown',e=>{if(e.target===cv)return;const read=rollReadout(e)||controlReadout(e.target);if(read)showInteraction(read,true)});
   document.addEventListener('pointermove',e=>{if(e.buttons){const read=rollReadout(e);if(read)showInteraction(read,true)}});
   for(const type of ['input','change','click'])document.addEventListener(type,e=>{const read=controlReadout(e.target);if(read)showInteraction(read)});

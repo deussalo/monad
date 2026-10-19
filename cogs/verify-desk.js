@@ -335,6 +335,27 @@ const SHOTS = process.env.COGS_SHOTS || '';
   await p.keyboard.press('Control+z'); await settle(); await p.keyboard.press('Control+z'); await settle(); await p.keyboard.press('Control+z'); await settle();
   is('three ctrl+z: paste, cut and paste undone', await train(), orig);
 
+  console.log('NO OVERLAP, AND ROTATE');
+  await p.click('button[data-act=clear]'); await settle();
+  await rail('cog'); await click([-100, 0]); await click([100, 0]); await rail('select');
+  const two = () => probe(() => __cogs.W.cogs.map(c => ({ x: c.x, y: c.y, th: c.th, jam: c.jam })));
+  const R2 = await probe(() => 2 * __cogs.radius({ n: 12 }));
+  await p.mouse.move(...await scr([100, 0])); await p.mouse.down();
+  let worst = Infinity, jams = false;
+  for (const q of [[0, 0], [-60, 0], [-90, 5], [-100, 10], [-120, 20]]) {
+    await p.mouse.move(...await scr(q), { steps: 6 }); await wait(30);
+    const t = await two(); worst = Math.min(worst, Math.hypot(t[1].x - t[0].x, t[1].y - t[0].y)); jams = jams || t.some(c => c.jam);
+  }
+  await p.mouse.up(); await settle();
+  check('drag a cog into another: it stops at the rim and slides round it, nothing jams', worst >= R2 - 1e-6 && !jams, [+worst.toFixed(3), +R2.toFixed(3), jams]);
+  const [rx0, ry0] = await scr([-200, -100]), [rx1, ry1] = await scr([0, 100]);
+  await p.keyboard.down('Control'); await p.mouse.move(rx0, ry0); await p.mouse.down(); await p.mouse.move(rx1, ry1, { steps: 8 }); await p.mouse.up(); await p.keyboard.up('Control');
+  const r0 = await two(), piv = [(r0[0].x + r0[1].x) / 2, (r0[0].y + r0[1].y) / 2];
+  await p.keyboard.down('Alt'); await p.mouse.move(...await scr([piv[0] + 80, piv[1]])); await p.mouse.down();
+  await p.mouse.move(...await scr([piv[0], piv[1] + 80]), { steps: 10 }); await p.mouse.up(); await p.keyboard.up('Alt'); await settle();
+  const r1 = await two(), turned = r1.every((c, i) => near(c.x - piv[0], -(r0[i].y - piv[1]), 1e-6) && near(c.y - piv[1], r0[i].x - piv[0], 1e-6) && near(c.th - r0[i].th, Math.PI / 2, 1e-6));
+  check('alt+drag a quarter turn: the pair turns about its centre, teeth and all, still meshed', turned && r1.every(c => !c.jam), r1);
+
   check('page errors', errs.length === 0, errs.slice(0, 3));
   console.log(pass ? '\nCOGS DESK: PASS' : '\nCOGS DESK: FAIL');
   await b.close(); process.exit(pass ? 0 : 1);

@@ -672,6 +672,30 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   check('point under the cursor stays put', near(u0[0], u1[0], .5) && near(u0[1], u1[1], .5), [u0, u1]);
   check('desktop page errors', derrs.length === 0, derrs.slice(0, 3));
 
+  console.log('TWIST TO ROTATE');
+  const tw = await phone();
+  await tw.p.goto(FILE); await wait(500);
+  const pair = await tw.probe(() => {
+    const W = __cogs.W; for (const k of ['cogs', 'readers', 'arms', 'pads', 'belts', 'cams', 'pits', 'strings', 'probes', 'fields']) if (W[k]) W[k].length = 0;
+    const R = __cogs.radius({ n: 12 }), mk = (x, y) => ({ id: W.next++, x, y, n: 12, motor: null, turns: 0, layer: 0, th: 0, w: 0, track: null });
+    W.cogs.push(mk(0, 0), mk(2 * R, 0)); __cogs.solve(); return { R, zoom: __cogs.S.zoom };
+  });
+  const twScr = w => tw.probe(([x, y]) => { const s = __cogs.toScreen({ x, y }); return [s.x, s.y]; }, w);
+  const [hx, hy] = await twScr([0, 0]), [ax, ay] = await twScr([-60, -60]), [zx, zy] = await twScr([2 * pair.R + 30, 60]);
+  await tw.touch('touchStart', [[0, ax, ay]]); await wait(450);
+  for (let k = 1; k <= 8; k++) { await tw.touch('touchMove', [[0, ax + (zx - ax) * k / 8, ay + (zy - ay) * k / 8]]); await wait(16); }
+  await tw.touch('touchEnd', []); await wait(300);
+  is('hold and box both cogs', await tw.probe(() => __cogs.group), ['cog', 'cog']);
+  const tw0 = await tw.probe(() => __cogs.W.cogs.map(c => [c.x, c.y])), f = a => [hx + Math.cos(a) * 80, hy + Math.sin(a) * 80];
+  await tw.touch('touchStart', [[0, hx, hy]]); await wait(30); await tw.touch('touchStart', [[0, hx, hy], [1, ...f(0)]]);
+  for (let k = 1; k <= 20; k++) { await tw.touch('touchMove', [[0, hx, hy], [1, ...f(k / 20 * Math.PI / 2)]]); await wait(16); }
+  await tw.touch('touchEnd', [[0, hx, hy]]); await tw.touch('touchEnd', []); await wait(300);
+  const tw1 = await tw.probe(() => ({ at: __cogs.W.cogs.map(c => [c.x, c.y]), jam: __cogs.W.cogs.some(c => c.jam), zoom: __cogs.S.zoom }));
+  const mxw = (tw0[0][0] + tw0[1][0]) / 2, myw = (tw0[0][1] + tw0[1][1]) / 2;
+  check('one finger holds the group, a second twists it a quarter turn about its centre; the view does not zoom',
+    tw1.at.every(([x, y], i) => near(x - mxw, -(tw0[i][1] - myw), 1e-6) && near(y - myw, tw0[i][0] - mxw, 1e-6)) && !tw1.jam && tw1.zoom === pair.zoom, tw1);
+  check('twist page errors', tw.errs.length === 0, tw.errs.slice(0, 3));
+
   if (SHOTS) { await m.world('zoom', 1); await m.dev(false); await m.dbl(await m.empty()); await m.shot('13-alpha-machine'); await tp.shot('14-pinched'); }
   check('page errors', m.errs.length === 0 && tp.errs.length === 0, [...m.errs, ...tp.errs].slice(0, 3));
   console.log(pass ? '\nCOGS: PASS' : '\nCOGS: FAIL');

@@ -2098,6 +2098,41 @@ function snap(c){
   c.x=best.x+(c.x-best.x)/d*R;c.y=best.y+(c.y-best.y)/d*R;
   interlock(c,best);
 }
+// Cogs never overlap. A cog's spot is clear when it misses every other cog on its layer (teeth in mesh touch,
+// they do not overlap) or shares its axle; `skip` holds cogs moving with it, rigid with each other.
+function clashes(c,skip){
+  for(const o of W.cogs){
+    if(o===c||o.layer!==c.layer||skip?.has(o))continue;
+    const d=Math.hypot(c.x-o.x,c.y-o.y);if(d>S.coaxTol&&d-radius(o)-radius(c)<-S.meshTol)return true;
+  }
+  return false;
+}
+const overlaps=()=>{let n=0;for(const c of W.cogs)if(clashes(c))n++;return n};
+// Move cogs rigidly: `ms` holds [cog, x0, y0], and the wanted offset is (dx,dy). An offset that would overlap
+// anything gives way to the nearest clear one, where a moving cog sits in mesh against one cog or nestles
+// between two; failing that the cogs keep `last`. Returns the offset used, with the cogs placed at it.
+function clearShift(ms,dx,dy,last=null){
+  const set=new Set(ms.map(m=>m[0]));
+  const at=(ex,ey)=>{for(const[o,x,y]of ms){o.x=x+ex;o.y=y+ey}return !ms.some(([o])=>clashes(o,set))};
+  if(!ms.length||at(dx,dy))return [dx,dy];
+  // in offset space each mover/obstacle pair rules out a disc; the nearest clear offset lies on their rims
+  const rims=[];
+  for(const[m,x,y]of ms)for(const o of W.cogs)if(!set.has(o)&&o.layer===m.layer&&Math.hypot(m.x-o.x,m.y-o.y)>S.coaxTol)
+    rims.push({x:o.x-x,y:o.y-y,R:radius(o)+radius(m)});
+  const cand=[],away=last?Math.atan2(dy-last[1],dx-last[0])+Math.PI:0;
+  for(const r of rims){const ex=dx-r.x,ey=dy-r.y,d=Math.hypot(ex,ey);
+    if(d>=r.R)continue;const a=d>1e-9?Math.atan2(ey,ex):away;cand.push([r.x+Math.cos(a)*r.R,r.y+Math.sin(a)*r.R])}
+  const near=rims.filter(r=>Math.hypot(dx-r.x,dy-r.y)<r.R+400);
+  for(let i=0;i<near.length;i++)for(let j=i+1;j<near.length;j++){
+    const a=near[i],b=near[j],D=Math.hypot(b.x-a.x,b.y-a.y);if(D<1e-9||D>a.R+b.R||D<Math.abs(a.R-b.R))continue;
+    const l=(a.R*a.R-b.R*b.R+D*D)/(2*D),h=Math.sqrt(Math.max(0,a.R*a.R-l*l)),ux=(b.x-a.x)/D,uy=(b.y-a.y)/D,px=a.x+ux*l,py=a.y+uy*l;
+    cand.push([px-uy*h,py+ux*h],[px+uy*h,py-ux*h]);
+  }
+  cand.sort((p,q)=>Math.hypot(p[0]-dx,p[1]-dy)-Math.hypot(q[0]-dx,q[1]-dy));
+  for(const[ex,ey]of cand)if(at(ex,ey))return [ex,ey];
+  if(last){at(...last);return last}
+  at(dx,dy);return [dx,dy];
+}
 // Change a cog's tooth count keeping every mesh: it grows away from the neighbour toward its driver,
 // and whatever it drives slides along its line of centres, carrying its axle-mates and the readers on it.
 function resizer(c){
@@ -3026,6 +3061,10 @@ function pasteParts(){
   for(const k of Object.keys(c))j[k].push(...c[k]);
   reload(j);
   const made=new Set(id.values()),pasted=PART_LISTS.flatMap(type=>W[type+'s'].filter(o=>made.has(o.id)).map(o=>({type,o})));
+  // a paste that would land on cogs slides to the nearest clear spot, everything it brought with it
+  const pc=pasted.filter(x=>x.type==='cog').map(({o})=>[o,o.x,o.y]),[ex,ey]=clearShift(pc,0,0);
+  if(ex||ey)for(const{type,o}of pasted){if(type==='cog')continue;if(o.balls)shiftPit(o,ex,ey);else if('x'in o){o.x+=ex;o.y+=ey}if('x1'in o&&!o.on){o.x1+=ex;o.y1+=ey;o.x2+=ex;o.y2+=ey}}
+  if(ex||ey)solve();
   if(pasted.length===1)select(pasted[0].type,pasted[0].o);else group=pasted;
   changed(true);return true;
 }
@@ -3044,6 +3083,7 @@ function boxSelect(a,b){
   return g;
 }
 function drawGroup(){
+  if(ui.turn){const p=toScreen(ui.turn.pivot);cx.setTransform(dpr,0,0,dpr,0,0);cx.strokeStyle=SEL;cx.lineWidth=1;circle(p.x,p.y,4);line(p.x-9,p.y,p.x+9,p.y);line(p.x,p.y-9,p.x,p.y+9)}
   if(!group.length&&!marquee)return;
   cx.setTransform(dpr,0,0,dpr,0,0);cx.strokeStyle=SEL;cx.lineWidth=1;cx.setLineDash([5,4]);
   if(marquee){const a=toScreen(marquee.a),b=toScreen(marquee.b);cx.globalAlpha=.08;cx.fillStyle=SEL;cx.fillRect(a.x,a.y,b.x-a.x,b.y-a.y);cx.globalAlpha=1;cx.strokeRect(a.x,a.y,b.x-a.x,b.y-a.y)}
@@ -3071,7 +3111,14 @@ function placeCog(c,p){
   const axle=W.cogs.find(o=>o!==c&&Math.hypot(o.x-p.x,o.y-p.y)<=Math.max(S.coaxTol,10/S.zoom));
   c.x=axle?axle.x:p.x;c.y=axle?axle.y:p.y;
   c.layer=axle?Math.max(...stackOf(axle).filter(o=>o!==c).map(o=>o.layer))+1:0;
-  if(!axle)snap(c);solve();
+  if(!axle){clearShift([[c,c.x,c.y]],0,0);snapClear(c)}solve();
+}
+// Snap into mesh only where that overlaps nothing; the rest of `stack` rides along with c.
+function snapClear(c,stack=[c]){
+  const bx=c.x,by=c.y,th=c.th;snap(c);const ex=c.x-bx,ey=c.y-by;if(!ex&&!ey)return false;
+  for(const o of stack)if(o!==c){o.x+=ex;o.y+=ey}
+  const set=new Set(stack);if(!stack.some(o=>clashes(o,set)))return true;
+  for(const o of stack){o.x-=ex;o.y-=ey}c.x=bx;c.y=by;c.th=th;return false;
 }
 const rpmOf=c=>c.w*60/TAU;
 // Ratio snap (S.ratios): a resized cog takes only tooth counts in a simple ratio to the cog it meshes with,
@@ -3144,7 +3191,10 @@ const G={
   group(s0){
     for(const{type,o}of group)if(type==='reader'&&o.on&&!group.some(x=>x.o===o.on))o.on=null;
     const p0=screenToWorld(s0),start=group.map(({o})=>({o,s:{x:o.x,y:o.y,x1:o.x1,y1:o.y1,x2:o.x2,y2:o.y2}}));
-    return {o:null,move(s){trackScrap(s);const q=screenToWorld(s),dx=q.x-p0.x,dy=q.y-p0.y;
+    // the group's cogs keep clear of every cog outside it, and the rest of the group moves as far as they do
+    const cogs=group.filter(x=>x.type==='cog').map(({o})=>[o,o.x,o.y]),stuck=cogs.some(([o])=>clashes(o,new Set(cogs.map(m=>m[0]))));let last=stuck?null:[0,0];
+    return {o:null,grp:true,move(s){trackScrap(s);const q=screenToWorld(s);
+        const[dx,dy]=ui.scrap?[q.x-p0.x,q.y-p0.y]:(last=clearShift(cogs,q.x-p0.x,q.y-p0.y,last));
         for(const{o,s:k}of start){if(o.balls){shiftPit(o,k.x+dx-o.x,k.y+dy-o.y);continue}if('x'in o){o.x=k.x+dx;o.y=k.y+dy}if('x1'in o){o.x1=k.x1+dx;o.y1=k.y1+dy;o.x2=k.x2+dx;o.y2=k.y2+dy}}solve()},
       up(){if(ui.scrap){ui.scrap=false;removeSel()}else changed(true)}};
   },
@@ -3231,10 +3281,14 @@ const G={
   belt(b){return {o:b,move:trackScrap,up(){endScrap('belt',b)},tap(){b.cross=b.cross?0:1;buzz(8);changed(true)}}},
   cog(c,s0){
     const p0=screenToWorld(s0),stack=stackOf(c),start=stack.map(o=>[o,o.x,o.y]);
+    // The stack never overlaps another cog: pushed into one it stops at the nearest clear spot, in mesh at its rim,
+    // and nothing it passes over moves or jams. A stack that starts overlapping (an old save) moves freely until clear.
+    let last=stack.some(o=>clashes(o,new Set(stack)))?null:[0,0];
     return {o:c,
-      move(s){trackScrap(s);const q=screenToWorld(s);for(const[o,x,y]of start){o.x=x+q.x-p0.x;o.y=y+q.y-p0.y}
-        const bx=c.x,by=c.y;snap(c);const snapped=c.x!==bx||c.y!==by;if(snapped&&!ui.snapped)buzz(8);ui.snapped=snapped;
-        for(const o of stack)if(o!==c){o.x+=c.x-bx;o.y+=c.y-by}solve()},
+      move(s){trackScrap(s);const q=screenToWorld(s),dx=q.x-p0.x,dy=q.y-p0.y;
+        if(ui.scrap){for(const[o,x,y]of start){o.x=x+dx;o.y=y+dy}solve();return}
+        const was=last;last=clearShift(start,dx,dy,last);const blocked=was&&(last[0]!==dx||last[1]!==dy);
+        const snapped=snapClear(c,stack)||blocked;if(snapped&&!ui.snapped)buzz(8);ui.snapped=snapped;solve()},
       up(){ui.snapped=false;if(ui.scrap){ui.scrap=false;for(const o of stack)removeObj('cog',o)}else changed(true)},
       tap(){choose('cog',c)},dbl(s){focus('cog',c,s)}};
   },
@@ -3246,7 +3300,7 @@ const G={
         if(!mode){const sc=toScreen(c),rx=s0.x-sc.x,ry=s0.y-sc.y,mx=s.x-s0.x,my=s.y-s0.y;
           mode=Math.abs(mx*rx+my*ry)>Math.abs(mx*ry-my*rx)?'teeth':motorOf(c)?'crank':'idle';
           if(mode==='crank'){ui.crank={c};dial=gaugeAngle(rpmOf(c));at=ang(s0)}}
-        if(mode==='teeth'){grow??=resizer(c);const n=ratioSnap(c,grow.anchor,clamp(Math.round(grow.radiusThrough(screenToWorld(s))*TAU/TOOTH),min,240),min);if(n!==c.n){grow.set(n);buzz(3)}return}
+        if(mode==='teeth'){grow??=resizer(c);const n=ratioSnap(c,grow.anchor,clamp(Math.round(grow.radiusThrough(screenToWorld(s))*TAU/TOOTH),min,240),min);if(n!==c.n){const was=c.n,jams=overlaps();grow.set(n);if(overlaps()>jams)grow.set(was);else buzz(3)}return}
         if(mode==='idle')return;
         const a=ang(s);dial=clamp(dial+wrapPi(a-at),-GAUGE_SWEEP,GAUGE_SWEEP);at=a;drive(c,gaugeRpm(dial));
       },
@@ -3289,6 +3343,59 @@ const G={
       tap(){clearTimeout(hold);ui.room=!sel&&!group.length&&!ui.room;select(null)},dbl(){clearTimeout(hold);flyFit()}};
   },
 };
+/* rotate a selection: alt+drag on a desktop, a twist of two fingers on touch */
+const rotItems=()=>group.length?group:sel&&sel.type!=='dot'?[sel]:[];
+// Turn parts rigidly about the centre of their bounds. A cog turns its teeth and pins with it, so the train
+// still meshes and each disc meets its readers where it did; readers and cams riding a turning cog turn with it,
+// arms and probes ride along on their own. A turn that would overlap a cog outside stops at the nearest clear angle.
+function turner(items){
+  const has=new Set(items.map(x=>x.o));
+  for(const{type,o}of items)if(type==='reader'&&o.on&&!has.has(o.on))o.on=null;
+  const pts=items.flatMap(({type,o})=>type==='cog'||type==='pad'||type==='pit'||type==='field'?[o]:type==='reader'||type==='string'?[{x:o.x1,y:o.y1},{x:o.x2,y:o.y2}]:[]);
+  if(!pts.length)return null;
+  const xs=pts.map(p=>p.x),ys=pts.map(p=>p.y),pivot={x:(Math.min(...xs)+Math.max(...xs))/2,y:(Math.min(...ys)+Math.max(...ys))/2};
+  const cogs=items.filter(x=>x.type==='cog').map(x=>x.o),set=new Set(cogs);
+  const start=items.map(({type,o})=>({type,o,x:o.x,y:o.y,x1:o.x1,y1:o.y1,x2:o.x2,y2:o.y2}));
+  const seats=W.readers.filter(r=>r.on&&set.has(r.on)).map(r=>[r,r.seat.ang]),cams=W.cams.filter(m=>set.has(m.cog)).map(m=>[m,m.ang]);
+  let cur=0;
+  const put=a=>{
+    const c=Math.cos(a),n=Math.sin(a),rot=(x,y)=>[pivot.x+(x-pivot.x)*c-(y-pivot.y)*n,pivot.y+(x-pivot.x)*n+(y-pivot.y)*c];
+    for(const k of start){const o=k.o;
+      if(k.type==='cog'){[o.x,o.y]=rot(k.x,k.y);o.th+=a-cur}
+      else if(k.type==='pit'){const[x,y]=rot(k.x,k.y);shiftPit(o,x-o.x,y-o.y)}
+      else if(k.type==='pad'||k.type==='field')[o.x,o.y]=rot(k.x,k.y);
+      else if((k.type==='reader'||k.type==='string')&&!o.on){[o.x1,o.y1]=rot(k.x1,k.y1);[o.x2,o.y2]=rot(k.x2,k.y2)}}
+    for(const[r,a0]of seats)r.seat.ang=a0+a;
+    for(const[m,a0]of cams)m.ang=a0+a;
+    cur=a;return !cogs.some(o=>clashes(o,set));
+  };
+  let last=put(0)?0:null;
+  return {pivot,get angle(){return cur},
+    turn(a){
+      if(put(a)||last===null){if(last!==null)last=a;solve();return}
+      for(let i=1;i<=24;i++){const b=a+(last-a)*i/24;if(put(b)){last=b;solve();return}}
+      put(last);solve();
+    }};
+}
+const degText=a=>`${Math.round(a*180/Math.PI)}°`;
+G.rotate=function(s0){
+  const t=turner(rotItems());if(!t)return G.pan(s0);ui.turn=t;
+  const ang=s=>{const p=toScreen(t.pivot);return Math.atan2(s.y-p.y,s.x-p.x)};let prev=ang(s0),acc=0;
+  return {o:null,readout:()=>`rotate parts: ${degText(t.angle)}`,
+    // shift turns in 15° steps
+    move(s){const a=ang(s);acc+=wrapPi(a-prev);prev=a;t.turn(ui.shift?Math.round(acc/(Math.PI/12))*Math.PI/12:acc)},
+    up(){ui.turn=null;changed(true)},cancel(){ui.turn=null;changed(true)},tap(){ui.turn=null}};
+};
+// Two fingers twisting: the angle of the line between them turns the selection, which settles on whole
+// eighths of a turn when it comes within 3° of one.
+G.twist=function(){
+  const t=turner(rotItems());if(!t)return null;ui.turn=t;buzz(10);
+  const pair=()=>{const[a,b]=[...fingers.values()];return Math.atan2(b.y-a.y,b.x-a.x)};let prev=pair(),acc=0,held=false;
+  return {readout:()=>`rotate parts: ${degText(t.angle)}`,rebase(){prev=pair()},
+    move(){const a=pair();acc+=wrapPi(a-prev);prev=a;const q=Math.round(acc/(Math.PI/4))*Math.PI/4,hold=Math.abs(acc-q)<3*Math.PI/180;
+      if(hold&&!held)buzz(6);held=hold;t.turn(hold?q:acc)},
+    up(){ui.turn=null;changed(true)}};
+};
 function begin(s){
   const ch=chromeHit(s);if(ch)return ch();
   const p=screenToWorld(s),Z=S.zoom,dist=q=>Math.hypot(q.x-p.x,q.y-p.y)*Z;
@@ -3317,6 +3424,7 @@ function begin(s){
 }
 
 function pointerGesture(e,s){
+  if(e.altKey&&!offStage(s)&&!chromeHit(s)&&rotItems().length)return G.rotate(s);
   if(e.ctrlKey||e.metaKey)return G.marquee(s);
   if(ui.linking&&!offStage(s))return linkGesture(s);
   if(ui.armed&&!offStage(s))return G.armed(ui.armed,s);
@@ -3329,7 +3437,7 @@ function pointerGesture(e,s){
 cv.addEventListener('contextmenu',e=>e.preventDefault());
 const local=e=>{const r=cv.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top}};
 function zoomAt(s,zoom,anchor){S.zoom=clamp(zoom,ZMIN,ZMAX);view.x=anchor.x-(s.x-CW/2)/S.zoom;view.y=anchor.y-(s.y-CH/2)/S.zoom}
-const fingers=new Map();let pinch=null,gesture=null;
+const fingers=new Map();let pinch=null,gesture=null,twist=null;
 function pinchNow(){const[a,b]=[...fingers.values()];return {mid:{x:(a.x+b.x)/2,y:(a.y+b.y)/2},d:Math.hypot(a.x-b.x,a.y-b.y)||1}}
 // The pinch measures from the fingers down now; whenever one lands or lifts it starts over from here.
 function repinch(){const p=pinchNow();pinch={...p,zoom:S.zoom,anchor:screenToWorld(p.mid)}}
@@ -3339,12 +3447,18 @@ function dropGesture(){
 }
 cv.addEventListener('pointerdown',e=>{
   cv.setPointerCapture(e.pointerId);const s=local(e);fingers.set(e.pointerId,s);ui.cam=null;
-  if(fingers.size>=2){dropGesture();repinch();return}
+  // A second finger zooms the view, unless the first is holding the selection: then the two twist it.
+  if(fingers.size>=2){
+    if(twist){twist.rebase();return}
+    const g=gesture?.g;
+    if(fingers.size===2&&e.pointerType==='touch'&&g&&(g.grp||g.o&&isSel(g.o))){dropGesture();twist=G.twist();if(twist)return}
+    dropGesture();repinch();return}
   if(fingers.size===1&&!pinch)gesture={id:e.pointerId,g:pointerGesture(e,s),s0:s,last:s,t0:e.timeStamp,moved:false};
 });
 cv.addEventListener('pointerleave',()=>{ui.hover=null});
 cv.addEventListener('pointermove',e=>{
-  ui.hover=local(e);if(!fingers.has(e.pointerId))return;const s=local(e);fingers.set(e.pointerId,s);
+  ui.hover=local(e);ui.shift=e.shiftKey;if(!fingers.has(e.pointerId))return;const s=local(e);fingers.set(e.pointerId,s);
+  if(twist){if(fingers.size>=2)twist.move();return}
   if(pinch){if(fingers.size>=2){const p=pinchNow();zoomAt(p.mid,pinch.zoom*p.d/pinch.d,pinch.anchor)}return}
   if(!gesture||gesture.id!==e.pointerId)return;
   gesture.last=s;
@@ -3353,6 +3467,7 @@ cv.addEventListener('pointermove',e=>{
 });
 const endPointer=e=>{
   if(!fingers.delete(e.pointerId))return;
+  if(twist){if(fingers.size>=2){twist.rebase();return}twist.up();twist=null;gesture=null;return}
   if(pinch){
     if(fingers.size>=2){repinch();return}
     pinch=null;changed();

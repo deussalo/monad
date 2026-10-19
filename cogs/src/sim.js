@@ -166,6 +166,41 @@ function snap(c){
   c.x=best.x+(c.x-best.x)/d*R;c.y=best.y+(c.y-best.y)/d*R;
   interlock(c,best);
 }
+// Cogs never overlap. A cog's spot is clear when it misses every other cog on its layer (teeth in mesh touch,
+// they do not overlap) or shares its axle; `skip` holds cogs moving with it, rigid with each other.
+function clashes(c,skip){
+  for(const o of W.cogs){
+    if(o===c||o.layer!==c.layer||skip?.has(o))continue;
+    const d=Math.hypot(c.x-o.x,c.y-o.y);if(d>S.coaxTol&&d-radius(o)-radius(c)<-S.meshTol)return true;
+  }
+  return false;
+}
+const overlaps=()=>{let n=0;for(const c of W.cogs)if(clashes(c))n++;return n};
+// Move cogs rigidly: `ms` holds [cog, x0, y0], and the wanted offset is (dx,dy). An offset that would overlap
+// anything gives way to the nearest clear one, where a moving cog sits in mesh against one cog or nestles
+// between two; failing that the cogs keep `last`. Returns the offset used, with the cogs placed at it.
+function clearShift(ms,dx,dy,last=null){
+  const set=new Set(ms.map(m=>m[0]));
+  const at=(ex,ey)=>{for(const[o,x,y]of ms){o.x=x+ex;o.y=y+ey}return !ms.some(([o])=>clashes(o,set))};
+  if(!ms.length||at(dx,dy))return [dx,dy];
+  // in offset space each mover/obstacle pair rules out a disc; the nearest clear offset lies on their rims
+  const rims=[];
+  for(const[m,x,y]of ms)for(const o of W.cogs)if(!set.has(o)&&o.layer===m.layer&&Math.hypot(m.x-o.x,m.y-o.y)>S.coaxTol)
+    rims.push({x:o.x-x,y:o.y-y,R:radius(o)+radius(m)});
+  const cand=[],away=last?Math.atan2(dy-last[1],dx-last[0])+Math.PI:0;
+  for(const r of rims){const ex=dx-r.x,ey=dy-r.y,d=Math.hypot(ex,ey);
+    if(d>=r.R)continue;const a=d>1e-9?Math.atan2(ey,ex):away;cand.push([r.x+Math.cos(a)*r.R,r.y+Math.sin(a)*r.R])}
+  const near=rims.filter(r=>Math.hypot(dx-r.x,dy-r.y)<r.R+400);
+  for(let i=0;i<near.length;i++)for(let j=i+1;j<near.length;j++){
+    const a=near[i],b=near[j],D=Math.hypot(b.x-a.x,b.y-a.y);if(D<1e-9||D>a.R+b.R||D<Math.abs(a.R-b.R))continue;
+    const l=(a.R*a.R-b.R*b.R+D*D)/(2*D),h=Math.sqrt(Math.max(0,a.R*a.R-l*l)),ux=(b.x-a.x)/D,uy=(b.y-a.y)/D,px=a.x+ux*l,py=a.y+uy*l;
+    cand.push([px-uy*h,py+ux*h],[px+uy*h,py-ux*h]);
+  }
+  cand.sort((p,q)=>Math.hypot(p[0]-dx,p[1]-dy)-Math.hypot(q[0]-dx,q[1]-dy));
+  for(const[ex,ey]of cand)if(at(ex,ey))return [ex,ey];
+  if(last){at(...last);return last}
+  at(dx,dy);return [dx,dy];
+}
 // Change a cog's tooth count keeping every mesh: it grows away from the neighbour toward its driver,
 // and whatever it drives slides along its line of centres, carrying its axle-mates and the readers on it.
 function resizer(c){
