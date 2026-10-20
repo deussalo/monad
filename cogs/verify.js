@@ -11,6 +11,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const check = (label, ok, got) => { if (!ok) pass = false; console.log(('  ' + label).padEnd(58), JSON.stringify(got), ok ? '✓' : '✗'); };
   const is = (label, got, want) => check(label, JSON.stringify(got) === JSON.stringify(want), got);
   const near = (a, b, tol) => Math.abs(a - b) <= tol;
+  const is_sel_motor = s => !!s && s.type === 'cog' && s.id === 1;
   const wait = ms => new Promise(r => setTimeout(r, ms));
 
   // One phone page, driven by real touch events through CDP.
@@ -98,7 +99,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const heard = await probe(([t0, span]) => [...new Set(__cogs.stats.log.filter(l => l.t >= t0 && l.t < t0 + span).map(l => l.src.split('>')[1]))].sort(), [g0, 4 * 60 / WANT.S.bpm * 2]);
   is('over two bars every driven pad and reader sounds', heard, [...WANT.pads.map(o => 'pad' + o.id), ...WANT.readers.map(o => 'reader' + o.id)].sort());
   check('default world: no event scheduled late', (await probe(() => __cogs.stats.late)) === 0, await probe(() => __cogs.stats.late));
-  console.log('CRANK ON A BUSY RIM');
+  console.log('THE RIM RESIZES, THE KNOB SETS SPEED');
   await m.glyph();
   const armsNow = () => probe(() => JSON.stringify(__cogs.W.arms.map(a => [a.id, a.a, a.len])));
   const arms0 = await armsNow(), rpm0 = await probe(() => __cogs.W.cogs[0].w * 60 / (2 * Math.PI));
@@ -107,9 +108,16 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   const onRim = a => [rim.cx + Math.cos(a) * rim.R, rim.cy + Math.sin(a) * rim.R];
   await m.stroke([0, 1, 2, 3, 4, 5, 6].map(k => onRim(rim.ang + k * .25)), { steps: 3, frame: 16, mid: async () => { rim.during = await probe(() => __cogs.W.cogs[0].w * 60 / (2 * Math.PI)); } });
   const rpm1 = await probe(() => __cogs.W.cogs[0].w * 60 / (2 * Math.PI));
-  check(`grab the rim where an arm tip passes ${rim.tipGap.toFixed(0)} px away: the rim cranks, the arm is untouched`, (await armsNow()) === arms0 && !near(rim.during, rpm0, 1e-6), [rpm0, rim.during]);
+  check(`slide along the rim where an arm tip passes ${rim.tipGap.toFixed(0)} px away: the speed and the arm are untouched`, (await armsNow()) === arms0 && near(rim.during, rpm0, 1e-6) && near(rpm1, rpm0, 1e-6), [rpm0, rim.during, rpm1]);
+  is('no knob before the motor is selected', await probe(() => __cogs.sel), null);
+  await m.tap([rim.cx, rim.cy]);
+  const knob = await probe(() => { const c = __cogs.W.cogs[0], k = __cogs.knobAt(c); return { d: k.d, a: -Math.PI / 2 }; });
+  const onKnob = a => [rim.cx + Math.cos(a) * knob.d, rim.cy + Math.sin(a) * knob.d];
+  await m.stroke([0, 1, 2, 3, 4, 5, 6].map(k => onKnob(knob.a + k * .25)), { steps: 3, frame: 16, mid: async () => { rim.during = await probe(() => __cogs.W.cogs[0].w * 60 / (2 * Math.PI)); } });
+  const rpm1k = await probe(() => __cogs.W.cogs[0].w * 60 / (2 * Math.PI));
+  check('select the motor and turn its knob: the speed moves along the dial', is_sel_motor(await probe(() => __cogs.sel)) && !near(rim.during, rpm0, 1e-6) && (await armsNow()) === arms0, [rpm0, rim.during]);
   const DETS = [1/8, 1/6, 1/4, 1/3, 1/2, 2/3, 3/4, 1, 4/3, 3/2, 2, 3, 4, 6, 8].map(r => r * WANT.S.bpm / 4), nearest = Math.min(...DETS.map(d => Math.abs(Math.log(Math.abs(rim.during) / d))));
-  check('let go mid-crank: the speed stays where it was left, unless within 6% of a step', nearest < Math.log(1.06) ? DETS.some(d => near(Math.abs(rpm1), d, 1e-6)) : near(rpm1 / rim.during, 1, .15) && !near(rpm1, rpm0, 1e-6), [rim.during, rpm1]);
+  check('let go mid-crank: the speed stays where it was left, unless within 6% of a step', nearest < Math.log(1.06) ? DETS.some(d => near(Math.abs(rpm1k), d, 1e-6)) : near(rpm1k / rim.during, 1, .15) && !near(rpm1k, rpm0, 1e-6), [rim.during, rpm1k]);
   await m.glyph();
 
   await m.act('clear'); await m.world('bpm lock', 0); await m.world('zoom', 1.6); await m.dev(false);
@@ -137,21 +145,44 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
   check('60 rpm drives -120 rpm', JSON.stringify(await rpm()) === '[60,-120]', await rpm());
 
   console.log('CRANK');
-  const top2 = [c2[0], c2[1] - 22.92];
-  const turn = async (from, by, hold) => { const [cx, cy] = await m.scr(c2), [x, y] = await m.scr(top2), r = Math.hypot(x - cx, y - cy), a0 = Math.atan2(y - cy, x - cx) + from;
-    await m.stroke([0, .25, .5, .75, 1].map(k => [cx + Math.cos(a0 + by * k) * r, cy + Math.sin(a0 + by * k) * r]), { steps: 4, frame: 12, mid: hold ? () => wait(hold) : null }); };
+  // The motor's knob turns the speed along the dial; a driven cog's knob scrubs the train and lets it spring back.
+  const knobTurn = async (c, from, by, { hold = 0, steps = 4, frame = 12, mid = null } = {}) => {
+    const [cx, cy] = await m.scr(c), d = await probe(([x, y]) => __cogs.knobAt(__cogs.W.cogs.find(o => Math.hypot(o.x - x, o.y - y) < 1)).d, c), a0 = -Math.PI / 2 + from;
+    await m.stroke([0, .25, .5, .75, 1].map(k => [cx + Math.cos(a0 + by * k) * d, cy + Math.sin(a0 + by * k) * d]), { steps, frame, mid: mid || (hold ? () => wait(hold) : null) }); };
   const dial = rpm => Math.sign(rpm) * Math.log(Math.abs(rpm) / 2.5) / Math.log(120) * 1.7 * Math.PI, undial = a => Math.sign(a) * 2.5 * Math.pow(120, Math.abs(a) / (1.7 * Math.PI));
-  await turn(0, .8, 400);
+  await m.tap(await m.scr(c1));
+  await knobTurn(c1, 0, .8, { hold: 400 });
   const crank = await probe(() => __cogs.W.cogs.map(c => ({ motor: !!c.motor, rpm: c.w * 60 / (2 * Math.PI) })));
-  check('turn the driven cog\'s rim clockwise and hold still before letting go: the motor stays the motor and turns it .8 rad along the dial from -120', crank[0].motor && !crank[1].motor && near(crank[1].rpm, undial(dial(-120) + .8), 4), [crank.map(c => c.rpm), undial(dial(-120) + .8)]);
-  check('the motor turns at half that, the other way', near(crank[0].rpm, -crank[1].rpm / 2, 1e-9), crank.map(c => c.rpm));
-  await turn(.8, -dial((await rpm())[1]));
-  check('turn on clockwise to the middle of the dial: the train stops', JSON.stringify(await rpm()) === '[0,0]', await rpm());
-  await turn(.8, 1.2);
+  check('turn the motor\'s knob clockwise and hold still before letting go: it turns .8 rad along the dial from 60', crank[0].motor && !crank[1].motor && near(crank[0].rpm, undial(dial(60) + .8), 4), [crank.map(c => c.rpm), undial(dial(60) + .8)]);
+  check('the driven cog turns at twice that, the other way', near(crank[1].rpm, -crank[0].rpm * 2, 1e-6), crank.map(c => c.rpm));
+  await knobTurn(c1, 0, -dial((await rpm())[0]));
+  check('turn back anticlockwise to the middle of the dial: the train stops', JSON.stringify(await rpm()) === '[0,0]', await rpm());
+  await knobTurn(c1, 0, -1.2);
   const onward = await rpm();
-  check('and on round: it runs clockwise', onward[1] > 3 && near(onward[0], -onward[1] / 2, 1e-6), onward);
-  if (SHOTS) await m.stroke([await m.scr(top2), await m.scr([c2[0] + 14, top2[1] + 4])], { steps: 6, frame: 8, mid: () => m.shot('03-crank') });
+  check('and on round: it runs anticlockwise', onward[0] < -3 && near(onward[1], -onward[0] * 2, 1e-6), onward);
+  if (SHOTS) await m.stroke([await m.scr([c1[0], c1[1] - 12]), await m.scr([c1[0] + 14, c1[1] - 8])], { steps: 6, frame: 8, mid: () => m.shot('03-crank') });
   await m.tap(await m.scr([c1[0] - 20, c1[1] - 15])); await m.field('rpm', 60); await m.dev(false);
+
+  console.log('SCRUB');
+  await m.tap(await m.scr(c2));
+  is('tap the driven cog: it is selected and shows its knob', await probe(() => __cogs.sel), { type: 'cog', id: 2 });
+  const scrub = {};
+  // sampled in the page every frame while the finger moves: the fastest the train went, and its motor's share then
+  await probe(() => { const r = window.__scrub = { peak: 0, ratio: 0, held: false }; r.id = setInterval(() => { const [m, c] = __cogs.W.cogs; const w = c.w * 60 / (2 * Math.PI); if (w > r.peak) { r.peak = w; r.ratio = m.w / c.w; r.held = !!__cogs.spin?.held; } }, 8); });
+  await knobTurn(c2, 0, 2.4, { steps: 6, frame: 16, mid: async () => { Object.assign(scrub, await probe(() => { clearInterval(__scrub.id); return { ...__scrub, set: __cogs.W.cogs[0].motor.rpm, drag: __cogs.spin.drag }; })); } });
+  check('drag the knob clockwise: the train turns with the drag, not its motor', scrub.held && scrub.drag > 10 && scrub.peak > .7 * scrub.drag && scrub.peak < 1.5 * scrub.drag && near(scrub.ratio, -.5, 1e-6), scrub);
+  is('scrubbing leaves the motor\'s set speed alone', scrub.set, 60);
+  const freed = await probe(() => ({ spin: __cogs.spin, rpm: __cogs.W.cogs[1].w * 60 / (2 * Math.PI) }));
+  check('let go: it is still running free, on its way back', !!freed.spin && !freed.spin.held && !near(freed.rpm, -120, 1), freed);
+  await p.waitForFunction(() => !__cogs.spin, null, { timeout: 4000 });
+  check('and it springs back to its set speed', JSON.stringify(await rpm()) === '[60,-120]', await rpm());
+  is('a scrub is not an edit and never saved', await probe(() => __cogs.serialize().cogs.map(c => c.motor && c.motor.rpm)), [60, null]);
+  await knobTurn(c2, 0, .0001, { steps: 1, frame: 0, hold: 500 });
+  const heldStill = await probe(() => __cogs.W.cogs[1].w * 60 / (2 * Math.PI));
+  check('hold the knob still: the train stops under the hand', Math.abs(heldStill) < 6, heldStill);
+  await p.waitForFunction(() => !__cogs.spin, null, { timeout: 4000 });
+  check('let go: it comes back up to speed', JSON.stringify(await rpm()) === '[60,-120]', await rpm());
+  await m.tap(await m.empty());
 
   console.log('ARMS AND PADS');
   await m.glyph();

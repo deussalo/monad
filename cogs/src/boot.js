@@ -9,5 +9,5 @@ clock.off=nowSec()-simT;
 window.__cogs=Object.defineProperties({W,S,SPACE,stats,clock,get simT(){return simT},serialize,deserialize,solve,toScreen,radius,ringR,armTip,renderTh,beltLines,stringLen,
   get sel(){return sel&&{type:sel.type,id:sel.o.id}},get group(){return group.map(g=>g.type).sort()},get armed(){return ui.armed},get flying(){return !!ui.cam},
   engine:()=>({state:engineState,ac:ac&&ac.state,...engineStats,wave:waveVoices,waveNotes,waveLast}),
-  worldKey,listener,undo:()=>edits.undo(),redo:()=>edits.redo(),get undos(){return edits.past.length},get redos(){return edits.future.length},get pending(){return edits.pending},commit:()=>edits.commit()},Object.getOwnPropertyDescriptors(PROBE));
+  worldKey,listener,knobAt:(c,a)=>knobAt(c,a),get spin(){const p=ui.spin,q=p?.samples;return p&&{id:p.c.id,held:p.held,rpm:p.rpm,drag:q.length>1?(q.at(-1)[1]-q[0][1])/(q.at(-1)[0]-q[0][0])*60/(2*Math.PI):0}},undo:()=>edits.undo(),redo:()=>edits.redo(),get undos(){return edits.past.length},get redos(){return edits.future.length},get pending(){return edits.pending},commit:()=>edits.commit()},Object.getOwnPropertyDescriptors(PROBE));
 setInterval(tick,15);requestAnimationFrame(frame);

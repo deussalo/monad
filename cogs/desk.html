@@ -2081,7 +2081,8 @@ function solve(){
     if(comp.some(c=>c.jam))jam=true;
     const motors=comp.filter(c=>c.motor),driver=motors[0]||null;
     if(motors.length>1)jam=true;
-    const wRoot=driver?motorRpm(driver)*TAU/60/driver.k:0;
+    // a cog held by the speed knob (c.scrub, its rpm; never saved) turns the train at that speed over its motor's
+    const hand=comp.find(c=>c.scrub!=null),wRoot=hand?hand.scrub*TAU/60/hand.k:driver?motorRpm(driver)*TAU/60/driver.k:0;
     for(const c of comp){c.jam=jam;c.w=jam?0:c.k*wRoot;c.driver=driver}
   }
 }
@@ -2489,39 +2490,42 @@ function deserialize(j){
 // Rebuild the world from j with every surviving cog keeping its revolution count.
 function reload(j){const turns=new Map(W.cogs.map(c=>[c.id,c.turns]));deserialize(j);for(const c of W.cogs)c.turns=turns.get(c.id)??0}
 const DEFAULT_WORLD=
-{"S":{"bpm":122,"beats":4,"seed":1,"meshTol":4,"coaxTol":6,"snapTol":16,"vRef":500,"velCurve":0.72,"master":0.75,"lookahead":0.2,"maxStep":0.05,"zoom":1,"windows":0,"ids":0,"ratios":0},
-"SPACE":{"dry":1,"mode":0,"color":1,"wet":0.24,"predelay":22,"decay":1.9,"size":0.4881,"attack":0.15,"early":0.7,"late":0.6,"modRate":0.3,"modDepth":0.3333,"highCut":12000,"lowCut":180,"bassMult":0.8,"bassXover":200,"highShelf":-6.0206,"highFreq":4500,"earlyLate":0.6,"width":1.2,"shimmer":0,"shimmerPitch":12,"freeze":0},
-"climax":{"on":1,"drive":2,"sat":30,"classA":1,"excite":3,"air":2,"airFreq":10000,"low":0,"lowFreq":80,"high":0,"highFreq":3000,"mix":1,"out":0},
+{"S":{"bpm":120,"beats":4,"seed":3,"meshTol":4,"coaxTol":6,"snapTol":16,"vRef":500,"velCurve":0.72,"master":0.72,"lookahead":0.2,"maxStep":0.05,"zoom":1,"windows":0,"ids":0,"ratios":0},
+"SPACE":{"dry":1,"mode":0,"color":1,"wet":0.26,"predelay":28,"decay":2.8,"size":0.62,"attack":0.15,"early":0.6,"late":0.7,"modRate":0.3,"modDepth":0.3333,"highCut":9000,"lowCut":220,"bassMult":0.7,"bassXover":200,"highShelf":-6.0206,"highFreq":4000,"earlyLate":0.65,"width":1.3,"shimmer":0,"shimmerPitch":12,"freeze":0},
+"climax":{"on":1,"drive":2.5,"sat":35,"classA":1,"excite":2,"air":1.5,"airFreq":10000,"low":1,"lowFreq":70,"high":0,"highFreq":3000,"mix":1,"out":0},
 "view":{"x":0,"y":0},
 "cogs":[
-  {"id":1,"x":0,"y":0,"n":24,"motor":{"rpm":30.5,"revs":1},"layer":0,"th":0,"track":null},
-  {"id":2,"x":8.42005115824185e-15,"y":137.50987083139756,"n":48,"motor":null,"layer":0,"th":5.432337296832351,"track":{"root":5,"octave":3,"range":1,"scale":"minpent","div":32,"dots":[{"ring":0,"a":2.552544031041707,"p":1,"v":1,"len":1},{"ring":0,"a":3.3379421944391554,"p":1,"v":1,"len":1},{"ring":0,"a":4.123340357836604,"p":1,"v":1,"len":1},{"ring":0,"a":4.908738521234052,"p":1,"v":1,"len":1},{"ring":0,"a":5.6941366846315,"p":1,"v":1,"len":1},{"ring":0,"a":0.19634954084936207,"p":1,"v":1,"len":1},{"ring":0,"a":0.9817477042468103,"p":1,"v":1,"len":1},{"ring":0,"a":1.7671458676442586,"p":1,"v":1,"len":1},{"ring":1,"a":3.3379421944391554,"p":1,"v":0.9,"len":1},{"ring":1,"a":4.908738521234052,"p":1,"v":0.9,"len":1},{"ring":1,"a":0.19634954084936207,"p":1,"v":0.9,"len":1},{"ring":1,"a":1.7671458676442586,"p":1,"v":0.9,"len":1},{"ring":2,"a":5.497787143782138,"p":1,"v":0.3,"len":1},{"ring":2,"a":1.5707963267948966,"p":1,"v":0.25,"len":1},{"ring":2,"a":2.356194490192345,"p":1,"v":0.35,"len":1},{"ring":3,"a":2.552544031041707,"p":1,"v":0.3,"len":1},{"ring":3,"a":2.748893571891069,"p":1,"v":0.55,"len":1},{"ring":3,"a":3.141592653589793,"p":1,"v":0.55,"len":1},{"ring":3,"a":3.3379421944391554,"p":1,"v":0.3,"len":1},{"ring":3,"a":3.5342917352885173,"p":1,"v":0.55,"len":1},{"ring":3,"a":3.9269908169872414,"p":1,"v":0.55,"len":1},{"ring":3,"a":4.123340357836604,"p":1,"v":0.3,"len":1},{"ring":3,"a":4.319689898685965,"p":1,"v":0.55,"len":1},{"ring":3,"a":4.71238898038469,"p":1,"v":0.55,"len":1},{"ring":3,"a":4.908738521234052,"p":1,"v":0.3,"len":1},{"ring":3,"a":5.105088062083414,"p":1,"v":0.55,"len":1},{"ring":3,"a":5.497787143782138,"p":1,"v":0.55,"len":1},{"ring":3,"a":5.6941366846315,"p":1,"v":0.3,"len":1},{"ring":3,"a":5.890486225480862,"p":1,"v":0.55,"len":1},{"ring":3,"a":0.0,"p":1,"v":0.55,"len":1},{"ring":3,"a":0.19634954084936207,"p":1,"v":0.3,"len":1},{"ring":3,"a":0.39269908169872414,"p":1,"v":0.55,"len":1},{"ring":3,"a":0.7853981633974483,"p":1,"v":0.55,"len":1},{"ring":3,"a":0.9817477042468103,"p":1,"v":0.3,"len":1},{"ring":3,"a":1.1780972450961724,"p":1,"v":0.55,"len":1},{"ring":3,"a":1.5707963267948966,"p":1,"v":0.55,"len":1},{"ring":3,"a":1.7671458676442586,"p":1,"v":0.3,"len":1},{"ring":3,"a":1.9634954084936207,"p":1,"v":0.55,"len":1},{"ring":3,"a":2.356194490192345,"p":1,"v":0.55,"len":1},{"ring":4,"a":2.945243112740431,"p":1,"v":0.8,"len":1},{"ring":4,"a":3.730641276137879,"p":1,"v":0.8,"len":1},{"ring":4,"a":4.516039439535327,"p":1,"v":0.8,"len":1},{"ring":4,"a":5.301437602932776,"p":1,"v":0.8,"len":1},{"ring":4,"a":6.086835766330224,"p":1,"v":0.8,"len":1},{"ring":4,"a":0.5890486225480862,"p":1,"v":0.8,"len":1},{"ring":4,"a":1.3744467859455345,"p":1,"v":0.8,"len":1},{"ring":4,"a":2.1598449493429825,"p":1,"v":0.8,"len":1}]}},
-  {"id":8,"x":137.50987083139756,"y":0,"n":48,"motor":null,"layer":0,"th":3.0761428066400054,"track":{"root":5,"octave":1,"range":1,"scale":"minor","div":32,"dots":[{"ring":0,"a":3.730641276137879,"p":1,"v":1,"len":2},{"ring":0,"a":4.516039439535327,"p":1,"v":0.8,"len":1},{"ring":2,"a":5.301437602932776,"p":1,"v":0.9,"len":2},{"ring":0,"a":5.890486225480862,"p":1,"v":0.6,"len":1},{"ring":3,"a":6.086835766330224,"p":1,"v":0.85,"len":1},{"ring":5,"a":0.5890486225480862,"p":1,"v":1,"len":2},{"ring":5,"a":1.3744467859455345,"p":1,"v":0.8,"len":1},{"ring":6,"a":2.1598449493429825,"p":1,"v":0.9,"len":2},{"ring":4,"a":2.748893571891069,"p":1,"v":0.6,"len":1},{"ring":4,"a":2.945243112740431,"p":1,"v":0.85,"len":1}]}},
-  {"id":10,"x":-137.50987083139756,"y":1.68401023164837e-14,"n":48,"motor":null,"layer":0,"th":1.5053464798451088,"track":{"root":5,"octave":3,"range":2,"scale":"minor","div":32,"dots":[{"ring":2,"a":1.7671458676442586,"p":1,"v":0.8,"len":3},{"ring":4,"a":1.7671458676442586,"p":1,"v":0.8,"len":3},{"ring":6,"a":1.7671458676442586,"p":1,"v":0.8,"len":3},{"ring":7,"a":1.7671458676442586,"p":1,"v":0.8,"len":3},{"ring":2,"a":2.945243112740431,"p":1,"v":0.55,"len":2},{"ring":4,"a":2.945243112740431,"p":1,"v":0.55,"len":2},{"ring":6,"a":2.945243112740431,"p":1,"v":0.55,"len":2},{"ring":7,"a":2.945243112740431,"p":1,"v":0.55,"len":2},{"ring":2,"a":3.730641276137879,"p":1,"v":0.7,"len":2},{"ring":4,"a":3.730641276137879,"p":1,"v":0.7,"len":2},{"ring":6,"a":3.730641276137879,"p":1,"v":0.7,"len":2},{"ring":7,"a":3.730641276137879,"p":1,"v":0.7,"len":2},{"ring":2,"a":4.908738521234052,"p":1,"v":0.8,"len":3},{"ring":4,"a":4.908738521234052,"p":1,"v":0.8,"len":3},{"ring":5,"a":4.908738521234052,"p":1,"v":0.8,"len":3},{"ring":7,"a":4.908738521234052,"p":1,"v":0.8,"len":3},{"ring":2,"a":6.086835766330224,"p":1,"v":0.55,"len":2},{"ring":4,"a":6.086835766330224,"p":1,"v":0.55,"len":2},{"ring":5,"a":6.086835766330224,"p":1,"v":0.55,"len":2},{"ring":7,"a":6.086835766330224,"p":1,"v":0.55,"len":2},{"ring":2,"a":0.5890486225480862,"p":1,"v":0.7,"len":2},{"ring":4,"a":0.5890486225480862,"p":1,"v":0.7,"len":2},{"ring":5,"a":0.5890486225480862,"p":1,"v":0.7,"len":2},{"ring":7,"a":0.5890486225480862,"p":1,"v":0.7,"len":2}]}}],
+  {"id":1,"x":0,"y":0,"n":24,"motor":{"rpm":30,"revs":1},"layer":0,"th":0,"track":null},
+  {"id":2,"x":0,"y":137.509871,"n":48,"motor":null,"layer":0,"th":5.432337,"track":{"root":9,"octave":3,"range":1,"scale":"minpent","div":32,"dots":[{"ring":0,"a":2.42164,"p":1,"v":1,"len":1},{"ring":0,"a":3.20704,"p":1,"v":1,"len":1},{"ring":0,"a":3.99244,"p":1,"v":1,"len":1},{"ring":0,"a":4.77784,"p":1,"v":1,"len":1},{"ring":0,"a":5.56324,"p":1,"v":1,"len":1},{"ring":0,"a":0.06545,"p":1,"v":1,"len":1},{"ring":0,"a":0.85085,"p":1,"v":1,"len":1},{"ring":0,"a":1.63625,"p":1,"v":1,"len":1},{"ring":1,"a":3.20704,"p":1,"v":0.95,"len":1},{"ring":1,"a":4.77784,"p":1,"v":0.9,"len":1},{"ring":1,"a":0.06545,"p":1,"v":0.95,"len":1},{"ring":1,"a":1.63625,"p":1,"v":0.9,"len":1},{"ring":1,"a":2.22529,"p":0.5,"v":0.35,"len":1},{"ring":2,"a":2.81434,"p":1,"v":0.85,"len":1},{"ring":2,"a":3.59974,"p":1,"v":0.75,"len":1},{"ring":2,"a":4.38514,"p":1,"v":0.85,"len":1},{"ring":2,"a":5.17054,"p":1,"v":0.75,"len":1},{"ring":2,"a":5.95594,"p":1,"v":0.85,"len":1},{"ring":2,"a":0.45815,"p":1,"v":0.75,"len":1},{"ring":2,"a":1.24355,"p":1,"v":0.85,"len":1},{"ring":2,"a":2.02895,"p":1,"v":0.9,"len":1},{"ring":3,"a":2.61799,"p":1,"v":0.55,"len":1},{"ring":3,"a":3.01069,"p":0.8,"v":0.35,"len":1},{"ring":3,"a":3.40339,"p":1,"v":0.5,"len":1},{"ring":3,"a":3.79609,"p":0.7,"v":0.3,"len":1},{"ring":3,"a":4.18879,"p":1,"v":0.55,"len":1},{"ring":3,"a":4.58149,"p":0.8,"v":0.35,"len":1},{"ring":3,"a":4.97419,"p":1,"v":0.5,"len":1},{"ring":3,"a":5.36689,"p":0.9,"v":0.4,"len":1},{"ring":3,"a":5.75959,"p":1,"v":0.55,"len":1},{"ring":3,"a":6.15229,"p":0.8,"v":0.35,"len":1},{"ring":3,"a":0.2618,"p":1,"v":0.5,"len":1},{"ring":3,"a":0.6545,"p":0.7,"v":0.3,"len":1},{"ring":3,"a":1.0472,"p":1,"v":0.55,"len":1},{"ring":3,"a":1.4399,"p":0.8,"v":0.35,"len":1},{"ring":3,"a":1.8326,"p":1,"v":0.5,"len":1},{"ring":3,"a":2.22529,"p":0.9,"v":0.45,"len":1},{"ring":4,"a":3.79609,"p":1,"v":0.7,"len":1},{"ring":4,"a":4.97419,"p":0.6,"v":0.45,"len":1},{"ring":4,"a":0.6545,"p":1,"v":0.7,"len":1},{"ring":4,"a":1.24355,"p":0.55,"v":0.5,"len":1},{"ring":4,"a":1.8326,"p":0.4,"v":0.4,"len":1}]}},
+  {"id":8,"x":137.509871,"y":0,"n":48,"motor":null,"layer":0,"th":3.076143,"track":{"root":9,"octave":1,"range":1,"scale":"minor","div":32,"dots":[{"ring":0,"a":3.79609,"p":1,"v":0.95,"len":2},{"ring":0,"a":4.38514,"p":1,"v":0.7,"len":1},{"ring":0,"a":5.17054,"p":1,"v":0.9,"len":2},{"ring":4,"a":5.95594,"p":1,"v":0.65,"len":1},{"ring":0,"a":0.6545,"p":1,"v":0.95,"len":2},{"ring":0,"a":1.24355,"p":1,"v":0.7,"len":1},{"ring":2,"a":2.02895,"p":1,"v":0.85,"len":2},{"ring":3,"a":2.61799,"p":1,"v":0.6,"len":1},{"ring":4,"a":2.81434,"p":1,"v":0.7,"len":1}]}},
+  {"id":10,"x":-137.509871,"y":0,"n":48,"motor":null,"layer":0,"th":1.505346,"track":{"root":9,"octave":3,"range":2,"scale":"minor","div":32,"dots":[{"ring":0,"a":2.22529,"p":1,"v":0.9,"len":1},{"ring":2,"a":2.22529,"p":1,"v":0.9,"len":1},{"ring":4,"a":2.22529,"p":1,"v":0.9,"len":1},{"ring":6,"a":2.22529,"p":1,"v":0.9,"len":1},{"ring":0,"a":3.59974,"p":1,"v":0.75,"len":2},{"ring":2,"a":3.59974,"p":1,"v":0.75,"len":2},{"ring":4,"a":3.59974,"p":1,"v":0.75,"len":2},{"ring":6,"a":3.59974,"p":1,"v":0.75,"len":2},{"ring":0,"a":5.36689,"p":1,"v":0.9,"len":1},{"ring":2,"a":5.36689,"p":1,"v":0.9,"len":1},{"ring":4,"a":5.36689,"p":1,"v":0.9,"len":1},{"ring":6,"a":5.36689,"p":1,"v":0.9,"len":1},{"ring":8,"a":5.36689,"p":1,"v":0.9,"len":1},{"ring":0,"a":5.95594,"p":1,"v":0.55,"len":1},{"ring":2,"a":5.95594,"p":1,"v":0.55,"len":1},{"ring":4,"a":5.95594,"p":1,"v":0.55,"len":1},{"ring":6,"a":5.95594,"p":1,"v":0.55,"len":1},{"ring":3,"a":0.85085,"p":1,"v":0.8,"len":2},{"ring":5,"a":0.85085,"p":1,"v":0.8,"len":2},{"ring":7,"a":0.85085,"p":1,"v":0.8,"len":2},{"ring":9,"a":0.85085,"p":1,"v":0.8,"len":2}]}}
+],
 "arms":[
-  {"id":13,"cog":1,"a":3.147131261457343,"r0":0,"len":62,"flex":0.5}],
+  {"id":13,"cog":1,"a":5.30698,"r0":0,"len":62,"flex":0.5}
+],
 "pads":[
-  {"id":12,"x":0,"y":-58,"r":11,"voice":{"level":0.3,"velSense":0.4,"tune":1700,"decay":0.06,"kind":"rim"}}],
+  {"id":12,"x":0,"y":-58,"r":11,"voice":{"level":0.34,"velSense":0.4,"tune":1350,"decay":0.05,"kind":"wood"}}
+],
 "readers":[
-  {"id":3,"on":2,"x1":-0.5535516451600578,"y1":154.41912436061122,"x2":-0.9461806390213836,"y2":166.4126994103276,"voice":{"level":1.4,"velSense":0.35,"tune":50,"sweep":4,"pdecay":0.035,"decay":0.45,"kind":"kick"},"tines":0,"combBase":60,"combScale":"major"},
-  {"id":4,"on":2,"x1":-1.0409646375190318,"y1":169.3080510457579,"x2":-1.4335936313803577,"y2":181.30162609547432,"voice":{"level":0.8,"velSense":0.9,"tune":240,"tone":0.55,"cutoff":5000,"decay":0.14,"kind":"snare"},"tines":0,"combBase":60,"combScale":"major"},
-  {"id":5,"on":2,"x1":-1.5283776298780056,"y1":184.19697773090462,"x2":-1.9210066237393315,"y2":196.190552780621,"voice":{"level":0.6,"velSense":0.3,"tune":185,"tone":0.25,"cutoff":6000,"decay":0.12,"kind":"snare"},"tines":0,"combBase":60,"combScale":"major"},
-  {"id":6,"on":2,"x1":-2.0157906222369797,"y1":199.08590441605133,"x2":-2.4084196160983056,"y2":211.07947946576772,"voice":{"level":0.45,"velSense":0.6,"cutoff":9500,"decay":0.03,"kind":"hat"},"tines":0,"combBase":60,"combScale":"major"},
-  {"id":7,"on":2,"x1":-2.5032036145959538,"y1":213.97483110119802,"x2":-2.8958326084572796,"y2":225.9684061509144,"voice":{"level":0.4,"velSense":0.5,"cutoff":8000,"decay":0.18,"kind":"hat"},"tines":0,"combBase":60,"combScale":"major"},
-  {"id":9,"on":8,"x1":154.00222039032928,"y1":0.5399036223052966,"x2":224.5528268368706,"y2":2.8494913399446213,"voice":{"kind":"wave","preset":"reese bass","note":60,"octave":0,"semi":0,"level":0.9,"velSense":0.4},"tines":0,"combBase":60,"combScale":"major"},
-  {"id":11,"on":10,"x1":-154.00222039032928,"y1":-0.5399036223052779,"x2":-224.5528268368706,"y2":-2.8494913399445942,"voice":{"kind":"wave","preset":"pluck","note":60,"octave":0,"semi":0,"level":0.55,"velSense":0.3},"tines":0,"combBase":60,"combScale":"major"}],
-"belts":[
-  ],
-"strings":[
-  ],
-"cams":[
-  ],
-"pits":[
-  ],
-"probes":[
-  ],
+  {"id":3,"on":2,"x1":0,"y1":153.724576,"x2":0,"y2":167.131789,"voice":{"level":1.3,"velSense":0.2,"tune":48,"sweep":3.2,"pdecay":0.04,"decay":0.42,"kind":"kick"},"tines":0,"combBase":60,"combScale":"major"},
+  {"id":4,"on":2,"x1":0,"y1":168.621479,"x2":0,"y2":182.028692,"voice":{"level":0.62,"velSense":0.4,"cutoff":1250,"spread":0.013,"decay":0.3,"kind":"clap"},"tines":0,"combBase":60,"combScale":"major"},
+  {"id":5,"on":2,"x1":0,"y1":183.518382,"x2":0,"y2":196.925594,"voice":{"level":0.42,"velSense":0.5,"cutoff":8500,"decay":0.13,"kind":"hat"},"tines":0,"combBase":60,"combScale":"major"},
+  {"id":6,"on":2,"x1":0,"y1":198.415284,"x2":0,"y2":211.822497,"voice":{"level":0.26,"velSense":0.8,"cutoff":11500,"decay":0.03,"kind":"hat"},"tines":0,"combBase":60,"combScale":"major"},
+  {"id":7,"on":2,"x1":0,"y1":213.312187,"x2":0,"y2":226.7194,"voice":{"level":0.32,"velSense":0.5,"tune":1650,"decay":0.05,"kind":"rim"},"tines":0,"combBase":60,"combScale":"major"},
+  {"id":9,"on":8,"x1":155.462548,"y1":0,"x2":224.981428,"y2":0,"voice":{"kind":"wave","name":"dub bass","note":60,"octave":0,"semi":0,"level":1.05,"velSense":0.35,"osc":[{"on":true,"table":"basic","filter":"lp24","warpMode":"bend","warp2Mode":"off","pos":0,"level":0.95,"cut":380,"res":0.12,"drive":0.25,"a":0.004,"d":0.45,"s":0.6,"r":0.12},{"on":true,"table":"basic","filter":"lp24","warpMode":"bend","warp2Mode":"off","pos":0.667,"level":0.22,"cut":650,"res":0.2,"famt":0.3,"fd":0.12,"fs":0,"a":0.002,"d":0.16,"s":0,"r":0.08},{"on":false}],"sub":{"level":0,"oct":-1},"noise":{"level":0,"color":0.6},"tune":{},"env":[],"lfo":[],"macro":[],"macroNames":[],"mods":[],"voicing":{"mode":"mono","always":true},"fx":{},"vol":0.8,"glide":0.025,"gate":0.3},"tines":0,"combBase":60,"combScale":"major"},
+  {"id":11,"on":10,"x1":-158.136351,"y1":0,"x2":-222.307625,"y2":0,"voice":{"kind":"wave","name":"dub chord","note":60,"octave":0,"semi":0,"level":0.62,"velSense":0.45,"osc":[{"on":true,"table":"basic","filter":"lp24","warpMode":"bend","warp2Mode":"off","pos":0.667,"uni":3,"detune":0.14,"spread":0.6,"level":0.6,"cut":650,"res":0.32,"famt":0.45,"fd":0.2,"fs":0.05,"a":0.002,"d":0.32,"s":0,"r":0.3},{"on":true,"table":"basic","filter":"lp24","warpMode":"bend","warp2Mode":"off","pos":0.667,"semi":12,"level":0.16,"cut":900,"res":0.2,"famt":0.3,"fd":0.14,"fs":0,"a":0.002,"d":0.2,"s":0,"r":0.2},{"on":false}],"sub":{"level":0,"oct":-1},"noise":{"level":0,"color":0.6},"tune":{},"env":[],"lfo":[{"shape":"sine","rate":0.07,"retrig":false}],"macro":[],"macroNames":[],"mods":[{"src":"lfo1","dst":"osc1.cut","amt":0.18,"bi":true,"off":false}],"voicing":{"mode":"poly","always":true},"fx":{"chorus":{"on":true,"rate":0.25,"depth":0.6,"mix":0.35}},"vol":0.8,"glide":0,"gate":0.2},"tines":0,"combBase":60,"combScale":"major"}
+],
+"belts":[],
+"strings":[],
+"cams":[],
+"pits":[],
+"probes":[],
 "fields":[
-  ]}
+  {"id":14,"x":-194.347,"y":0,"r":85,"mode":"delay","diffuse":0.55,"level":0.85,"insert":0,"sync":"1/8.","time":0.375,"fb":0.58,"tone":0.32,"ping":1,"size":0.6,"decay":2.5,"predelay":10,"verbMode":0,"verbColor":2,"kind":"tube","drive":0.5},
+  {"id":15,"x":-194.347,"y":0,"r":125,"mode":"reverb","diffuse":0.85,"level":0.6,"insert":0,"sync":"1/8.","time":0.375,"fb":0.45,"tone":0.5,"ping":1,"size":0.85,"decay":4.5,"predelay":25,"verbMode":0,"verbColor":2,"kind":"tube","drive":0.5},
+  {"id":16,"x":0,"y":-58,"r":42,"mode":"delay","diffuse":0.3,"level":0.7,"insert":0,"sync":"1/4.","time":0.375,"fb":0.5,"tone":0.4,"ping":1,"size":0.6,"decay":2.5,"predelay":10,"verbMode":0,"verbColor":2,"kind":"tube","drive":0.5},
+  {"id":17,"x":0,"y":244.016,"r":30,"mode":"delay","diffuse":0.2,"level":0.55,"insert":0,"sync":"1/8.","time":0.375,"fb":0.35,"tone":0.45,"ping":1,"size":0.6,"decay":2.5,"predelay":10,"verbMode":0,"verbColor":2,"kind":"tube","drive":0.5}
+]}
 ;
 function demo(){deserialize(structuredClone(DEFAULT_WORLD));const f=fitTarget();Object.assign(view,{x:f.x,y:f.y});S.zoom=f.z}
 
@@ -2914,6 +2918,7 @@ function draw(){
     for(const a of W.arms){const t=armTip(a);cx.fillText('a'+a.id,t.x,t.y)}}
   cx.setTransform(dpr,0,0,dpr,0,0);
   if(ui.crank)drawCrankGauge(ui.crank);
+  drawKnob();
   drawChrome();
 }
 function drawGhost(s){
@@ -2974,8 +2979,20 @@ function drawCrankGauge(k){
   cx.fillStyle=HOT;circle(s.x+Math.cos(a1)*R,s.y+Math.sin(a1)*R,3.5,true);
 }
 
+// The speed knob: a selected cog shows a circle on its face above the hub (or just above its rim, when the cog is
+// small on screen). Dragged round the hub it sets a motor's speed; on any other cog it scrubs the train.
+const KNOB_R=11;
+const knobCog=()=>ui.knob?.c||(sel?.type==='cog'&&W.cogs.includes(sel.o)&&group.length<2?sel.o:null);
+function knobAt(c,a=-Math.PI/2){const s=toScreen(c),Rs=radius(c)*S.zoom,d=Rs>=48?Rs*.55:Rs+KNOB_R+8;return {x:s.x+Math.cos(a)*d,y:s.y+Math.sin(a)*d,d,s}}
+function drawKnob(){
+  const c=knobCog();if(!c)return;const k=knobAt(c,ui.knob?.a),live=!!ui.knob;
+  cx.lineWidth=1;cx.strokeStyle=live?HOT:SEL;cx.globalAlpha=.6;line(k.s.x,k.s.y,k.x,k.y);cx.globalAlpha=1;
+  cx.fillStyle=BG;circle(k.x,k.y,KNOB_R,true);cx.lineWidth=2;circle(k.x,k.y,KNOB_R);
+  cx.fillStyle=live?HOT:SEL;circle(k.x,k.y,3.5,true);cx.lineWidth=1;
+}
+
 /* ---------- touch ---------- */
-const ui={armed:null,hover:null,room:false,carry:null,scrap:false,crank:null,cam:null,sector:null,bezelOwner:null,bezelAt:0,lastTap:null,auditionAt:0,snapped:false,dotOf:null,dotAt:null,sealAt:0,sealOk:false,shared:''};
+const ui={knob:null,spin:null,armed:null,hover:null,room:false,carry:null,scrap:false,crank:null,cam:null,sector:null,bezelOwner:null,bezelAt:0,lastTap:null,auditionAt:0,snapped:false,dotOf:null,dotAt:null,sealAt:0,sealOk:false,shared:''};
 const wrapPi=a=>wrap(a+Math.PI)-Math.PI;
 function buzz(ms){try{const u=navigator.userActivation;if(navigator.vibrate&&(!u||u.hasBeenActive))navigator.vibrate(ms)}catch(e){}}
 // Play a part now, at a middling velocity, the way the sim would strike it.
@@ -3143,6 +3160,31 @@ function detent(rpm){
   const d=detents().reduce((b,d)=>Math.abs(Math.log(d/a))<Math.abs(Math.log(b/a))?d:b);
   return Math.abs(Math.log(d/a))<DETENT_PULL?Math.sign(rpm)*d:rpm;
 }
+// The sim runs S.lookahead ahead of the picture; a change of speed is made to take effect where the cogs are drawn,
+// so each cog's phase moves by its change of speed times that lead and the picture never jumps back.
+function retimed(fn){
+  const w0=new Map(W.cogs.map(c=>[c,c.w]));fn();const lead=simT-clock.view;if(clock.paused||!(lead>0&&lead<1))return;
+  for(const c of W.cogs){const dw=c.w-(w0.get(c)??c.w);if(dw){const th=c.th+dw*lead,k=Math.floor(th/TAU);c.th=th-k*TAU;c.turns+=k}}
+}
+// Scrubbing, as a hand on a turntable: while the knob is held the train is pulled elastically toward the speed of
+// the drag (held still, it stops), and let go it springs back to the speed its motor sets (none: it runs down).
+const SPIN_HOLD=26,SPIN_FREE=7,SPIN_DAMP=.8,SPIN_WINDOW=.08;
+const setRpm=c=>{const m=c.driver;return m&&!c.jam?motorRpm(m)*c.k/m.k:0};
+// The drag's speed is read over the last SPIN_WINDOW of pointer samples, as of the latest one, so it holds steady
+// between events; once the pointer stops sending, it fades to nothing over the next SPIN_WINDOW.
+function dragRpm(p,t){
+  const q=p.samples,[te,ae]=q.at(-1),from=Math.max(te-SPIN_WINDOW,q[0][0]);if(te-from<.012)return t-te<SPIN_WINDOW?p.rpm:0;
+  let at=q[0][1];for(let i=q.length-1;i>0;i--)if(q[i-1][0]<=from){const[t0,a0]=q[i-1],[t1,a1]=q[i];at=a0+(a1-a0)*clamp((from-t0)/((t1-t0)||1),0,1);break}
+  return (ae-at)/(te-from)*60/TAU*clamp(2-(t-te)/(SPIN_WINDOW/2),0,1);
+}
+function stepSpin(){
+  const p=ui.spin;if(!p)return;const c=p.c,t=performance.now()/1000,dt=clamp(t-p.t,0,.1);p.t=t;
+  if(!W.cogs.includes(c)){ui.spin=null;return}
+  const goal=p.held?dragRpm(p,t):setRpm(c),w0=p.held?SPIN_HOLD:SPIN_FREE;
+  for(let n=Math.ceil(dt*240),h=dt/n,i=0;i<n;i++){p.v+=(w0*w0*(goal-p.rpm)-2*SPIN_DAMP*w0*p.v)*h;p.rpm+=p.v*h}
+  if(!p.held&&Math.abs(p.rpm-goal)<.01*Math.max(1,Math.abs(goal))&&Math.abs(p.v)<.5){retimed(()=>{c.scrub=null;solve()});ui.spin=null;return}
+  retimed(()=>{c.scrub=p.rpm;solve()});
+}
 const trackScrap=s=>{ui.scrap=offStage(s)};
 function endScrap(type,o){const gone=ui.scrap;ui.scrap=false;if(gone)removeObj(type,o);else changed(true)}
 const TRACK_DEFAULT={root:0,octave:3,range:1,scale:'chromatic',div:16},newTrack=()=>({...TRACK_DEFAULT,dots:[]});
@@ -3292,24 +3334,30 @@ const G={
       up(){ui.snapped=false;if(ui.scrap){ui.scrap=false;for(const o of stack)removeObj('cog',o)}else changed(true)},
       tap(){choose('cog',c)},dbl(s){focus('cog',c,s)}};
   },
-  // On the rim: turn it to move the cog's speed along the dial, pull outward or inward to change the tooth count.
-  rim(c,s0){
-    let mode=null,dial=0,at=0,grow=null;const min=c.track?12:6,ang=s=>{const q=screenToWorld(s);return Math.atan2(q.y-c.y,q.x-c.x)};
-    return {o:c,readout:()=>mode==='crank'?`speed rpm: ${rpmOf(c).toFixed(1)}`:mode==='idle'?'speed: no motor in this train':`teeth: ${c.n}`,
-      move(s){
-        if(!mode){const sc=toScreen(c),rx=s0.x-sc.x,ry=s0.y-sc.y,mx=s.x-s0.x,my=s.y-s0.y;
-          mode=Math.abs(mx*rx+my*ry)>Math.abs(mx*ry-my*rx)?'teeth':motorOf(c)?'crank':'idle';
-          if(mode==='crank'){ui.crank={c};dial=gaugeAngle(rpmOf(c));at=ang(s0)}}
-        if(mode==='teeth'){grow??=resizer(c);const n=ratioSnap(c,grow.anchor,clamp(Math.round(grow.radiusThrough(screenToWorld(s))*TAU/TOOTH),min,240),min);if(n!==c.n){const was=c.n,jams=overlaps();grow.set(n);if(overlaps()>jams)grow.set(was);else buzz(3)}return}
-        if(mode==='idle')return;
-        const a=ang(s);dial=clamp(dial+wrapPi(a-at),-GAUGE_SWEEP,GAUGE_SWEEP);at=a;drive(c,gaugeRpm(dial));
-      },
-      up(){
-        if(mode==='teeth'){if(!grow?.anchor&&stackOf(c).length===1)snap(c);changed(true);return}
-        if(mode==='crank'){drive(c,detent(rpmOf(c)));ui.crank=null;buzz(12);changed(true)}
-      },
-      cancel(){ui.crank=null},
+  // On the rim: pull outward or push inward to change the tooth count.
+  rim(c){
+    let grow=null;const min=c.track?12:6;
+    return {o:c,readout:()=>`teeth: ${c.n}`,
+      move(s){grow??=resizer(c);const n=ratioSnap(c,grow.anchor,clamp(Math.round(grow.radiusThrough(screenToWorld(s))*TAU/TOOTH),min,240),min);if(n!==c.n){const was=c.n,jams=overlaps();grow.set(n);if(overlaps()>jams)grow.set(was);else buzz(3)}},
+      up(){if(!grow)return;if(!grow.anchor&&stackOf(c).length===1)snap(c);changed(true)},
       tap(){choose('cog',c)},dbl(s){focus('cog',c,s)}};
+  },
+  // The speed knob, dragged round the hub. On a motor it turns the speed along the dial; on any other cog it scrubs.
+  knob(c,s0){
+    const ang=s=>{const k=toScreen(c);return Math.atan2(s.y-k.y,s.x-k.x)};let at=ang(s0),acc=0;ui.knob={c,a:at};
+    if(c.motor){
+      let dial=gaugeAngle(rpmOf(c));ui.crank={c};const end=()=>{ui.crank=null;ui.knob=null};
+      return {o:c,readout:()=>`speed rpm: ${rpmOf(c).toFixed(1)}`,
+        move(s){const a=ang(s);ui.knob.a=a;dial=clamp(dial+wrapPi(a-at),-GAUGE_SWEEP,GAUGE_SWEEP);at=a;retimed(()=>drive(c,gaugeRpm(dial)))},
+        up(){retimed(()=>drive(c,detent(rpmOf(c))));end();buzz(12);changed(true)},cancel:end,tap:end};
+    }
+    const t0=performance.now()/1000,was=ui.spin?.c===c?ui.spin:null;
+    const p=ui.spin={c,held:true,t:t0,rpm:was?was.rpm:c.jam?0:rpmOf(c),v:was?was.v:0,samples:[[t0,0]]};
+    const free=()=>{p.held=false;ui.knob=null};buzz(6);
+    return {o:c,readout:()=>`scrub rpm: ${p.rpm.toFixed(1)}`,
+      move(s){const a=ang(s),t=performance.now()/1000;acc+=wrapPi(a-at);at=a;ui.knob.a=a;p.samples.push([t,acc]);
+        while(p.samples.length>2&&p.samples[1][0]<t-.25)p.samples.shift()},
+      up:free,cancel:free,tap:free};
   },
   // The disc face at note zoom. Tap or drag to set pins. Hold a pin to tune its odds and accent.
   // Hold an empty socket, then sweep around the ring to spread k pins evenly (Euclid).
@@ -3414,7 +3462,9 @@ function begin(s){
   // a field has no edge to grab: its centre ring, and its radius handle while it is selected
   for(const f of W.fields){near(dist(f)-4,18,()=>G.field(f,s,false));if(isSel(f))near(dist(fieldHandle(f)),20,()=>G.field(f,s,true))}
   const c=pickCog(p,()=>true,14/Z),d=c&&dist(c),Rs=c&&radius(c)*Z;
-  if(c&&Rs>=30)near(Math.abs(d-Rs),14,()=>G.rim(c,s));
+  if(c&&Rs>=30)near(Math.abs(d-Rs),14,()=>G.rim(c));
+  // the knob sits over the cog, so it wins a tie with the rim and the face
+  const kc=knobCog();if(kc){const k=knobAt(kc);near(Math.hypot(s.x-k.x,s.y-k.y)-KNOB_R,Math.max(8,22-KNOB_R),()=>G.knob(kc,s))}
   if(best)return best.make();
   if(c){
     if(noteMode(c)&&d>Math.max(22,Rs*.2)&&cellAt(c,p))return G.notes(c,s);
@@ -3443,7 +3493,7 @@ function pinchNow(){const[a,b]=[...fingers.values()];return {mid:{x:(a.x+b.x)/2,
 function repinch(){const p=pinchNow();pinch={...p,zoom:S.zoom,anchor:screenToWorld(p.mid)}}
 function dropGesture(){
   if(gesture){const g=gesture.g;if(g.cancel)g.cancel();else if(gesture.moved)g.up?.(gesture.last);gesture=null}
-  ui.scrap=false;ui.crank=null;ui.carry=null;
+  ui.scrap=false;ui.crank=null;ui.carry=null;ui.knob=null;if(ui.spin)ui.spin.held=false;
 }
 cv.addEventListener('pointerdown',e=>{
   cv.setPointerCapture(e.pointerId);const s=local(e);fingers.set(e.pointerId,s);ui.cam=null;
@@ -4159,7 +4209,7 @@ function frame(ts){
   if(!clock.paused)clock.view=Math.max(clock.view,heardAt(ts/1000));
   if(meter){meter.getFloatTimeDomainData(meterBuf);let m=0;for(const x of meterBuf)m=Math.max(m,Math.abs(x));peak=Math.max(m,peak*.95)}
   // under an open sheet the machine shows only dimmed behind the scrim: it is drawn at a quarter of the frame rate
-  postFields();stepCamera();if(!worldCovered()||++coveredSkip>=4){coveredSkip=0;draw();drawGroup()}else syncEditor();listen();
+  postFields();stepCamera();stepSpin();if(!worldCovered()||++coveredSkip>=4){coveredSkip=0;draw();drawGroup()}else syncEditor();listen();
   const now=performance.now();
   if(roll&&roll.cv.offsetParent)drawRoll();
   postMotions();if(inspectorLive()){if(camStrips.length)camDrawStrips();for(const d of waveLive)d()}
@@ -5301,7 +5351,7 @@ clock.off=nowSec()-simT;
 window.__cogs=Object.defineProperties({W,S,SPACE,stats,clock,get simT(){return simT},serialize,deserialize,solve,toScreen,radius,ringR,armTip,renderTh,beltLines,stringLen,
   get sel(){return sel&&{type:sel.type,id:sel.o.id}},get group(){return group.map(g=>g.type).sort()},get armed(){return ui.armed},get flying(){return !!ui.cam},
   engine:()=>({state:engineState,ac:ac&&ac.state,...engineStats,wave:waveVoices,waveNotes,waveLast}),
-  worldKey,listener,undo:()=>edits.undo(),redo:()=>edits.redo(),get undos(){return edits.past.length},get redos(){return edits.future.length},get pending(){return edits.pending},commit:()=>edits.commit()},Object.getOwnPropertyDescriptors(PROBE));
+  worldKey,listener,knobAt:(c,a)=>knobAt(c,a),get spin(){const p=ui.spin,q=p?.samples;return p&&{id:p.c.id,held:p.held,rpm:p.rpm,drag:q.length>1?(q.at(-1)[1]-q[0][1])/(q.at(-1)[0]-q[0][0])*60/(2*Math.PI):0}},undo:()=>edits.undo(),redo:()=>edits.redo(),get undos(){return edits.past.length},get redos(){return edits.future.length},get pending(){return edits.pending},commit:()=>edits.commit()},Object.getOwnPropertyDescriptors(PROBE));
 setInterval(tick,15);requestAnimationFrame(frame);
 </script>
 </body>

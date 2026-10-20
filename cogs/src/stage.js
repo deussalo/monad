@@ -141,6 +141,7 @@ function draw(){
     for(const a of W.arms){const t=armTip(a);cx.fillText('a'+a.id,t.x,t.y)}}
   cx.setTransform(dpr,0,0,dpr,0,0);
   if(ui.crank)drawCrankGauge(ui.crank);
+  drawKnob();
   drawChrome();
 }
 function drawGhost(s){
@@ -201,8 +202,20 @@ function drawCrankGauge(k){
   cx.fillStyle=HOT;circle(s.x+Math.cos(a1)*R,s.y+Math.sin(a1)*R,3.5,true);
 }
 
+// The speed knob: a selected cog shows a circle on its face above the hub (or just above its rim, when the cog is
+// small on screen). Dragged round the hub it sets a motor's speed; on any other cog it scrubs the train.
+const KNOB_R=11;
+const knobCog=()=>ui.knob?.c||(sel?.type==='cog'&&W.cogs.includes(sel.o)&&group.length<2?sel.o:null);
+function knobAt(c,a=-Math.PI/2){const s=toScreen(c),Rs=radius(c)*S.zoom,d=Rs>=48?Rs*.55:Rs+KNOB_R+8;return {x:s.x+Math.cos(a)*d,y:s.y+Math.sin(a)*d,d,s}}
+function drawKnob(){
+  const c=knobCog();if(!c)return;const k=knobAt(c,ui.knob?.a),live=!!ui.knob;
+  cx.lineWidth=1;cx.strokeStyle=live?HOT:SEL;cx.globalAlpha=.6;line(k.s.x,k.s.y,k.x,k.y);cx.globalAlpha=1;
+  cx.fillStyle=BG;circle(k.x,k.y,KNOB_R,true);cx.lineWidth=2;circle(k.x,k.y,KNOB_R);
+  cx.fillStyle=live?HOT:SEL;circle(k.x,k.y,3.5,true);cx.lineWidth=1;
+}
+
 /* ---------- touch ---------- */
-const ui={armed:null,hover:null,room:false,carry:null,scrap:false,crank:null,cam:null,sector:null,bezelOwner:null,bezelAt:0,lastTap:null,auditionAt:0,snapped:false,dotOf:null,dotAt:null,sealAt:0,sealOk:false,shared:''};
+const ui={knob:null,spin:null,armed:null,hover:null,room:false,carry:null,scrap:false,crank:null,cam:null,sector:null,bezelOwner:null,bezelAt:0,lastTap:null,auditionAt:0,snapped:false,dotOf:null,dotAt:null,sealAt:0,sealOk:false,shared:''};
 const wrapPi=a=>wrap(a+Math.PI)-Math.PI;
 function buzz(ms){try{const u=navigator.userActivation;if(navigator.vibrate&&(!u||u.hasBeenActive))navigator.vibrate(ms)}catch(e){}}
 // Play a part now, at a middling velocity, the way the sim would strike it.
@@ -370,6 +383,31 @@ function detent(rpm){
   const d=detents().reduce((b,d)=>Math.abs(Math.log(d/a))<Math.abs(Math.log(b/a))?d:b);
   return Math.abs(Math.log(d/a))<DETENT_PULL?Math.sign(rpm)*d:rpm;
 }
+// The sim runs S.lookahead ahead of the picture; a change of speed is made to take effect where the cogs are drawn,
+// so each cog's phase moves by its change of speed times that lead and the picture never jumps back.
+function retimed(fn){
+  const w0=new Map(W.cogs.map(c=>[c,c.w]));fn();const lead=simT-clock.view;if(clock.paused||!(lead>0&&lead<1))return;
+  for(const c of W.cogs){const dw=c.w-(w0.get(c)??c.w);if(dw){const th=c.th+dw*lead,k=Math.floor(th/TAU);c.th=th-k*TAU;c.turns+=k}}
+}
+// Scrubbing, as a hand on a turntable: while the knob is held the train is pulled elastically toward the speed of
+// the drag (held still, it stops), and let go it springs back to the speed its motor sets (none: it runs down).
+const SPIN_HOLD=26,SPIN_FREE=7,SPIN_DAMP=.8,SPIN_WINDOW=.08;
+const setRpm=c=>{const m=c.driver;return m&&!c.jam?motorRpm(m)*c.k/m.k:0};
+// The drag's speed is read over the last SPIN_WINDOW of pointer samples, as of the latest one, so it holds steady
+// between events; once the pointer stops sending, it fades to nothing over the next SPIN_WINDOW.
+function dragRpm(p,t){
+  const q=p.samples,[te,ae]=q.at(-1),from=Math.max(te-SPIN_WINDOW,q[0][0]);if(te-from<.012)return t-te<SPIN_WINDOW?p.rpm:0;
+  let at=q[0][1];for(let i=q.length-1;i>0;i--)if(q[i-1][0]<=from){const[t0,a0]=q[i-1],[t1,a1]=q[i];at=a0+(a1-a0)*clamp((from-t0)/((t1-t0)||1),0,1);break}
+  return (ae-at)/(te-from)*60/TAU*clamp(2-(t-te)/(SPIN_WINDOW/2),0,1);
+}
+function stepSpin(){
+  const p=ui.spin;if(!p)return;const c=p.c,t=performance.now()/1000,dt=clamp(t-p.t,0,.1);p.t=t;
+  if(!W.cogs.includes(c)){ui.spin=null;return}
+  const goal=p.held?dragRpm(p,t):setRpm(c),w0=p.held?SPIN_HOLD:SPIN_FREE;
+  for(let n=Math.ceil(dt*240),h=dt/n,i=0;i<n;i++){p.v+=(w0*w0*(goal-p.rpm)-2*SPIN_DAMP*w0*p.v)*h;p.rpm+=p.v*h}
+  if(!p.held&&Math.abs(p.rpm-goal)<.01*Math.max(1,Math.abs(goal))&&Math.abs(p.v)<.5){retimed(()=>{c.scrub=null;solve()});ui.spin=null;return}
+  retimed(()=>{c.scrub=p.rpm;solve()});
+}
 const trackScrap=s=>{ui.scrap=offStage(s)};
 function endScrap(type,o){const gone=ui.scrap;ui.scrap=false;if(gone)removeObj(type,o);else changed(true)}
 const TRACK_DEFAULT={root:0,octave:3,range:1,scale:'chromatic',div:16},newTrack=()=>({...TRACK_DEFAULT,dots:[]});
@@ -519,24 +557,30 @@ const G={
       up(){ui.snapped=false;if(ui.scrap){ui.scrap=false;for(const o of stack)removeObj('cog',o)}else changed(true)},
       tap(){choose('cog',c)},dbl(s){focus('cog',c,s)}};
   },
-  // On the rim: turn it to move the cog's speed along the dial, pull outward or inward to change the tooth count.
-  rim(c,s0){
-    let mode=null,dial=0,at=0,grow=null;const min=c.track?12:6,ang=s=>{const q=screenToWorld(s);return Math.atan2(q.y-c.y,q.x-c.x)};
-    return {o:c,readout:()=>mode==='crank'?`speed rpm: ${rpmOf(c).toFixed(1)}`:mode==='idle'?'speed: no motor in this train':`teeth: ${c.n}`,
-      move(s){
-        if(!mode){const sc=toScreen(c),rx=s0.x-sc.x,ry=s0.y-sc.y,mx=s.x-s0.x,my=s.y-s0.y;
-          mode=Math.abs(mx*rx+my*ry)>Math.abs(mx*ry-my*rx)?'teeth':motorOf(c)?'crank':'idle';
-          if(mode==='crank'){ui.crank={c};dial=gaugeAngle(rpmOf(c));at=ang(s0)}}
-        if(mode==='teeth'){grow??=resizer(c);const n=ratioSnap(c,grow.anchor,clamp(Math.round(grow.radiusThrough(screenToWorld(s))*TAU/TOOTH),min,240),min);if(n!==c.n){const was=c.n,jams=overlaps();grow.set(n);if(overlaps()>jams)grow.set(was);else buzz(3)}return}
-        if(mode==='idle')return;
-        const a=ang(s);dial=clamp(dial+wrapPi(a-at),-GAUGE_SWEEP,GAUGE_SWEEP);at=a;drive(c,gaugeRpm(dial));
-      },
-      up(){
-        if(mode==='teeth'){if(!grow?.anchor&&stackOf(c).length===1)snap(c);changed(true);return}
-        if(mode==='crank'){drive(c,detent(rpmOf(c)));ui.crank=null;buzz(12);changed(true)}
-      },
-      cancel(){ui.crank=null},
+  // On the rim: pull outward or push inward to change the tooth count.
+  rim(c){
+    let grow=null;const min=c.track?12:6;
+    return {o:c,readout:()=>`teeth: ${c.n}`,
+      move(s){grow??=resizer(c);const n=ratioSnap(c,grow.anchor,clamp(Math.round(grow.radiusThrough(screenToWorld(s))*TAU/TOOTH),min,240),min);if(n!==c.n){const was=c.n,jams=overlaps();grow.set(n);if(overlaps()>jams)grow.set(was);else buzz(3)}},
+      up(){if(!grow)return;if(!grow.anchor&&stackOf(c).length===1)snap(c);changed(true)},
       tap(){choose('cog',c)},dbl(s){focus('cog',c,s)}};
+  },
+  // The speed knob, dragged round the hub. On a motor it turns the speed along the dial; on any other cog it scrubs.
+  knob(c,s0){
+    const ang=s=>{const k=toScreen(c);return Math.atan2(s.y-k.y,s.x-k.x)};let at=ang(s0),acc=0;ui.knob={c,a:at};
+    if(c.motor){
+      let dial=gaugeAngle(rpmOf(c));ui.crank={c};const end=()=>{ui.crank=null;ui.knob=null};
+      return {o:c,readout:()=>`speed rpm: ${rpmOf(c).toFixed(1)}`,
+        move(s){const a=ang(s);ui.knob.a=a;dial=clamp(dial+wrapPi(a-at),-GAUGE_SWEEP,GAUGE_SWEEP);at=a;retimed(()=>drive(c,gaugeRpm(dial)))},
+        up(){retimed(()=>drive(c,detent(rpmOf(c))));end();buzz(12);changed(true)},cancel:end,tap:end};
+    }
+    const t0=performance.now()/1000,was=ui.spin?.c===c?ui.spin:null;
+    const p=ui.spin={c,held:true,t:t0,rpm:was?was.rpm:c.jam?0:rpmOf(c),v:was?was.v:0,samples:[[t0,0]]};
+    const free=()=>{p.held=false;ui.knob=null};buzz(6);
+    return {o:c,readout:()=>`scrub rpm: ${p.rpm.toFixed(1)}`,
+      move(s){const a=ang(s),t=performance.now()/1000;acc+=wrapPi(a-at);at=a;ui.knob.a=a;p.samples.push([t,acc]);
+        while(p.samples.length>2&&p.samples[1][0]<t-.25)p.samples.shift()},
+      up:free,cancel:free,tap:free};
   },
   // The disc face at note zoom. Tap or drag to set pins. Hold a pin to tune its odds and accent.
   // Hold an empty socket, then sweep around the ring to spread k pins evenly (Euclid).
@@ -641,7 +685,9 @@ function begin(s){
   // a field has no edge to grab: its centre ring, and its radius handle while it is selected
   for(const f of W.fields){near(dist(f)-4,18,()=>G.field(f,s,false));if(isSel(f))near(dist(fieldHandle(f)),20,()=>G.field(f,s,true))}
   const c=pickCog(p,()=>true,14/Z),d=c&&dist(c),Rs=c&&radius(c)*Z;
-  if(c&&Rs>=30)near(Math.abs(d-Rs),14,()=>G.rim(c,s));
+  if(c&&Rs>=30)near(Math.abs(d-Rs),14,()=>G.rim(c));
+  // the knob sits over the cog, so it wins a tie with the rim and the face
+  const kc=knobCog();if(kc){const k=knobAt(kc);near(Math.hypot(s.x-k.x,s.y-k.y)-KNOB_R,Math.max(8,22-KNOB_R),()=>G.knob(kc,s))}
   if(best)return best.make();
   if(c){
     if(noteMode(c)&&d>Math.max(22,Rs*.2)&&cellAt(c,p))return G.notes(c,s);
@@ -670,7 +716,7 @@ function pinchNow(){const[a,b]=[...fingers.values()];return {mid:{x:(a.x+b.x)/2,
 function repinch(){const p=pinchNow();pinch={...p,zoom:S.zoom,anchor:screenToWorld(p.mid)}}
 function dropGesture(){
   if(gesture){const g=gesture.g;if(g.cancel)g.cancel();else if(gesture.moved)g.up?.(gesture.last);gesture=null}
-  ui.scrap=false;ui.crank=null;ui.carry=null;
+  ui.scrap=false;ui.crank=null;ui.carry=null;ui.knob=null;if(ui.spin)ui.spin.held=false;
 }
 cv.addEventListener('pointerdown',e=>{
   cv.setPointerCapture(e.pointerId);const s=local(e);fingers.set(e.pointerId,s);ui.cam=null;
@@ -1386,7 +1432,7 @@ function frame(ts){
   if(!clock.paused)clock.view=Math.max(clock.view,heardAt(ts/1000));
   if(meter){meter.getFloatTimeDomainData(meterBuf);let m=0;for(const x of meterBuf)m=Math.max(m,Math.abs(x));peak=Math.max(m,peak*.95)}
   // under an open sheet the machine shows only dimmed behind the scrim: it is drawn at a quarter of the frame rate
-  postFields();stepCamera();if(!worldCovered()||++coveredSkip>=4){coveredSkip=0;draw();drawGroup()}else syncEditor();listen();
+  postFields();stepCamera();stepSpin();if(!worldCovered()||++coveredSkip>=4){coveredSkip=0;draw();drawGroup()}else syncEditor();listen();
   const now=performance.now();
   if(roll&&roll.cv.offsetParent)drawRoll();
   postMotions();if(inspectorLive()){if(camStrips.length)camDrawStrips();for(const d of waveLive)d()}

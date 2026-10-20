@@ -149,7 +149,8 @@ function solve(){
     if(comp.some(c=>c.jam))jam=true;
     const motors=comp.filter(c=>c.motor),driver=motors[0]||null;
     if(motors.length>1)jam=true;
-    const wRoot=driver?motorRpm(driver)*TAU/60/driver.k:0;
+    // a cog held by the speed knob (c.scrub, its rpm; never saved) turns the train at that speed over its motor's
+    const hand=comp.find(c=>c.scrub!=null),wRoot=hand?hand.scrub*TAU/60/hand.k:driver?motorRpm(driver)*TAU/60/driver.k:0;
     for(const c of comp){c.jam=jam;c.w=jam?0:c.k*wRoot;c.driver=driver}
   }
 }
