@@ -84,6 +84,10 @@ impl Stage {
             out.push((Btn::Edit, r(x, top, 44.0)));
             x += 44.0;
         }
+        if matches!(self.sel, Some(Sel::Pit(_))) {
+            out.push((Btn::Balls, r(x, top, 44.0)));
+            x += 44.0;
+        }
         if self.io.recording || self.io.can_record {
             out.push((Btn::Rec, r(x, top, 44.0)));
             x += 44.0;
@@ -155,6 +159,7 @@ impl Stage {
                 Some(m) => self.out.push(StageOut::OpenEditor(m)),
                 None => {}
             },
+            Btn::Balls => self.open_balls(),
             Btn::Rec => self.out.push(StageOut::Record),
             Btn::Zero => self.zero_sel(w),
             Btn::Copy => {
@@ -274,6 +279,7 @@ impl Stage {
             };
             match b {
                 Btn::Edit => icon(self, if self.editor_mode(w) == Some("notes") { "Piano" } else { "MixerVertical" }, false, FG),
+                Btn::Balls => icon(self, "Piano", false, FG),
                 Btn::Rec => {
                     if self.io.recording {
                         p.rect_filled(r, 8.0, PAD);
@@ -494,7 +500,6 @@ impl Stage {
                 let f = w.fields.iter().find(|m| m.id == *id)?;
                 if *edge { format!("fx {} radius {}", f.id, f.r.round()) } else { format!("fx {}: {}", f.id, if f.mode == "dist" { "distortion" } else { &f.mode }) }
             }
-            Gesture::PitSize(id) => format!("sphere: {} across", w.pits.iter().find(|p| p.id == *id)?.w.round()),
             Gesture::PitIn { id, ball, .. } => {
                 let p = w.pits.iter().find(|p| p.id == *id)?;
                 match ball.and_then(|b| p.balls.iter().find(|x| x.id == b)) {
@@ -511,6 +516,7 @@ impl Stage {
             Grip::Cog { id, anchor, .. } => self.resize_text(w, *id, *anchor),
             Grip::Field { id, .. } => format!("fx {id} radius {}", w.fields.iter().find(|f| f.id == *id).map(|f| f.r.round()).unwrap_or(0.0)),
             Grip::Pad { id, .. } => format!("pad radius: {} px", fmt3(w.pads.iter().find(|f| f.id == *id).map(|f| f.r).unwrap_or(0.0))),
+            Grip::Pit { id, .. } => format!("sphere: {} across", w.pits.iter().find(|p| p.id == *id).map(|p| p.w.round()).unwrap_or(0.0)),
             Grip::Arm { id, .. } => format!("arm length: {}", w.arms.iter().find(|f| f.id == *id).map(|f| f.len.round()).unwrap_or(0.0)),
             Grip::SpanSeated { id, .. } | Grip::SpanFree { reader: true, id, .. } => {
                 format!("reader length: {}", w.readers.iter().find(|f| f.id == *id).map(|r| (r.x2 - r.x1).hypot(r.y2 - r.y1).round()).unwrap_or(0.0))

@@ -206,6 +206,8 @@ pub struct Stage {
     fingers: BTreeMap<u64, Finger>,
     gesture: Option<Active>,
     pinch: Option<Pinch>,
+    /// Octave rows in the sphere's notes sheet.
+    ball_rows: usize,
     grip: Option<GripState>,
     spin: Option<Spin>,
     /// The knob being turned: its cog and angle on screen.
@@ -293,7 +295,7 @@ impl Stage {
     pub fn new() -> Stage {
         Stage {
             sel: None, group: Vec::new(), room: false, armed: None, marquee: None, fly: None, fingers: BTreeMap::new(), gesture: None,
-            pinch: None, grip: None, spin: None, knob: None, crank: None, carry_ghost: None, carrying: false, band: None, pit_band: None,
+            pinch: None, ball_rows: 3, grip: None, spin: None, knob: None, crank: None, carry_ghost: None, carrying: false, band: None, pit_band: None,
             scrap: false, snapped: false, caught: false, last_tap: None, dot_at: (0.0, 0.0), hover: None, shift: false,
             edits: edits::Edits::default(), out: Vec::new(), rect: Rect::NOTHING, cw: 0.0, ch: 0.0, safe_top: 0.0, safe_bot: 0.0, now: 0.0,
             io: StageIo::default(), shelf_x: 0.0, shelf_fling: None, icons: icons::Icons::default(), readout: None, readout_held: false,
@@ -592,12 +594,23 @@ impl Stage {
         }
         let at = if want == 1 {
             let f = self.fit_target(w);
-            (f.0, f.1, f.2)
+            self.balls_frame(w).unwrap_or((f.0, f.1, f.2))
         } else {
             self.room_target(w)
         };
         self.framed = Some(Framed { kind: want, home, at });
         self.fly_to(w, at.0, at.1, at.2);
+    }
+    /// The sphere whose notes are being picked, filling the space above the sheet: its balls show each change.
+    fn balls_frame(&self, w: &World) -> Option<(f64, f64, f64)> {
+        if self.sheet.as_ref()?.kind != sheet::SheetKind::Balls {
+            return None;
+        }
+        let Some(Sel::Pit(id)) = self.sel else { return None };
+        let p = w.pits.iter().find(|p| p.id == id)?;
+        let (t, b) = self.free_area();
+        let z = (self.cw.min(b - t) * 0.86 / p.w).min(4.0);
+        Some((p.x, p.y - ((t + b) / 2.0 - self.ch / 2.0) / z, z))
     }
     /// No part of the machine is in the free area: the fit button lights.
     pub(crate) fn machine_lost(&self, w: &World) -> bool {

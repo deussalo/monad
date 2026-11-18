@@ -20,6 +20,9 @@ pub const PIT_TRAIL: f64 = 1.0 / 120.0;
 pub const PIT_MAX: usize = 48;
 pub const PIT_ARM_R: f64 = 2.0;
 pub const PIT_NOTES: [i32; 6] = [60, 62, 64, 67, 69, 72];
+/// The narrowest and widest a hand can make a sphere.
+pub const PIT_MIN_D: f64 = 60.0;
+pub const PIT_MAX_D: f64 = 4000.0;
 
 /// A ball's size from its pitch: low notes big.
 pub fn ball_r(m: i32) -> f64 {
@@ -101,6 +104,18 @@ pub fn ball_at(b: &Ball, t: f64) -> (f64, f64) {
     (tr[0][1], tr[0][2])
 }
 
+impl Ball {
+    /// From a sphere standing at `from` (x, y, across) to the same place in one at `to`.
+    pub fn reframe(&mut self, from: (f64, f64, f64), to: (f64, f64, f64)) {
+        let k = to.2 / from.2;
+        let at = |x: f64, y: f64| (to.0 + (x - from.0) * k, to.1 + (y - from.1) * k);
+        (self.x, self.y) = at(self.x, self.y);
+        for s in &mut self.trail {
+            (s[1], s[2]) = at(s[1], s[2]);
+        }
+    }
+}
+
 impl Pit {
     pub fn radius(&self) -> f64 {
         self.w / 2.0
@@ -130,6 +145,18 @@ impl Pit {
                 s[2] += dy;
             }
         }
+    }
+    /// Stand at (x, y), d across: the balls and their trails keep their places in it.
+    pub fn reframe(&mut self, x: f64, y: f64, d: f64) {
+        let d = clamp(d, PIT_MIN_D, PIT_MAX_D);
+        let from = (self.x, self.y, self.w);
+        for b in &mut self.balls {
+            b.reframe(from, (x, y, d));
+        }
+        self.x = x;
+        self.y = y;
+        self.w = d;
+        self.h = d;
     }
     /// The ball under world point (x, y) as drawn at time t, topmost first.
     pub fn ball_under(&self, x: f64, y: f64, t: f64, zoom: f64) -> Option<usize> {

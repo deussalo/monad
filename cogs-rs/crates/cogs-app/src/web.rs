@@ -67,6 +67,9 @@ pub struct WebApp {
     offs: Vec<(u32, f64)>,
     editor: Option<crate::wave_ui::WaveEditor>,
     foreign: std::collections::HashSet<u64>,
+    /// The part the worklet has been asked to watch, and where it last said that part's modulated knobs are.
+    watched: Option<u32>,
+    mods: Vec<(u16, f32)>,
 }
 
 impl WebApp {
@@ -74,7 +77,7 @@ impl WebApp {
         let world = World::from_str(crate::WORLDS[0].1).unwrap_or_else(|_| World::demo());
         WebApp { world, stage: Stage::new(), panel: false, world_ix: 0, fitted: false, note: None, sent: Value::Null, checked: f64::NEG_INFINITY,
             ready: false, wall: None, state: Value::Null, balls: None, part: u32::MAX, listen: String::new(), listen_at: f64::NEG_INFINITY, rec: None, can_record: false, offs: Vec::new(),
-            editor: None, foreign: Default::default() }
+            editor: None, foreign: Default::default(), watched: None, mods: Vec::new() }
     }
     fn keyboard_part(w: &World, sel: Option<Sel>) -> Option<u32> {
         match sel? {
@@ -99,12 +102,16 @@ impl WebApp {
         while let Some(s) = js_poll() {
             if let Ok(v) = serde_json::from_str::<Value>(&s) {
                 if v.get("balls").is_some() { self.balls = Some(v.clone()) }
+                self.mods.clear();
+                if let Some(m) = v.get("mods").and_then(|x| x.as_array()) {
+                    self.mods.extend(m.chunks_exact(2).filter_map(|c| Some((c[0].as_u64()? as u16, c[1].as_f64()? as f32))));
+                }
                 if let Some(evs) = v.get("rec").and_then(|x| x.as_array()) { self.take_rec(evs, now); }
                 self.state = v;
             }
         }
         let ready = js_ready();
-        if ready && !self.ready { self.sent = Value::Null; self.checked = f64::NEG_INFINITY; }
+        if ready && !self.ready { self.sent = Value::Null; self.checked = f64::NEG_INFINITY; self.watched = None; }
         self.ready = ready;
         if self.world.clock.paused { return }
         let h = js_heard();
@@ -122,6 +129,11 @@ impl WebApp {
         }
         let part = self.rec.as_ref().map(|r| r.reader).or_else(|| Self::keyboard_part(&self.world, self.stage.sel)).unwrap_or(0);
         if part != self.part { self.part = part; js_send(&format!(r#"{{"type":"part","id":{part}}}"#)); }
+        let watch = self.editor.as_ref().map(|e| e.part.id());
+        if watch != self.watched {
+            self.watched = watch;
+            js_send(&match watch { Some(p) => format!(r#"{{"type":"watch","part":{p}}}"#), None => r#"{"type":"watch"}"#.into() });
+        }
         if now - self.listen_at > 0.1 {
             self.listen_at = now;
             let (_, _, _, fit) = self.stage.fit_target(&self.world);
@@ -207,6 +219,7 @@ impl eframe::App for WebApp {
             }
         }
         if let Some(ed) = self.editor.as_mut() {
+            ed.live.clone_from(&self.mods);
             let w = &mut self.world;
             for o in ed.show_in(&ctx, &mut |f| f(w)) {
                 match o {

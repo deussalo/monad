@@ -37,7 +37,6 @@ pub(crate) enum Gesture {
     Knob { id: u32, mode: u8, at: f64, acc: f64, th0: f64, dial: f64 },
     Notes { id: u32, cell0: Option<(f64, f64)>, paint: Option<bool>, mode: u8, sweep: (f64, f64, i64) },
     PitBox { id: u32, at: (f64, f64) },
-    PitSize(u32),
     PitIn { id: u32, w0: (f64, f64), ball: Option<u32>, held: bool, last: Option<(f64, f64)> },
 }
 
@@ -45,6 +44,8 @@ pub(crate) enum Gesture {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Btn {
     Edit,
+    /// A sphere's notes.
+    Balls,
     Rec,
     Zero,
     Copy,
@@ -66,6 +67,7 @@ pub(crate) enum Grip {
     Cog { id: u32, start: Vec<(u32, f64, f64)>, last: Option<(f64, f64)>, b: (f64, f64), n0: f64, raw: f64, anchor: Option<u32> },
     Field { id: u32, x: f64, y: f64, r: f64 },
     Pad { id: u32, x: f64, y: f64, r: f64 },
+    Pit { id: u32, x: f64, y: f64, d: f64 },
     Arm { id: u32, l: f64 },
     SpanSeated { id: u32, mid: f64, half: f64 },
     SpanFree { reader: bool, id: u32, mx: f64, my: f64, hx: f64, hy: f64, l: f64, note: i64 },
@@ -84,7 +86,7 @@ impl Gesture {
             Gesture::Span { reader: false, id, .. } => Sel::String(id),
             Gesture::Belt(i) => Sel::Belt(i),
             Gesture::Cog { id, .. } | Gesture::Rim { id, .. } | Gesture::Knob { id, .. } | Gesture::Notes { id, .. } => Sel::Cog(id),
-            Gesture::PitBox { id, .. } | Gesture::PitSize(id) | Gesture::PitIn { id, .. } => Sel::Pit(id),
+            Gesture::PitBox { id, .. } | Gesture::PitIn { id, .. } => Sel::Pit(id),
             Gesture::Bezel { owner, .. } => return owner,
             _ => return None,
         })
@@ -105,9 +107,16 @@ impl Stage {
         for e in events {
             match e {
                 Event::Touch { id, phase, pos, .. } => {
-                    self.seen_touch = true;
                     let id = id.0;
                     let s = local(pos);
+                    // a browser may have told of this finger as a mouse first: that press will never be let go
+                    if !self.seen_touch && self.mouse_down {
+                        self.mouse_down = false;
+                        if !self.route_sheet(w, MOUSE, s, TouchPhase::Cancel) {
+                            self.up(w, MOUSE, s, true);
+                        }
+                    }
+                    self.seen_touch = true;
                     if self.route_sheet(w, id, s, phase) {
                         continue;
                     }
@@ -353,6 +362,7 @@ impl Stage {
         let Some(hand) = self.grip_of(w, &a.g) else { return false };
         let first = a.id;
         self.gesture = None;
+        self.pit_band = None;
         let hint0 = self.grip_readout(w, &hand);
         let mut g = GripState { a: first, b: id, hand, mid0: (0.0, 0.0), d0: 1.0, hint0, hinted: false };
         let (mid, d) = self.grip_now(&g);
@@ -478,10 +488,6 @@ impl Stage {
         for o in &w.pits {
             let r = o.w / 2.0;
             let dd = dist(p, (o.x, o.y));
-            if self.is_sel(Sel::Pit(o.id)) {
-                let k = (o.x + r * std::f64::consts::FRAC_1_SQRT_2, o.y + r * std::f64::consts::FRAC_1_SQRT_2);
-                near(d(k), 18.0, Gesture::PitSize(o.id));
-            }
             let edge = (dd - r).abs() * z;
             if edge <= 12.0 {
                 near(edge + 6.0, 18.0, Gesture::PitBox { id: o.id, at: p });
@@ -950,12 +956,6 @@ impl Stage {
                 }
                 *at = q;
             }
-            Gesture::PitSize(id) => {
-                if let Some(p) = w.pits.iter_mut().find(|p| p.id == *id) {
-                    p.w = (2.0 * (q.0 - p.x).hypot(q.1 - p.y)).max(60.0);
-                    p.h = p.w;
-                }
-            }
             Gesture::PitIn { id, w0, ball, held, last } => {
                 if *held {
                     return;
@@ -1099,7 +1099,6 @@ impl Stage {
             }
             Gesture::Notes { .. } => self.changed(w, false),
             Gesture::PitBox { id, .. } => self.end_scrap(w, PartRef::Pit(*id)),
-            Gesture::PitSize(_) => self.changed(w, false),
             Gesture::PitIn { id, w0, ball, held, last } => {
                 self.pit_band = None;
                 if *held {
@@ -1211,7 +1210,7 @@ impl Stage {
                 self.changed(w, false);
                 self.buzz(6);
             }
-            Gesture::PitBox { id, .. } | Gesture::PitSize(id) => self.choose(w, Sel::Pit(*id)),
+            Gesture::PitBox { id, .. } => self.choose(w, Sel::Pit(*id)),
             Gesture::Shelf { .. } => {}
             g => {
                 if let Some(o) = g.owner() {
@@ -1736,6 +1735,10 @@ impl Stage {
                 let f = w.pads.iter().find(|f| f.id == *id)?;
                 if fills(f.r) { None } else { Some(Grip::Pad { id: *id, x: f.x, y: f.y, r: f.r }) }
             }
+            Gesture::PitBox { id, .. } | Gesture::PitIn { id, held: false, .. } => {
+                let p = w.pits.iter().find(|p| p.id == *id)?;
+                if fills(p.w / 2.0) { None } else { Some(Grip::Pit { id: *id, x: p.x, y: p.y, d: p.w }) }
+            }
             Gesture::Arm { id, .. } => {
                 let a = w.arms.iter().find(|f| f.id == *id)?;
                 Some(Grip::Arm { id: *id, l: a.r0 + a.len })
@@ -1813,6 +1816,11 @@ impl Stage {
                     f.r = (*r * k).clamp(3.0, 200.0);
                 }
             }
+            Grip::Pit { id, x, y, d } => {
+                if let Some(p) = w.pits.iter_mut().find(|p| p.id == *id) {
+                    p.reframe(*x + m.0, *y + m.1, *d * k);
+                }
+            }
             Grip::Arm { id, l } => {
                 if let Some(a) = w.arms.iter_mut().find(|f| f.id == *id) {
                     a.len = (*l * k - a.r0).max(4.0);
@@ -1861,6 +1869,7 @@ impl Stage {
                 let f = w.pads.iter().find(|f| f.id == id).unwrap();
                 Gesture::Pad { id, off: (f.x - p.0, f.y - p.1), rim: false }
             }
+            Grip::Pit { id, .. } => Gesture::PitBox { id, at: p },
             Grip::Arm { id, .. } => Gesture::ArmBody(id),
             Grip::SpanSeated { id, .. } | Grip::SpanFree { reader: true, id, .. } => {
                 let r = w.readers.iter().find(|f| f.id == id).unwrap();
@@ -1908,6 +1917,18 @@ impl Stage {
                         }
                     }
                 }
+                return;
+            }
+        }
+        if ctrl {
+            // no plate under the cursor: a sphere there takes the pinch
+            let (p, most) = (self.to_world(w, s), 0.9 * self.cw.min(self.ch) / w.s.zoom);
+            if let Some(o) = w.pits.iter_mut().find(|o| dist(p, (o.x, o.y)) <= o.w / 2.0 && o.w <= most) {
+                let (x, y, d) = (o.x, o.y, o.w * (-dy * 0.01).exp());
+                o.reframe(x, y, d);
+                let across = o.w.round();
+                self.say(format!("sphere: {across} across"), false);
+                self.changed(w, false);
                 return;
             }
         }

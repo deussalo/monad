@@ -280,7 +280,6 @@ pub fn draw_pit_sel(pen: &Pen, x: f64, y: f64, w: f64) {
     let px = pen.px();
     let r = w / 2.0;
     pen.circle(x, y, r + 4.0 * px, 1.5, SEL);
-    pen.fill(x + r * std::f64::consts::FRAC_1_SQRT_2, y + r * std::f64::consts::FRAC_1_SQRT_2, 5.0 * px, SEL);
 }
 
 // ---------- the FX field ----------

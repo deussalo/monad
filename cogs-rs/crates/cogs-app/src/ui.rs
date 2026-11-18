@@ -206,8 +206,10 @@ impl eframe::App for App {
                 else { self.sh.world.lock().map(|mut w| self.stage.back(&mut w)).unwrap_or(true) };
             if !closed { if let Some(f) = &self.leave { f() } }
         }
+        self.sh.meters.set_watch(self.editor.as_ref().map(|e| e.part.id()));
         if let Some(ed) = self.editor.as_mut() {
             ed.safe_bottom = io.safe_bottom;
+            self.sh.meters.watched(ed.part.id(), &mut ed.live);
             let ver0 = self.sh.world.lock().ok().and_then(|w| w.voice(ed.part).map(|v| v.ver));
             let outs = ed.show(&ctx, &self.sh.world);
             let ver1 = self.sh.world.lock().ok().and_then(|w| w.voice(ed.part).map(|v| v.ver));

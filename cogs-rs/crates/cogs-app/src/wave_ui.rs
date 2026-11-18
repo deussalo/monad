@@ -74,6 +74,10 @@ struct Drag { n0: f64, a0: f64, acc: f64, x0: f32, route: Option<usize>, fresh: 
 pub struct WaveEditor {
     /// Room to leave under the sheet for the system's navigation bar, in points.
     pub safe_bottom: f32,
+    /// Where the audio has the part's modulated knobs now, on its newest note: (knob, position 0..1). Set by the app.
+    pub live: Vec<(u16, f32)>,
+    /// The macros a cam or probe is turning, and to where.
+    driven: [Option<f64>; WAVE_MACROS],
     pub part: Part,
     p: WavePatch,
     dial: Vec<String>,
@@ -181,7 +185,7 @@ impl WaveEditor {
     pub fn open(w: &World, part: Part, lib: Option<PathBuf>) -> Option<Self> {
         let v = w.voice(part)?;
         if v.kind != VoiceKind::Wave { return None }
-        let mut e = WaveEditor { part, p: WavePatch::init(), dial: Vec::new(), ver: 0, tab: 0, arm: None, pin: false, msg: String::new(), json: String::new(),
+        let mut e = WaveEditor { live: Vec::new(), driven: [None; WAVE_MACROS], part, p: WavePatch::init(), dial: Vec::new(), ver: 0, tab: 0, arm: None, pin: false, msg: String::new(), json: String::new(),
             lib, open_routes: HashSet::new(), drag: None, say: None, dirty: false, redraw_fx: false, safe_bottom: 0. };
         e.load(w);
         Some(e)
@@ -217,11 +221,19 @@ impl WaveEditor {
     pub fn show_in(&mut self, ctx: &egui::Context, with: &mut dyn FnMut(&mut dyn FnMut(&mut World))) -> Vec<EditorOut> {
         let mut out = Vec::new();
         let mut gone = false;
-        with(&mut |w: &mut World| match w.voice(self.part) {
-            Some(v) if v.kind == VoiceKind::Wave => { if v.ver != self.ver && self.drag.is_none() { self.load(w) } }
-            _ => gone = true,
+        let mut driven = [None; WAVE_MACROS];
+        with(&mut |w: &mut World| {
+            match w.voice(self.part) {
+                Some(v) if v.kind == VoiceKind::Wave => { if v.ver != self.ver && self.drag.is_none() { self.load(w) } }
+                _ => gone = true,
+            }
+            let (part, t) = (self.part, w.clock.view);
+            w.motions(&mut |m| if m.target == part { driven[m.slot as usize] = Some(m.value_at(t).clamp(0., 1.)) });
         });
         if gone { out.push(EditorOut::Close); return out }
+        self.driven = driven;
+        // the knobs follow the sound and the machine while the sheet is open
+        ctx.request_repaint_after(std::time::Duration::from_millis(33));
         let now = ctx.input(|i| i.time);
         let scr = ctx.content_rect();
         let (wd, ht) = ((scr.width() - 8.).min(560.), (scr.height() * 0.62).max(280.).min(scr.height() - self.safe_bottom - 12.));
@@ -292,7 +304,8 @@ impl WaveEditor {
     }
     /// The mod sources: tap one to arm it, then drag a knob to set how far it moves that knob.
     fn chips(&mut self, ui: &mut Ui) {
-        let o = egui::ScrollArea::horizontal().id_salt("chips").show(ui, |ui| ui.horizontal(|ui| {
+        // slid by the finger: a bar here would only sit over the chips and take their taps
+        let o = egui::ScrollArea::horizontal().id_salt("chips").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.;
             if TABS[self.tab] == "MAIN" && self.chip(ui, "DIAL", FG, self.pin, false) { self.pin = !self.pin; self.arm = None }
             for s in 0..NS as u8 {
@@ -328,6 +341,26 @@ impl WaveEditor {
     }
 
     // ---------- the knob ----------
+    /// The macro this knob is, if a cam or probe is turning it: where it has it.
+    fn driven_at(&self, i: usize) -> Option<f64> {
+        i.checked_sub(P_MAC0).filter(|&m| m < WAVE_MACROS).and_then(|m| self.driven[m])
+    }
+    /// Where modulation has a knob now: the audio's word while a note sounds, else what the turning macros alone make of it.
+    fn moved_to(&self, i: usize, base: f64) -> Option<f32> {
+        if let Some(x) = self.live.iter().find(|x| x.0 as usize == i) { return Some(x.1) }
+        let mac = |s: usize| s.checked_sub(SRC_MAC0).filter(|&m| m < WAVE_MACROS);
+        let at = |m: usize| self.driven[m].unwrap_or_else(|| self.p.values[P_MAC0 + m]);
+        let routes = || self.p.mods.iter().filter(|r| r.dst as usize == i && !r.off);
+        if !routes().any(|r| mac(r.src as usize).map_or(false, |m| self.driven[m].is_some())) { return None }
+        let mut n = base;
+        for r in routes() {
+            let Some(m) = mac(r.src as usize) else { continue };
+            let x = mod_curve(at(m), r.curve);
+            let g = match r.aux.and_then(|a| mac(a as usize)) { Some(a) if r.aux_inv => 1. - at(a), Some(a) => at(a), None => 1. };
+            n += (if r.bi { x * 2. - 1. } else { x }) * r.amt * g;
+        }
+        Some(n.clamp(0., 1.) as f32)
+    }
     fn knob(&mut self, ui: &mut Ui, i: usize, label: Option<String>) {
         let d = &wave_params()[i];
         let bare = label.as_deref() == Some("");
@@ -393,7 +426,9 @@ impl WaveEditor {
         let p = ui.painter();
         let c = pos2(rect.center().x, rect.top() + 27.);
         let (a0, sw) = (PI * 0.75, PI * 1.5);
-        let n = wave_norm(d, self.p.values[i]).clamp(0., 1.) as f32;
+        let driven = self.driven_at(i);
+        let base = driven.unwrap_or_else(|| wave_norm(d, self.p.values[i]).clamp(0., 1.));
+        let n = base as f32;
         let pinned = self.dial.contains(&d.path);
         let ring = match self.arm { Some(s) => src_col(s), None if self.pin => FG, None => LINE };
         p.circle_filled(c, 17., WELL);
@@ -412,12 +447,18 @@ impl WaveEditor {
             r -= 4.;
             if r < 6. { break }
         }
+        if driven.is_none() {
+            if let Some(x) = self.moved_to(i, base) {
+                let a = a0 + sw * x.clamp(0., 1.);
+                p.circle_filled(c + vec2(a.cos(), a.sin()) * 22., 3.5, SEL);
+            }
+        }
         let a = a0 + sw * n;
         p.line_segment([c + vec2(a.cos(), a.sin()) * 6., c + vec2(a.cos(), a.sin()) * 15.], Stroke::new(2.5, FG));
         let name = label.unwrap_or_else(|| d.label.to_string());
         p.text(pos2(rect.center().x, rect.top() + 58.), Align2::CENTER_CENTER, name, FontId::proportional(10.5), if pinned { HOT } else { DIM });
         let val = match armed { Some(j) => { let m = &self.p.mods[j]; format!("{} {}{}", src_label(m.src), if m.amt > 0. { "+" } else { "" }, (m.amt * 100.).round()) }
-            None => value_text(d, self.p.values[i]) };
+            None => value_text(d, driven.map_or(self.p.values[i], |x| wave_denorm(d, x))) };
         p.text(pos2(rect.center().x, rect.top() + if bare { 59. } else { 71. }), Align2::CENTER_CENTER, val, FontId::proportional(11.), match armed { Some(j) => src_col(self.p.mods[j].src), None => FG });
     }
     fn k(&mut self, ui: &mut Ui, path: &str) { if let Some(i) = param_index(path) { self.knob(ui, i, None) } }

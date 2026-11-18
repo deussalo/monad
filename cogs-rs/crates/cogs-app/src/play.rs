@@ -42,6 +42,24 @@ pub struct Meters {
     pub late_notes: AtomicU64,
     /// The last block's peak, thousandths of full scale.
     pub peak_milli: AtomicU32,
+    /// The part the synth editor has open, plus one (0: none).
+    pub watch: AtomicU32,
+    /// Which part `mods` is about, plus one, and how many of them count.
+    pub mod_part: AtomicU32,
+    pub mod_n: AtomicU32,
+    /// Where the part's newest note has each modulated knob: knob index << 16 | position 0..65535.
+    pub mods: [AtomicU32; MOD_SLOTS],
+}
+pub const MOD_SLOTS: usize = 32;
+impl Meters {
+    pub fn set_watch(&self, part: Option<u32>) { self.watch.store(part.map_or(0, |p| p + 1), Relaxed) }
+    /// The modulated knobs of `part` as the audio last had them: (knob, position 0..1).
+    pub fn watched(&self, part: u32, out: &mut Vec<(u16, f32)>) {
+        out.clear();
+        if self.mod_part.load(Relaxed) != part + 1 { return }
+        let n = (self.mod_n.load(Relaxed) as usize).min(MOD_SLOTS);
+        out.extend(self.mods[..n].iter().map(|m| { let x = m.load(Relaxed); ((x >> 16) as u16, (x & 0xffff) as f32 / 65535.) }));
+    }
 }
 
 /// Where the camera is, for the listener: a sound pans across the open stage and darkens off it (stage.js heard()).
@@ -130,6 +148,8 @@ pub struct Render {
     rec: Producer<RecEv>,
     /// The sim time this block starts on: heard together with a key played now.
     t_now: f64,
+    /// `meters.watch` as the engine has been told it.
+    watching: u32,
 }
 
 const MIDI_KEY: u32 = 0x4000_0000;
@@ -164,7 +184,7 @@ pub fn parts(world: World, sr: f32) -> (Arc<Shared>, Render, Sync) {
     // Room for the busiest shipped world: every field with its reverb, and plenty of synth racks.
     let engine = Engine::with_config(sr, cogs_dsp::EngineConfig { parts: 96, rack_delays: 24, rack_verbs: 12, field_verbs: 8, modal_voices: 64, drum_voices: 64 });
     let render = Render { sh: sh.clone(), engine, midi: mc, ctl: cc, dead: dp, parts: HashMap::with_capacity(512), sr: sr as f64, horizon: 0, sim_at_horizon: 0., held: [0; 128],
-        sustain: false, sustained: [false; 128], listen: Listen::default(), velcurve, rec: rp, t_now: 0. };
+        sustain: false, sustained: [false; 128], listen: Listen::default(), velcurve, rec: rp, t_now: 0., watching: 0 };
     (sh, render, Sync::new(cp, dc))
 }
 
@@ -383,6 +403,11 @@ impl Render {
                 }
             }
         }
+        let watch = self.sh.meters.watch.load(Relaxed);
+        if watch != self.watching {
+            self.watching = watch;
+            self.engine.command(Cmd::Watch { part: watch.checked_sub(1) });
+        }
         if let Ok(l) = self.sh.listen.try_lock() { self.listen = *l }
         self.velcurve = f32::from_bits(self.sh.velcurve.load(Relaxed)) as f64;
         while let Ok(m) = self.midi.pop() {
@@ -438,6 +463,12 @@ impl Render {
         }
         self.engine.process(l, r);
         for p in self.engine.retired() { let _ = self.dead.push(p); }
+        let mut seen = [(0u16, 0f64); MOD_SLOTS];
+        let k = if self.watching != 0 { self.engine.watched(&mut seen) } else { 0 };
+        let m = &self.sh.meters;
+        for (slot, (d, x)) in m.mods.iter().zip(&seen[..k]) { slot.store((*d as u32) << 16 | (x.clamp(0., 1.) * 65535.) as u32, Relaxed) }
+        m.mod_n.store(k as u32, Relaxed);
+        m.mod_part.store(self.watching, Relaxed);
         self.sh.meters.block.store(n as u32, Relaxed);
         self.sh.meters.blocks.fetch_add(1, Relaxed);
         self.sh.meters.peak_milli.store((self.engine.peak() * 1000.) as u32, Relaxed);

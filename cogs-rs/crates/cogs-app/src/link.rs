@@ -20,6 +20,8 @@
 //! [t,x,y,...]],...],"pits":[[pit,flash,hits],...],"rec":[[on,note,vel,at],...]}`. While the UI records (`{"type":"rec","on":b}`)
 //! the worklet stamps every key with the sim time heard with it, as play.rs does, and the UI writes them onto its
 //! plate with rec::Rec, then sends the world back. `{"type":"release","key":k}` lets go of an audition.
+//! `{"type":"watch","part":id}` (no part: stop) asks for the modulated knobs of the patch open in the editor: the state
+//! then carries `"mods":[knob,position,...]` while a note of it sounds.
 use crate::midi;
 use crate::play::{self, Listen, Render, Shared, Sync};
 use cogs_sim::World;
@@ -75,6 +77,7 @@ impl AudioSide {
             "rec" => self.sh.recording.store(m.get("on").and_then(|v| v.as_bool()).unwrap_or(false), Relaxed),
             "audition" => self.sh.midi(midi::Midi::Audition { part: f("part") as u32, midi: f("midi") as f32, key: f("key") as u32 }),
             "part" => self.sh.midi_part.store(f("id") as u32, Relaxed),
+            "watch" => self.sh.meters.set_watch(m.get("part").and_then(|v| v.as_u64()).map(|p| p as u32)),
             "listen" => {
                 if let Ok(mut l) = self.sh.listen.lock() { *l = Listen { vx: f("vx"), vy: f("vy"), zoom: f("zoom").max(1e-3), w: f("w").max(1.), h: f("h").max(1.), e: f("e") as f32 } }
             }
@@ -94,6 +97,7 @@ impl AudioSide {
         for r in &w.readers { old.insert(r.id, (Value::Object(r.voice.raw.clone()), r.voice.ver)); }
         for p in &w.pits { old.insert(p.id, (Value::Object(p.voice.raw.clone()), p.voice.ver)); }
         let live: Vec<((u32, u32), cogs_sim::Ball)> = w.pits.iter().flat_map(|p| p.balls.iter().map(move |b| ((p.id, b.id), b.clone()))).collect();
+        let frames: HashMap<u32, (f64, f64, f64)> = w.pits.iter().map(|p| (p.id, (p.x, p.y, p.w))).collect();
         if w.reload(j).is_err() { return }
         let fix = |id: u32, v: &mut cogs_sim::model::Voice| {
             if let Some((raw, ver)) = old.get(&id) { v.ver = if *raw == Value::Object(v.raw.clone()) { *ver } else { ver.wrapping_add(1) } }
@@ -117,7 +121,18 @@ impl AudioSide {
         if !paused && lead > 0. { w.advance(t + lead, &mut |_| {}); }
         // the balls as they were here, at this world's own time (they are chaotic: only this side knows them)
         if !fresh {
-            for p in &mut w.pits { for b in &mut p.balls { if let Some((_, l)) = live.iter().find(|x| x.0 == (p.id, b.id)) { *b = l.clone(); } } }
+            // where they fly is this side's; which note each is, and the sphere around it, are the edit's
+            for p in &mut w.pits {
+                let to = (p.x, p.y, p.w);
+                let from = frames.get(&p.id).copied().unwrap_or(to);
+                for b in &mut p.balls {
+                    let Some((_, l)) = live.iter().find(|x| x.0 == (p.id, b.id)) else { continue };
+                    let (note, r) = (b.note, b.r);
+                    *b = l.clone();
+                    (b.note, b.r) = (note, r);
+                    b.reframe(from, to);
+                }
+            }
         }
         drop(w);
         // a new part should be ready before its first note
@@ -148,6 +163,15 @@ impl AudioSide {
         let _ = write!(self.out, r#"{{"type":"state","t":{},"ct":{},"paused":{},"notes":{},"events":{},"peak":{},"voices":{}"#, w.clock.sim_t, ct_end, w.clock.paused,
             m.notes.load(Relaxed), m.events.load(Relaxed), self.peak, self.render.voices());
         self.peak = 0.;
+        if let Some(part) = m.watch.load(Relaxed).checked_sub(1) {
+            let mut mods = Vec::new();
+            m.watched(part, &mut mods);
+            if !mods.is_empty() {
+                self.out.push_str(r#","mods":["#);
+                for (i, (d, x)) in mods.iter().enumerate() { let _ = write!(self.out, "{}{},{:.4}", if i > 0 { "," } else { "" }, d, x); }
+                self.out.push(']');
+            }
+        }
         if !self.rec.is_empty() {
             self.out.push_str(r#","rec":["#);
             for (i, e) in self.rec.iter().enumerate() { let _ = write!(self.out, "{}[{},{},{},{}]", if i > 0 { "," } else { "" }, e.on as u8, e.note, e.vel, e.at); }

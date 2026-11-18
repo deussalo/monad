@@ -17,6 +17,8 @@ use egui::{vec2, Align2, FontId, RichText, Stroke};
 pub enum SheetKind {
     Notes,
     Panel,
+    /// The notes a sphere's balls can be.
+    Balls,
 }
 
 pub struct Sheet {
@@ -58,6 +60,11 @@ const GRAB_H: f64 = 28.0;
 /// The notes sheet's two rows of tools.
 const HEAD_H: f64 = 96.0;
 const CHIPS_H: f64 = 40.0;
+/// The sphere's notes: its heading, and one octave of keys with the gap under it.
+const BALLS_HEAD: f64 = 30.0;
+const BALLS_ROW: f64 = 80.0;
+const BALLS_LOW: i32 = 48;
+const BALLS_HIGH: i32 = 83;
 /// The toolbars' small words, and what a tool that can't act now looks like: dimmed, still legible.
 const CAPTION: Color32 = Color32::from_rgb(0x9a, 0x9a, 0x9a);
 const DISABLED: Color32 = Color32::from_rgb(0x5c, 0x5c, 0x5c);
@@ -134,6 +141,13 @@ impl Stage {
         }
         self.sheet = Some(Sheet { kind: SheetKind::Notes, min: false, drag: None });
     }
+    pub fn open_balls(&mut self) {
+        if matches!(self.sel, Some(Sel::Pit(_))) {
+            self.pop = None;
+            self.pop_rect = None;
+            self.sheet = Some(Sheet { kind: SheetKind::Balls, min: false, drag: None });
+        }
+    }
     pub fn toggle_panel(&mut self) {
         self.sheet = match &self.sheet {
             Some(s) if s.kind == SheetKind::Panel => None,
@@ -160,6 +174,7 @@ impl Stage {
                 (strip - CHIPS_H - 4.0 - 6.0 - 8.0 - self.roll_content).max(self.safe_top + 4.0)
             }
             SheetKind::Panel => (0.28 * self.ch).max(self.safe_top + 120.0),
+            SheetKind::Balls => (self.ch - self.strip_h(SheetKind::Balls) - BALLS_HEAD - self.ball_rows as f64 * BALLS_ROW).max(self.safe_top + 60.0),
         };
         let strip = self.ch - self.strip_h(s.kind);
         let base = if s.min { strip } else { full };
@@ -169,7 +184,7 @@ impl Stage {
     fn strip_h(&self, k: SheetKind) -> f64 {
         match k {
             SheetKind::Notes => 1.0 + GRAB_H + HEAD_H + INTERACTION_H as f64 + self.safe_bot,
-            SheetKind::Panel => GRAB_H + INTERACTION_H as f64 + self.safe_bot,
+            SheetKind::Panel | SheetKind::Balls => GRAB_H + INTERACTION_H as f64 + self.safe_bot,
         }
     }
     /// The grab's band, in stage coordinates.
@@ -177,7 +192,7 @@ impl Stage {
         let s = self.sheet.as_ref()?;
         let top = self.sheet_top()?;
         Some(match s.kind {
-            SheetKind::Panel => (top, top + GRAB_H),
+            SheetKind::Panel | SheetKind::Balls => (top, top + GRAB_H),
             SheetKind::Notes => {
                 let y = if s.min { top } else { self.ch - self.strip_h(SheetKind::Notes) };
                 (y, y + GRAB_H)
@@ -327,6 +342,11 @@ impl Stage {
     // ---------- drawing the sheet and its widgets ----------
     /// Size the notes sheet to its roll: called before the frame's input and drawing.
     pub(super) fn measure_roll(&mut self, w: &World) {
+        if let Some(Sel::Pit(id)) = self.sel {
+            if let Some(p) = w.pits.iter().find(|p| p.id == id) {
+                self.ball_rows = ball_octaves(p).count();
+            }
+        }
         if let Some(r) = &self.roll {
             if let Some(g) = r.geo(w, self.cw - 16.0, f64::INFINITY) {
                 self.roll_content = g.content_h();
@@ -352,6 +372,10 @@ impl Stage {
                 }
             }
         }
+        if kind == SheetKind::Balls && !matches!(self.sel, Some(Sel::Pit(i)) if w.pits.iter().any(|p| p.id == i)) {
+            self.sheet = None;
+            return;
+        }
         if let Some(r) = &mut self.roll {
             let now = self.now;
             let mut out = std::mem::take(&mut self.out);
@@ -366,16 +390,17 @@ impl Stage {
         let o = self.rect.min;
         let p = ui.painter().clone();
         if !min {
-            p.rect_filled(Rect::from_min_max(o, self.scr((self.cw, top))), 0.0, Color32::from_black_alpha(if kind == SheetKind::Panel { 40 } else { 90 }));
+            p.rect_filled(Rect::from_min_max(o, self.scr((self.cw, top))), 0.0, Color32::from_black_alpha(if kind == SheetKind::Notes { 90 } else { 40 }));
         }
         let sheet = Rect::from_min_max(self.scr((0.0, top)), self.scr((self.cw, self.ch)));
-        let round = if kind == SheetKind::Notes { 12 } else { 0 };
+        let round = if kind == SheetKind::Panel { 0 } else { 12 };
         p.rect_filled(sheet, egui::CornerRadius { nw: round, ne: round, sw: 0, se: 0 }, BG);
         p.line_segment([sheet.left_top(), sheet.right_top()], Stroke::new(1.0, LINE));
         style(ui);
         match kind {
             SheetKind::Notes => self.show_notes(ui, w, top, min),
             SheetKind::Panel => self.show_panel(ui, w, top, min, extra),
+            SheetKind::Balls => self.show_balls(ui, w, top, min),
         }
         // the grab
         if let Some((a, _)) = self.grab_band() {
@@ -872,6 +897,67 @@ impl Stage {
             self.pop_rect = None;
         }
         changed
+    }
+    // ---------- a sphere's notes ----------
+    /// One keyboard per octave, every key in reach. A tap takes effect at once: a ball whose note went takes the
+    /// nearest one left. The dot on a key: a ball is that note now.
+    fn show_balls(&mut self, ui: &mut egui::Ui, w: &mut World, top: f64, min: bool) {
+        let Some(Sel::Pit(id)) = self.sel else { return };
+        if min {
+            return;
+        }
+        let Some(pi) = w.pits.iter().position(|p| p.id == id) else { return };
+        let area = Rect::from_min_max(self.scr((12.0, top + GRAB_H)), self.scr((self.cw - 12.0, self.ch - INTERACTION_H as f64 - self.safe_bot)));
+        let mut cui = ui.new_child(egui::UiBuilder::new().max_rect(area));
+        let (notes, balls) = (w.pits[pi].notes.clone(), w.pits[pi].balls.iter().map(|b| b.note).collect::<Vec<_>>());
+        let head = format!("{} note{} · {} ball{}", notes.len(), if notes.len() == 1 { "" } else { "s" }, balls.len(), if balls.len() == 1 { "" } else { "s" });
+        let hr = Rect::from_min_size(area.min, vec2(area.width(), BALLS_HEAD as f32 - 6.0));
+        cui.painter().text(hr.left_center(), Align2::LEFT_CENTER, "sphere notes", FontId::proportional(14.0), FG);
+        cui.painter().text(hr.right_center(), Align2::RIGHT_CENTER, head, FontId::proportional(12.0), DIM);
+        cui.advance_cursor_after_rect(hr);
+        let mut tapped = None;
+        egui::ScrollArea::vertical().id_salt("ball-notes").auto_shrink([false, false]).scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(&mut cui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for oct in ball_octaves(&w.pits[pi]).rev() {
+                let (row, _) = ui.allocate_exact_size(vec2(area.width(), BALLS_ROW as f32), egui::Sense::hover());
+                let cell = row.width() / 7.0;
+                const WHITE: [(i32, f32); 7] = [(0, 0.0), (2, 1.0), (4, 2.0), (5, 3.0), (7, 4.0), (9, 5.0), (11, 6.0)];
+                const BLACK: [(i32, f32); 5] = [(1, 1.0), (3, 2.0), (6, 4.0), (8, 5.0), (10, 6.0)];
+                let whites = WHITE.iter().map(|&(pc, x)| (pc, Rect::from_min_size(pos2(row.left() + x * cell + 2.0, row.top() + 36.0), vec2(cell - 4.0, 36.0))));
+                let blacks = BLACK.iter().map(|&(pc, x)| (pc, Rect::from_min_size(pos2(row.left() + x * cell - cell * 0.43, row.top()), vec2(cell * 0.86, 32.0))));
+                for (pc, r) in whites.chain(blacks) {
+                    let m = oct * 12 + pc;
+                    let resp = ui.interact(r, ui.id().with(("ball-note", m)), egui::Sense::click());
+                    let on = notes.contains(&m);
+                    let fill = if on { HOT } else if resp.is_pointer_button_down_on() { LINE } else { PAD };
+                    ui.painter().rect_filled(r, 6.0, fill);
+                    ui.painter().text(r.center(), Align2::CENTER_CENTER, note_name(m as i64), FontId::proportional(11.0), if on { Color32::BLACK } else { DIM });
+                    if balls.contains(&m) {
+                        ui.painter().circle_filled(r.right_top() + vec2(-6.0, 6.0), 2.5, if on { Color32::BLACK } else { FG });
+                    }
+                    if resp.clicked() {
+                        tapped = Some(m);
+                    }
+                }
+            }
+        });
+        let Some(m) = tapped else { return };
+        let p = &mut w.pits[pi];
+        if !p.notes.contains(&m) {
+            p.notes.push(m);
+            p.notes.sort();
+        } else if p.notes.len() > 1 {
+            p.notes.retain(|n| *n != m);
+        } else {
+            self.say("a sphere keeps at least one note".into(), false);
+            return;
+        }
+        p.retune();
+        self.buzz(6);
+        self.changed(w, false);
+        if self.edits.commit(w) {
+            self.out.push(StageOut::Changed);
+        }
     }
     // ---------- the panel ----------
     fn show_panel(&mut self, ui: &mut egui::Ui, w: &mut World, top: f64, min: bool, extra: &mut dyn FnMut(&mut egui::Ui, &mut World)) {
@@ -1431,6 +1517,12 @@ pub fn cogs_file_name() -> String {
 }
 
 // ---------- widgets ----------
+/// The octaves a sphere's keyboard shows (a note's octave is note / 12): C3 to B5, and any further its notes reach.
+fn ball_octaves(p: &cogs_sim::Pit) -> std::ops::RangeInclusive<i32> {
+    let lo = p.notes.iter().copied().min().unwrap_or(BALLS_LOW).min(BALLS_LOW);
+    let hi = p.notes.iter().copied().max().unwrap_or(BALLS_HIGH).max(BALLS_HIGH);
+    lo.div_euclid(12)..=hi.div_euclid(12)
+}
 pub(super) fn style(ui: &mut egui::Ui) {
     let s = ui.style_mut();
     s.visuals = egui::Visuals::dark();

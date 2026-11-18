@@ -96,6 +96,10 @@
   };
   // the sound may only start from a gesture
   for (const ev of ['pointerdown', 'keydown', 'touchend']) addEventListener(ev, () => cogs.start(), { capture: true });
+  // A finger arrives twice, as a pointer and as a touch, and eframe passes on both: the stage took the first press for
+  // a mouse that never let go, so every later tap was a second finger. Touch alone speaks for fingers.
+  for (const ev of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'])
+    addEventListener(ev, e => { if (e.pointerType === 'touch') e.stopPropagation(); }, { capture: true });
   (async () => {
     await wasm_bindgen(inline ? { module_or_path: b64(inline['cogs_bg.wasm']) } : { module_or_path: 'cogs_bg.wasm' });
     wasm_bindgen.start('cogs');
