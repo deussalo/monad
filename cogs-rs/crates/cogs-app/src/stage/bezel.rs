@@ -705,7 +705,7 @@ impl Stage {
                 ];
                 self.beside(w, (self.dot_at, self.dot_at), 0.0, None, sec, s, ("pin".into(), note_name(t.ring_note(rg as i64) as i64)))
             }),
-            Some(s @ Sel::Cog(i)) => w.cog(i).filter(|c| c.track.is_some() && !note_mode(c, w.s.zoom)).map(|c| {
+            Some(s @ Sel::Cog(i)) => w.cog(i).filter(|c| c.track.is_some()).map(|c| {
                 let k = |key| Key::Track(i, key);
                 let t = c.track.as_ref().unwrap();
                 let sec = vec![
@@ -717,6 +717,11 @@ impl Stage {
                 ];
                 let name = format!("{} {}", NOTE_NAMES[(t.root as usize) % 12], SCALES[t.scale].0);
                 self.beside(w, ((c.x, c.y), (c.x, c.y)), c.radius(), None, sec, s, (format!("disc {i}"), name))
+            }).filter(|b| {
+                // a disc zoomed into a score so far that the bezel could only sit on its face: the face is for pins
+                let c = w.cog(i).unwrap();
+                let at = self.to_screen(w, c.x, c.y);
+                !(note_mode(c, w.s.zoom) && dist((b.cx, b.cy), at) < c.radius() * w.s.zoom)
             }),
             _ => None,
         };
