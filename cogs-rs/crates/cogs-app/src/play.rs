@@ -108,7 +108,8 @@ pub fn start(world: World, sr: f32) -> (Arc<Shared>, Render) {
     let velcurve = world.s.vel_curve;
     let sh = Arc::new(Shared { world: Mutex::new(world), listen: Mutex::new(Listen::default()), meters: Meters::default(), midi_part: AtomicU32::new(0),
         velcurve: AtomicU32::new((velcurve as f32).to_bits()), midi_tx: Mutex::new(mp), running: AtomicBool::new(true) });
-    let engine = Engine::new(sr);
+    // Room for the busiest shipped world: every field with its reverb, and plenty of synth racks.
+    let engine = Engine::with_config(sr, cogs_dsp::EngineConfig { parts: 96, rack_delays: 24, rack_verbs: 12, field_verbs: 8, modal_voices: 64, drum_voices: 64 });
     let s2 = sh.clone();
     std::thread::Builder::new().name("cogs-sync".into()).spawn(move || sync(s2, cp, dc, sr as f64)).ok();
     let render = Render { sh: sh.clone(), engine, midi: mc, ctl: cc, dead: dp, parts: HashMap::with_capacity(512), sr: sr as f64, owed: 0., held: [0; 128],

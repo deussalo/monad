@@ -18,10 +18,11 @@ fn main() {
     let mut out: Vec<i16> = Vec::with_capacity(total * 2);
     let (mut peak, mut sum, mut worst, mut nan) = (0f32, 0f64, 0f64, false);
     let mut done = 0;
+    let mut times: Vec<f64> = Vec::new();
     while done < total {
         let t = std::time::Instant::now();
         render.block(&mut l, &mut r, 0.008);
-        worst = worst.max(t.elapsed().as_secs_f64());
+        let el = t.elapsed().as_secs_f64(); worst = worst.max(el); times.push(el);
         for i in 0..n { for x in [l[i], r[i]] { if !x.is_finite() { nan = true } peak = peak.max(x.abs()); sum += (x * x) as f64; out.push((x.clamp(-1., 1.) * 32767.) as i16) } }
         done += n;
         // a keyboard note every second, to hear the MIDI path too
@@ -42,5 +43,9 @@ fn main() {
     println!("{name}: {secs}s → {path}\n  peak {:.3} ({:.1} dBFS) · rms {:.1} dBFS · NaN {nan}\n  machine notes {} · keys {}\n  worst block {:.2} ms of {:.2} ms budget",
         peak, 20. * (peak as f64).log10(), 20. * rms.log10(), m.events.load(std::sync::atomic::Ordering::Relaxed), m.notes.load(std::sync::atomic::Ordering::Relaxed),
         worst * 1000., n as f64 / 48.);
+    let mut ts = times.clone(); ts.sort_by(|a, b| a.partial_cmp(b).unwrap()); let pct = |q: f64| ts[((ts.len() - 1) as f64 * q) as usize] * 1000.;
+    let budget = n as f64 / 48000.; let over = times.iter().filter(|&&x| x > budget).count();
+    let first_over = times.iter().position(|&x| x > budget);
+    println!("  blocks: mean {:.2} ms · p50 {:.2} · p99 {:.2} · p99.9 {:.2} · over budget {} of {} (first at block {:?})", times.iter().sum::<f64>() / times.len() as f64 * 1000., pct(0.5), pct(0.99), pct(0.999), over, times.len(), first_over);
     sh.running.store(false, std::sync::atomic::Ordering::Relaxed);
 }
