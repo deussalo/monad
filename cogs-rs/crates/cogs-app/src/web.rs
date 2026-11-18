@@ -2,6 +2,7 @@
 //! AudioWorklet (cogs-worklet, driven by web/cogs-web.js); this side keeps its own copy of the machine for drawing and
 //! editing, and keeps the worklet's in step (see link.rs). The page's glue is `window.cogs`.
 use crate::link;
+use crate::rec::{self, Rec, RecEv};
 use crate::stage::{Sel, Stage, StageIo, StageOut};
 use cogs_sim::World;
 use eframe::egui;
@@ -60,6 +61,10 @@ pub struct WebApp {
     part: u32,
     listen: String,
     listen_at: f64,
+    rec: Option<Rec>,
+    can_record: bool,
+    /// auditions to let go of, at these times
+    offs: Vec<(u32, f64)>,
     editor: Option<crate::wave_ui::WaveEditor>,
     foreign: std::collections::HashSet<u64>,
 }
@@ -68,7 +73,7 @@ impl WebApp {
     pub fn new() -> Self {
         let world = World::from_str(crate::WORLDS[0].1).unwrap_or_else(|_| World::demo());
         WebApp { world, stage: Stage::new(), panel: false, world_ix: 0, fitted: false, note: None, sent: Value::Null, checked: f64::NEG_INFINITY,
-            ready: false, wall: None, state: Value::Null, balls: None, part: u32::MAX, listen: String::new(), listen_at: f64::NEG_INFINITY,
+            ready: false, wall: None, state: Value::Null, balls: None, part: u32::MAX, listen: String::new(), listen_at: f64::NEG_INFINITY, rec: None, can_record: false, offs: Vec::new(),
             editor: None, foreign: Default::default() }
     }
     fn keyboard_part(w: &World, sel: Option<Sel>) -> Option<u32> {
@@ -94,6 +99,7 @@ impl WebApp {
         while let Some(s) = js_poll() {
             if let Ok(v) = serde_json::from_str::<Value>(&s) {
                 if v.get("balls").is_some() { self.balls = Some(v.clone()) }
+                if let Some(evs) = v.get("rec").and_then(|x| x.as_array()) { self.take_rec(evs, now); }
                 self.state = v;
             }
         }
@@ -114,7 +120,7 @@ impl WebApp {
             let sig = link::world_sig(&self.world);
             if sig != self.sent { js_send(&link::world_message(&self.world)); self.sent = sig; }
         }
-        let part = Self::keyboard_part(&self.world, self.stage.sel).unwrap_or(0);
+        let part = self.rec.as_ref().map(|r| r.reader).or_else(|| Self::keyboard_part(&self.world, self.stage.sel)).unwrap_or(0);
         if part != self.part { self.part = part; js_send(&format!(r#"{{"type":"part","id":{part}}}"#)); }
         if now - self.listen_at > 0.1 {
             self.listen_at = now;
@@ -127,6 +133,38 @@ impl WebApp {
     }
 }
 
+impl WebApp {
+    /// Record onto the selected plate, or end the take (one undo step).
+    fn toggle_rec(&mut self, keyboard: bool, now: f64) {
+        if let Some(r) = self.rec.take() {
+            js_send(r#"{"type":"rec","on":false}"#);
+            let n = r.n;
+            let at = self.world.clock.sim_t;
+            let msg = r.stop(&mut self.world, at);
+            if n > 0 { self.stage.mark_changed() }
+            self.note = Some((msg, now));
+        } else {
+            match Rec::start(&mut self.world, self.stage.sel, keyboard) {
+                Ok((r, msg)) => { self.rec = Some(r); js_send(r#"{"type":"rec","on":true}"#); self.note = Some((msg, now)) }
+                Err(e) => self.note = Some((e.into(), now)),
+            }
+        }
+    }
+    /// The keys the worklet heard while recording, onto the plate of this world (which then goes back to it).
+    fn take_rec(&mut self, evs: &[Value], now: f64) {
+        let Some(r) = self.rec.as_mut() else { return };
+        if !r.live(&self.world) { js_send(r#"{"type":"rec","on":false}"#); self.rec = None; self.note = Some(("recording stopped: its plate is gone".into(), now)); return }
+        let vc = self.world.s.vel_curve;
+        for e in evs {
+            let Some(a) = e.as_array() else { continue };
+            let n = |i: usize| a.get(i).and_then(|v| v.as_f64()).unwrap_or(0.);
+            let e = RecEv { on: n(0) != 0., note: n(1) as u8, vel: n(2) as u8, at: n(3) };
+            if e.on { if let Some(m) = r.note_on(&mut self.world, e.note, e.vel, e.at, vc) { self.note = Some((m, now)) } } else { r.note_off(&mut self.world, e.note, e.at) }
+        }
+        self.checked = f64::NEG_INFINITY;
+    }
+}
+
 impl Default for WebApp { fn default() -> Self { Self::new() } }
 
 impl eframe::App for WebApp {
@@ -136,7 +174,7 @@ impl eframe::App for WebApp {
         self.advance(now);
         let status = js_status();
         let connected = status.contains("keyboard:");
-        let io = StageIo { heard: self.world.clock.sim_t, safe_top: 8.0, safe_bottom: 8.0, busy: self.panel || self.editor.is_some(), recording: false, can_record: false,
+        let io = StageIo { heard: self.world.clock.sim_t, safe_top: 8.0, safe_bottom: 8.0, busy: self.panel || self.editor.is_some(), recording: self.rec.is_some(), can_record: self.can_record,
             midi_label: Some(if connected { "keyboard" } else { "MIDI" }), midi_connected: connected };
         let mut outs = Vec::new();
         let mut size = egui::Vec2::ZERO;
@@ -146,6 +184,7 @@ impl eframe::App for WebApp {
             if !self.fitted { self.stage.fit_now(&mut self.world, size, &io); self.fitted = true }
             outs = self.stage.show(ui, &mut self.world, &io);
         });
+        self.can_record = rec::target(&self.world, self.stage.sel).map_or(false, |(_, r)| r.is_some());
         let mut force = false;
         for o in outs {
             match o {
@@ -161,10 +200,10 @@ impl eframe::App for WebApp {
                 }
                 StageOut::OpenEditor(kind) => self.note = Some((format!("The {kind} editor is being ported next."), now)),
                 StageOut::Share(link) => { ctx.copy_text(link); self.note = Some(("share link copied".into(), now)) }
-                StageOut::AuditionOff { .. } => {}
+                StageOut::AuditionOff { key, after } => self.offs.push((key, now + after)),
                 StageOut::SaveFile { name, .. } => self.note = Some((format!("Saving {name} from the web build comes next."), now)),
                 StageOut::OpenFile => self.note = Some(("Opening files in the web build comes next.".into(), now)),
-                StageOut::Record => self.note = Some(("Recording onto plates comes with the notes editor.".into(), now)),
+                StageOut::Record => self.toggle_rec(connected, now),
             }
         }
         if let Some(ed) = self.editor.as_mut() {
@@ -176,6 +215,7 @@ impl eframe::App for WebApp {
                 }
             }
         }
+        self.offs.retain(|&(key, at)| if now >= at { js_send(&format!(r#"{{"type":"release","key":{key}}}"#)); false } else { true });
         self.sync(now, force, size);
         if !self.ready {
             egui::Area::new(egui::Id::unique("tap")).anchor(egui::Align2::CENTER_TOP, [0.0, 12.0]).show(&ctx, |ui| {

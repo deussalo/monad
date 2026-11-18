@@ -13,11 +13,13 @@
 //!   balls (which only the worklet's world can know: they are chaotic), which the UI lays over its own.
 //!
 //! Messages are JSON text both ways. UI → worklet: `{"type":"world","t":sim_t,"paused":b,"at_start":b,"turns":[[cog,n],..],
-//! "world":{save}}`,
+//! "skips":[[cog,ring,a,until],..],"world":{save}}`,
 //! `{"type":"midi","d":[status,d1,d2]}`, `{"type":"audition","part":id,"midi":m,"key":k}`, `{"type":"part","id":id}`
 //! (what the keyboard plays), `{"type":"listen","vx","vy","zoom","w","h","e"}` (the camera, for pan and distance).
 //! Worklet → UI: `{"type":"state","t","ct","paused","notes","events","peak","voices","balls":[[pit,ball,x,y,vx,vy,flash,
-//! [t,x,y,...]],...],"pits":[[pit,flash,hits],...]}`.
+//! [t,x,y,...]],...],"pits":[[pit,flash,hits],...],"rec":[[on,note,vel,at],...]}`. While the UI records (`{"type":"rec","on":b}`)
+//! the worklet stamps every key with the sim time heard with it, as play.rs does, and the UI writes them onto its
+//! plate with rec::Rec, then sends the world back. `{"type":"release","key":k}` lets go of an audition.
 use crate::midi;
 use crate::play::{self, Listen, Render, Shared, Sync};
 use cogs_sim::World;
@@ -26,6 +28,8 @@ use std::collections::HashMap;
 use std::sync::{atomic::Ordering::Relaxed, Arc};
 
 pub const QUANTUM: usize = 128;
+/// A pin's `skip` of infinity, in JSON.
+const SKIP_FOREVER: f64 = 1e300;
 
 /// The worklet's side: the machine and the sound.
 pub struct AudioSide {
@@ -38,6 +42,8 @@ pub struct AudioSide {
     pub r: [f32; QUANTUM],
     out: String,
     peak: f32,
+    /// keys heard while recording, stamped with their sim time, for the next state message
+    rec: Vec<crate::play::RecEv>,
 }
 
 impl AudioSide {
@@ -46,7 +52,7 @@ impl AudioSide {
         let mut w = World::new();
         w.set_paused(true);
         let (sh, render, sync) = play::parts(w, sr);
-        AudioSide { sh, render, sync, sr: sr as f64, quanta: 0, l: [0.; QUANTUM], r: [0.; QUANTUM], out: String::with_capacity(1 << 16), peak: 0. }
+        AudioSide { sh, render, sync, sr: sr as f64, quanta: 0, l: [0.; QUANTUM], r: [0.; QUANTUM], out: String::with_capacity(1 << 16), peak: 0., rec: Vec::with_capacity(256) }
     }
 
     /// One message from the UI.
@@ -57,13 +63,16 @@ impl AudioSide {
             "world" => {
                 if let Some(j) = m.get("world") {
                     let turns: Vec<(u32, f64)> = m.get("turns").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|p| Some((p.get(0)?.as_u64()? as u32, p.get(1)?.as_f64()?))).collect()).unwrap_or_default();
-                    self.apply_world(j, &turns, f("t"), m["paused"].as_bool().unwrap_or(false), m["at_start"].as_bool().unwrap_or(false));
+                    let skips: Vec<[f64; 4]> = m.get("skips").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|p| Some([p.get(0)?.as_f64()?, p.get(1)?.as_f64()?, p.get(2)?.as_f64()?, p.get(3)?.as_f64()?])).collect()).unwrap_or_default();
+                    self.apply_world(j, &turns, &skips, f("t"), m["paused"].as_bool().unwrap_or(false), m["at_start"].as_bool().unwrap_or(false));
                 }
             }
             "midi" => {
                 let d: Vec<u8> = m.get("d").and_then(|v| v.as_array()).map(|a| a.iter().map(|x| x.as_u64().unwrap_or(0) as u8).collect()).unwrap_or_default();
                 if let Some(e) = midi::decode(*d.first().unwrap_or(&0), *d.get(1).unwrap_or(&0), *d.get(2).unwrap_or(&0)) { self.sh.midi(e) }
             }
+            "release" => self.sh.midi(midi::Midi::Release { key: f("key") as u32 }),
+            "rec" => self.sh.recording.store(m.get("on").and_then(|v| v.as_bool()).unwrap_or(false), Relaxed),
             "audition" => self.sh.midi(midi::Midi::Audition { part: f("part") as u32, midi: f("midi") as f32, key: f("key") as u32 }),
             "part" => self.sh.midi_part.store(f("id") as u32, Relaxed),
             "listen" => {
@@ -74,7 +83,7 @@ impl AudioSide {
     }
 
     /// The UI's world, laid over this one at the UI's clock, then stepped silently back up to where this one was.
-    fn apply_world(&mut self, j: &Value, turns: &[(u32, f64)], t: f64, paused: bool, at_start: bool) {
+    fn apply_world(&mut self, j: &Value, turns: &[(u32, f64)], skips: &[[f64; 4]], t: f64, paused: bool, at_start: bool) {
         let Ok(mut w) = self.sh.world.lock() else { return };
         let fresh = w.cogs.is_empty() && w.pads.is_empty() && w.readers.is_empty();
         // how far ahead of the UI this world runs (what is queued for the speaker)
@@ -95,6 +104,11 @@ impl AudioSide {
         // the plates' turn counts as the UI has them at its time (a chance pin hashes its turn: one counted twice
         // across the wrap would play a different pattern)
         for c in &mut w.cogs { if let Some(&(_, n)) = turns.iter().find(|x| x.0 == c.id) { c.turns = n } }
+        // pins that must not sound yet (a key still held on one): the save does not carry that
+        for s in skips {
+            let Some(tr) = w.cog_mut(s[0] as u32).and_then(|c| c.track.as_mut()) else { continue };
+            if let Some(d) = tr.dots.iter_mut().find(|d| d.ring == s[1] && (d.a - s[2]).abs() < 1e-9) { d.skip = if s[3] >= SKIP_FOREVER { f64::INFINITY } else { s[3] } }
+        }
         w.clock.sim_t = t;
         w.clock.view = t;
         w.set_paused(paused);
@@ -114,6 +128,7 @@ impl AudioSide {
     pub fn block(&mut self, ct: f64) {
         self.render.block(&mut self.l, &mut self.r, 0.);
         self.quanta += 1;
+        if let Ok(mut c) = self.sh.rec.try_lock() { while let Ok(e) = c.pop() { if self.rec.len() < self.rec.capacity() { self.rec.push(e) } } }
         for i in 0..QUANTUM { self.peak = self.peak.max(self.l[i].abs()).max(self.r[i].abs()); }
         if self.quanta % 8 == 0 {
             self.sync.step(&self.sh);
@@ -133,6 +148,12 @@ impl AudioSide {
         let _ = write!(self.out, r#"{{"type":"state","t":{},"ct":{},"paused":{},"notes":{},"events":{},"peak":{},"voices":{}"#, w.clock.sim_t, ct_end, w.clock.paused,
             m.notes.load(Relaxed), m.events.load(Relaxed), self.peak, self.render.voices());
         self.peak = 0.;
+        if !self.rec.is_empty() {
+            self.out.push_str(r#","rec":["#);
+            for (i, e) in self.rec.iter().enumerate() { let _ = write!(self.out, "{}[{},{},{},{}]", if i > 0 { "," } else { "" }, e.on as u8, e.note, e.vel, e.at); }
+            self.out.push(']');
+            self.rec.clear();
+        }
         // the balls, every other post: their places and trails, which the UI draws at its heard time
         if !w.pits.is_empty() && self.quanta % 16 == 0 {
             let fnum = |x: f64| if x.is_finite() { x } else { -1e9 };
@@ -178,10 +199,18 @@ pub fn apply_balls(w: &mut World, state: &Value) {
     }
 }
 
+/// The pins not to sound yet: [cog, ring, angle, until].
+fn skips(w: &World) -> Vec<[f64; 4]> {
+    let mut out = Vec::new();
+    for c in &w.cogs { if let Some(t) = &c.track { for d in &t.dots { if d.skip > w.clock.sim_t { out.push([c.id as f64, d.ring, d.a, d.skip.min(SKIP_FOREVER)]) } } } }
+    out
+}
+
 /// The world message for the worklet: the save, and the clock it was taken at.
 pub fn world_message(w: &World) -> String {
     let turns: Vec<String> = w.cogs.iter().map(|c| format!("[{},{}]", c.id, c.turns)).collect();
-    format!(r#"{{"type":"world","t":{},"paused":{},"at_start":{},"turns":[{}],"world":{}}}"#, w.clock.sim_t, w.clock.paused, w.clock.at_start, turns.join(","), w.to_string())
+    let skips: Vec<String> = skips(w).iter().map(|s| format!("[{},{},{},{}]", s[0], s[1], s[2], s[3])).collect();
+    format!(r#"{{"type":"world","t":{},"paused":{},"at_start":{},"turns":[{}],"skips":[{}],"world":{}}}"#, w.clock.sim_t, w.clock.paused, w.clock.at_start, turns.join(","), skips.join(","), w.to_string())
 }
 
 /// What decides whether the world must go to the worklet again: the save without the camera, and while playing
@@ -197,5 +226,5 @@ pub fn world_sig(w: &World) -> Value {
     let mut v = w.serialize();
     if let Some(o) = v.as_object_mut() { o.remove("view"); if let Some(Value::Object(s)) = o.get_mut("S") { s.remove("zoom"); } }
     if !w.clock.paused { strip(&mut v, &["th", "bx", "by", "bvx", "bvy"]); }
-    json!([v, w.clock.paused, w.clock.at_start])
+    json!([v, w.clock.paused, w.clock.at_start, skips(w)])
 }
