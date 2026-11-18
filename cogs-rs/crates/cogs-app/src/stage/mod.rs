@@ -258,6 +258,20 @@ pub struct Stage {
     /// The notes sheet's open popover and what opened it; where it was drawn.
     pop: Option<(sheet::Pop, Rect)>,
     pop_rect: Option<Rect>,
+    /// The view moved aside for the panel (1) or the room ring (2): what to come back to, and what it was moved to.
+    framed: Option<Framed>,
+    /// The fit last applied by `fit_now`, and the layout it was for: while the view still stands there, a change of
+    /// size or safe area fits again.
+    auto_fit: Option<((f64, f64, f64), [f64; 4])>,
+    /// A destructive panel button pressed once: which, and when.
+    confirm: Option<(&'static str, f64)>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Framed {
+    kind: u8,
+    home: (f64, f64, f64),
+    at: (f64, f64, f64),
 }
 
 impl Default for Stage {
@@ -274,7 +288,7 @@ impl Stage {
             scrap: false, snapped: false, caught: false, last_tap: None, dot_at: (0.0, 0.0), hover: None, shift: false,
             edits: edits::Edits::default(), out: Vec::new(), rect: Rect::NOTHING, cw: 0.0, ch: 0.0, safe_top: 0.0, safe_bot: 0.0, now: 0.0,
             io: StageIo::default(), shelf_x: 0.0, shelf_fling: None, icons: icons::Icons::default(), readout: None, readout_held: false,
-            mouse_down: false, seen_touch: false, started: false, trackpad: None, down_t: 0.0, clip: None, bezel_owner: None, bezel_at: 0.0, seal_at: -9.0, linking: None, sheet: None, roll: None, brush: sheet::Brush::default(), sheet_fingers: BTreeMap::new(), json: String::new(), file_msg: None, snap_pop: false, pop: None, pop_rect: None,
+            mouse_down: false, seen_touch: false, started: false, trackpad: None, down_t: 0.0, clip: None, bezel_owner: None, bezel_at: 0.0, seal_at: -9.0, linking: None, sheet: None, roll: None, brush: sheet::Brush::default(), sheet_fingers: BTreeMap::new(), json: String::new(), file_msg: None, snap_pop: false, pop: None, pop_rect: None, framed: None, auto_fit: None, confirm: None,
         }
     }
 
@@ -305,6 +319,7 @@ impl Stage {
             w.clock.view = w.clock.view.max(io.heard);
         }
         self.validate(w);
+        self.refit_if_moved(w);
         self.input(ui, w);
         self.tick(w);
         let painter = ui.painter_at(rect);
@@ -321,6 +336,31 @@ impl Stage {
         std::mem::take(&mut self.out)
     }
 
+    /// The Back button: close the open popover, else the sheet, else the room ring or a pending link, else clear the
+    /// selection. False when there was nothing to close.
+    pub fn back(&mut self, w: &mut World) -> bool {
+        self.validate(w);
+        if self.pop.take().is_some() {
+            self.pop_rect = None;
+            return true;
+        }
+        if self.sheet.take().is_some() {
+            return true;
+        }
+        if self.linking.take().is_some() || self.armed.take().is_some() {
+            self.readout = None;
+            return true;
+        }
+        if self.room {
+            self.room = false;
+            return true;
+        }
+        if self.sel.is_some() || !self.group.is_empty() {
+            self.select(None);
+            return true;
+        }
+        false
+    }
     /// Say the world was changed from outside the stage (a panel, a bezel): it becomes an undo step when quiet.
     pub fn mark_changed(&mut self) {
         self.edits.mark(self.now);
@@ -357,6 +397,19 @@ impl Stage {
     pub(crate) fn shelf_top(&self) -> f64 {
         self.ch - SHELF_H as f64 - INTERACTION_H as f64 - self.safe_bot
     }
+    /// The top of the two rows of controls over the shelf.
+    pub(crate) fn thumb_top(&self) -> f64 {
+        self.shelf_top() - 108.0
+    }
+    /// The part of the screen the machine can be seen in: under the status bar, above the controls or an open panel.
+    pub(crate) fn free_area(&self) -> (f64, f64) {
+        let t = self.safe_top;
+        let b = match &self.sheet {
+            Some(s) if !s.min => self.sheet_top().unwrap_or(self.ch) - 6.0,
+            _ => self.thumb_top(),
+        };
+        (t, b.max(t + 60.0))
+    }
     pub(crate) fn off_stage(&self, s: (f64, f64)) -> bool {
         s.1 >= self.shelf_top()
     }
@@ -373,6 +426,9 @@ impl Stage {
         self.sel == Some(o) || self.group.contains(&o)
     }
     pub(crate) fn select(&mut self, s: Option<Sel>) {
+        if s.is_some() {
+            self.room = false;
+        }
         self.sel = s;
         self.group.clear();
     }
@@ -422,17 +478,79 @@ impl Stage {
     }
     /// The view centre that puts world point p at the middle of the open stage.
     pub(crate) fn centred(&self, p: (f64, f64), z: f64) -> (f64, f64) {
-        let (t, b) = (self.safe_top, self.shelf_top());
-        (p.0 - (self.cw / 2.0 - self.cw / 2.0) / z, p.1 - ((t + b) / 2.0 - self.ch / 2.0) / z)
+        let (t, b) = self.free_area();
+        (p.0, p.1 - ((t + b) / 2.0 - self.ch / 2.0) / z)
     }
     /// fitTarget: the whole machine in the open stage.
     pub fn fit_target(&self, w: &World) -> (f64, f64, f64, f64) {
         let Some((cx, cy, bw, bh)) = bounds(w) else { return (0.0, 0.0, 1.0, 1.0) };
-        let (t, b) = (self.safe_top, self.shelf_top());
-        let fit = ((self.cw - 40.0) / bw).min((b - t - 70.0) / bh);
+        let (t, b) = self.free_area();
+        let fit = ((self.cw - 24.0) / bw).min((b - t - 24.0) / bh);
         let z = fit.clamp(ZMIN, 2.0);
         let c = self.centred((cx, cy), z);
+        // shrunk into the room ring on purpose: the listener is not to hear that as walking away
+        let fit = match self.framed {
+            Some(f) if f.kind == 2 => fit.min(w.s.zoom),
+            _ => fit,
+        };
         (c.0, c.1, z, fit)
+    }
+    fn fit_layout(&self) -> [f64; 4] {
+        [self.cw, self.ch, self.safe_top, self.safe_bot]
+    }
+    /// The real safe areas or a new window size arrived after the fit: fit again, unless the view has been moved.
+    fn refit_if_moved(&mut self, w: &mut World) {
+        let Some((at, layout)) = self.auto_fit else { return };
+        if layout == self.fit_layout() {
+            return;
+        }
+        if !same_view(w, at) {
+            self.auto_fit = None;
+            return;
+        }
+        let f = self.fit_target(w);
+        w.view.x = f.0;
+        w.view.y = f.1;
+        w.s.zoom = f.2;
+        self.auto_fit = Some(((f.0, f.1, f.2), self.fit_layout()));
+    }
+    /// The panel and the room ring move the machine into the space they leave, and put it back when they go,
+    /// unless it has been moved meanwhile.
+    fn step_frame(&mut self, w: &World) {
+        let panel = self.sheet.as_ref().map_or(false, |s| s.kind == sheet::SheetKind::Panel && !s.min && s_not_dragged(s));
+        let want = if panel { 1 } else if self.room && self.sel.is_none() { 2 } else { 0 };
+        let cur = self.framed.map_or(0, |f| f.kind);
+        if want == cur || (want == 0 && self.sheet.as_ref().map_or(false, |s| s.kind == sheet::SheetKind::Panel && !s.min)) {
+            return;
+        }
+        let was = self.framed.take();
+        let unmoved = was.map_or(false, |f| same_view(w, f.at) || self.fly.map_or(false, |m| m.x1 == f.at.0 && m.y1 == f.at.1 && m.z1 == f.at.2));
+        let home = match was {
+            Some(f) if unmoved => f.home,
+            _ => (w.view.x, w.view.y, w.s.zoom),
+        };
+        if want == 0 {
+            if unmoved {
+                self.fly_to(w, home.0, home.1, home.2);
+            }
+            return;
+        }
+        let at = if want == 1 {
+            let f = self.fit_target(w);
+            (f.0, f.1, f.2)
+        } else {
+            self.room_target(w)
+        };
+        self.framed = Some(Framed { kind: want, home, at });
+        self.fly_to(w, at.0, at.1, at.2);
+    }
+    /// No part of the machine is in the free area: the fit button lights.
+    pub(crate) fn machine_lost(&self, w: &World) -> bool {
+        let Some((cx, cy, bw, bh)) = bounds(w) else { return false };
+        let (t, b) = self.free_area();
+        let a = self.to_screen(w, cx - bw / 2.0, cy - bh / 2.0);
+        let c = self.to_screen(w, cx + bw / 2.0, cy + bh / 2.0);
+        c.0 < 0.0 || a.0 > self.cw || c.1 < t || a.1 > b
     }
     /// Put the whole machine in view now (the demo's start).
     pub fn fit_now(&mut self, w: &mut World, size: egui::Vec2, io: &StageIo) {
@@ -444,6 +562,7 @@ impl Stage {
         w.view.x = f.0;
         w.view.y = f.1;
         w.s.zoom = f.2;
+        self.auto_fit = Some(((f.0, f.1, f.2), self.fit_layout()));
     }
     pub(crate) fn fly_fit(&mut self, w: &World) {
         let f = self.fit_target(w);
@@ -531,6 +650,7 @@ impl Stage {
 
     // ---------- each frame ----------
     fn tick(&mut self, w: &mut World) {
+        self.step_frame(w);
         self.step_camera(w);
         self.step_spin(w);
         self.step_holds(w);
@@ -779,6 +899,13 @@ impl Stage {
 }
 
 // ---------- helpers ----------
+fn s_not_dragged(s: &sheet::Sheet) -> bool {
+    !s.dragging()
+}
+fn same_view(w: &World, at: (f64, f64, f64)) -> bool {
+    (w.view.x - at.0).abs() * w.s.zoom < 0.5 && (w.view.y - at.1).abs() * w.s.zoom < 0.5 && (w.s.zoom / at.2 - 1.0).abs() < 1e-3
+}
+
 pub(crate) fn exists(w: &World, s: Sel) -> bool {
     match s {
         Sel::Cog(i) => w.cogs.iter().any(|o| o.id == i),
@@ -820,9 +947,10 @@ pub(crate) fn bounds(w: &World) -> Option<(f64, f64, f64, f64)> {
         add(r.x1, r.y1, 4.0);
         add(r.x2, r.y2, 4.0);
     }
-    for i in 0..w.arms.len() {
-        let t = w.arm_tip(i);
-        add(t.0, t.1, 4.0);
+    // an arm's whole sweep, so a turning arm stays in the frame
+    for a in &w.arms {
+        let c = &w.cogs[a.cog_ix];
+        add(c.x, c.y, a.r0 + a.len + 4.0);
     }
     for p in &w.pits {
         add(p.x, p.y, p.w / 2.0 + 4.0);

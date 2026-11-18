@@ -527,17 +527,25 @@ fn voice_icon(k: &str) -> &'static str {
         _ => "decay",
     }
 }
+/// What a voice is called: its patch's name, or its kind.
+fn voice_name(v: &cogs_sim::Voice) -> String {
+    v.raw.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()).unwrap_or_else(|| kind_label(v.kind.name()))
+}
 fn voice_sectors(w: &World, p: Part, with_note: bool) -> Vec<Sector> {
     let Some(v) = w.voice(p) else { return vec![] };
-    let mut out = vec![Sector::choice("kind", "voice", Key::VoiceKind(p), strs(&KINDS), Fmt::Kind)];
+    let kind = Sector::choice("kind", "voice", Key::VoiceKind(p), strs(&KINDS), Fmt::Kind);
     if v.kind == VoiceKind::Wave {
+        let mut out = vec![Sector::action("patch", "edit patch".into(), Act::Patch)];
         if with_note {
             out.push(Sector::num("fork", "note", Key::Voice(p, "note"), 12.0, 108.0, 1.0));
         }
         out.push(Sector::num("level", "volume", Key::Voice(p, "level"), 0.0, 1.5, 0.01));
+        out.push(Sector::num("vel", "vel sense", Key::Voice(p, "velSense"), 0.0, 1.0, 0.01));
         out.extend(dial_sectors(v, p));
+        out.push(kind);
         return out;
     }
+    let mut out = vec![kind];
     for (k, l, a, b, s) in voice_defs(v.kind).into_iter().filter(|d| with_note || d.0 != "note").take(BEZEL_PARAMS) {
         if k == "body" {
             out.push(Sector::choice("bell", l, Key::Voice(p, "body"), strs(&["harmonic", "bell", "plate", "bar", "bowl"]), Fmt::Plain));
@@ -550,47 +558,45 @@ fn voice_sectors(w: &World, p: Part, with_note: bool) -> Vec<Sector> {
 }
 
 impl Stage {
-    /// activeBezel: the bezel for what is selected now, or the room's.
+    /// The room ring's centre and radius: in the middle of the space above the controls.
+    fn room_ring(&self) -> (f64, f64, f64) {
+        let (t, b) = (self.safe_top, self.thumb_top());
+        (self.cw / 2.0, (t + b) / 2.0, self.cw.min(b - t) / 2.0 - 26.0)
+    }
+    /// The view that sets the whole machine inside the room ring, as a medallion.
+    pub(super) fn room_target(&self, w: &World) -> (f64, f64, f64) {
+        let (cx, cy, r) = self.room_ring();
+        let Some((mx, my, bw, bh)) = super::bounds(w) else { return (w.view.x, w.view.y, w.s.zoom) };
+        let z = ((r - BEZEL_W - 8.0) / (bw.hypot(bh) / 2.0).max(1.0)).clamp(ZMIN, 2.0);
+        (mx - (cx - self.cw / 2.0) / z, my - (cy - self.ch / 2.0) / z, z)
+    }
+    /// activeBezel: the bezel for what is selected now, or the room's. None while a sheet or editor covers the stage.
     pub(super) fn active_bezel(&mut self, w: &World) -> Option<Bezel> {
-        if self.carrying {
+        if self.carrying || self.io.busy {
             return None;
         }
-        let ring = |me: &Stage, at: (f64, f64), size: f64, sectors: Vec<Sector>, owner: Sel| {
-            let c = me.to_screen(w, at.0, at.1);
-            Bezel { cx: c.0, cy: c.1, r: (size + 46.0).clamp(92.0, 132.0), sectors, owner: Some(owner), bw: BEZEL_W, labels: false, hub: None, leader: None }
-        };
-        let z = w.s.zoom;
         let b = match self.sel {
             None => {
                 if !self.room {
                     None
                 } else {
-                    let (t, bt) = (self.safe_top, self.shelf_top());
-                    Some(Bezel { cx: self.cw / 2.0, cy: (t + bt) / 2.0, r: self.cw.min(bt - t) / 2.0 - 44.0, sectors: room_sectors(), owner: None, bw: BEZEL_W, labels: false, hub: None, leader: None })
+                    let (cx, cy, r) = self.room_ring();
+                    Some(Bezel { cx, cy, r, sectors: room_sectors(), owner: None, bw: BEZEL_W, labels: false, hub: None, leader: None })
                 }
             }
-            Some(s @ Sel::Pad(i)) => w.pads.iter().find(|o| o.id == i).map(|o| ring(self, (o.x, o.y), o.r * z, voice_sectors(w, Part::Pad(i), true), s)),
+            Some(s @ Sel::Pad(i)) => w.pads.iter().find(|o| o.id == i).map(|o| {
+                let at = (o.x, o.y);
+                self.beside(w, (at, at), o.r, None, voice_sectors(w, Part::Pad(i), true), s, (format!("pad {i}"), voice_name(&o.voice)))
+            }),
             Some(s @ Sel::Reader(i)) => w.readers.iter().find(|o| o.id == i).map(|r| {
-                let p = Part::Reader(i);
-                let wave = r.voice.kind == VoiceKind::Wave;
-                let mut sec = Vec::new();
-                if wave {
-                    sec.push(Sector::action("patch", "edit patch".into(), Act::Patch));
-                    sec.push(Sector::num("level", "volume", Key::Voice(p, "level"), 0.0, 1.5, 0.01));
-                    sec.push(Sector::num("vel", "vel sense", Key::Voice(p, "velSense"), 0.0, 1.0, 0.01));
-                    sec.extend(dial_sectors(&r.voice, p));
-                    sec.push(Sector::choice("kind", "voice", Key::VoiceKind(p), strs(&KINDS), Fmt::Kind));
-                } else {
-                    sec = voice_sectors(w, p, false);
-                }
+                let mut sec = voice_sectors(w, Part::Reader(i), false);
                 if r.tines != 0.0 {
                     sec.push(Sector::num("comb", "tines", Key::Reader(i, "tines"), 1.0, 36.0, 1.0));
                     sec.push(Sector::num("fork", "comb note", Key::Reader(i, "combBase"), 12.0, 108.0, 1.0));
                     sec.push(Sector::choice("scale", "comb scale", Key::Reader(i, "combScale"), strs(&SCALES.map(|s| s.0)), Fmt::Plain));
                 }
-                let name = r.voice.raw.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()).unwrap_or_else(|| kind_label(r.voice.kind.name()));
                 let what = if r.tines != 0.0 { "comb" } else { "reader" };
-                self.beside(w, ((r.x1, r.y1), (r.x2, r.y2)), sec, s, (format!("{what} {i}"), name))
+                self.beside(w, ((r.x1, r.y1), (r.x2, r.y2)), 0.0, None, sec, s, (format!("{what} {i}"), voice_name(&r.voice)))
             }),
             Some(s @ Sel::String(i)) => w.strings.iter().find(|o| o.id == i).map(|o| {
                 let k = |key| Key::Str(i, key);
@@ -602,9 +608,9 @@ impl Stage {
                     Sector::num("damp", "damping", k("damp"), 0.0, 2.0, 0.01),
                     Sector::num("hard", "hardness", k("hard"), 0.0, 1.0, 0.01),
                     Sector::num("level", "level", k("level"), 0.0, 1.5, 0.01),
-                    Sector::num("vel", "velocity sense", k("velSense"), 0.0, 1.0, 0.01),
+                    Sector::num("vel", "vel sense", k("velSense"), 0.0, 1.0, 0.01),
                 ];
-                self.beside(w, ((o.x1, o.y1), (o.x2, o.y2)), sec, s, (format!("{} {i}", o.kind), note_name(o.midi().round() as i64)))
+                self.beside(w, ((o.x1, o.y1), (o.x2, o.y2)), 0.0, None, sec, s, (format!("{} {i}", o.kind), note_name(o.midi().round() as i64)))
             }),
             Some(s @ Sel::Cam(i)) => w.cams.iter().find(|o| o.id == i).map(|m| {
                 let k = |key| Key::Cam(i, key);
@@ -622,7 +628,10 @@ impl Stage {
                     Sector::step("knob", "macro", k("macro"), 1.0, 8.0, Fmt::Macro),
                     Sector::action("link", link, Act::Link(s)),
                 ];
-                ring(self, cam_tip(m, &w.cogs[m.cog_ix], w.render_th(m.cog_ix)), 0.0, sec, s)
+                // placed by its cog, which stands still; the leader follows the moving follower
+                let c = &w.cogs[m.cog_ix];
+                let tip = cam_tip(m, c, w.render_th(m.cog_ix));
+                self.beside(w, ((c.x, c.y), (c.x, c.y)), c.radius(), Some(tip), sec, s, (format!("cam {i}"), m.shape.clone()))
             }),
             Some(s @ Sel::Probe(i)) => w.probes.iter().find(|o| o.id == i).filter(|pr| w.probe_alive(pr)).map(|pr| {
                 let k = |key| Key::Probe(i, key);
@@ -647,7 +656,15 @@ impl Stage {
                     None => "link to a reader, pad or sphere".into(),
                 };
                 sec.push(Sector::action("link", link, Act::Link(s)));
-                ring(self, w.probe_point(pr), 0.0, sec, s)
+                // placed by what it rides, which stands still
+                let (at, clear) = match w.probe_cog(pr) {
+                    Some(ci) => ((w.cogs[ci].x, w.cogs[ci].y), w.cogs[ci].radius()),
+                    None => {
+                        let p = &w.pits[pr.on_ix.unwrap()];
+                        ((p.x, p.y), p.w / 2.0)
+                    }
+                };
+                self.beside(w, (at, at), clear, Some(w.probe_point(pr)), sec, s, (format!("probe {i}"), pr.axis.name().into()))
             }),
             Some(s @ Sel::Field(i)) => w.fields.iter().find(|o| o.id == i).map(|f| {
                 let k = |key| Key::Field(i, key);
@@ -658,7 +675,7 @@ impl Stage {
                         sec.push(Sector::choice("air", "color", k("verbColor"), nums(&[0.0, 1.0, 2.0]), Fmt::Color));
                         sec.push(Sector::num("size", "size", k("size"), 0.0, 1.0, 0.01));
                         sec.push(Sector::num("tail", "decay s", k("decay"), 0.2, 20.0, 0.01));
-                        sec.push(Sector::num("attack", "predelay ms", k("predelay"), 0.0, 200.0, 1.0));
+                        sec.push(Sector::num("attack", "predelay", k("predelay"), 0.0, 200.0, 1.0));
                     }
                     "dist" => {
                         sec.push(Sector::choice("bend", "kind", k("kind"), strs(&cogs_sim::field::FIELD_DIST_KINDS), Fmt::Plain));
@@ -667,7 +684,7 @@ impl Stage {
                     }
                     _ => {
                         sec.push(Sector::choice("tempo", "time", k("sync"), strs(&cogs_sim::field::FIELD_SYNC_OPTS), Fmt::Plain));
-                        sec.push(Sector::num("tempo", "free time s", k("time"), 0.02, 2.5, 0.005));
+                        sec.push(Sector::num("tempo", "free time", k("time"), 0.02, 2.5, 0.005));
                         sec.push(Sector::num("tail", "feedback", k("fb"), 0.0, 0.95, 0.01));
                         sec.push(Sector::num("tone", "tone", k("tone"), 0.0, 1.0, 0.01));
                         sec.push(Sector::choice("spread", "ping-pong", k("ping"), nums(&[0.0, 1.0]), Fmt::OnOff));
@@ -676,19 +693,21 @@ impl Stage {
                 sec.push(Sector::num("spread", "diffuse", k("diffuse"), 0.0, 1.0, 0.01));
                 sec.push(Sector::num("level", "return", k("level"), 0.0, 1.5, 0.01));
                 sec.push(Sector::num("wet", "takes dry", k("insert"), 0.0, 1.0, 0.01));
-                ring(self, (f.x, f.y), 0.0, sec, s)
+                let at = (f.x, f.y);
+                self.beside(w, (at, at), 9.0 / w.s.zoom, None, sec, s, (format!("fx {i}"), if f.mode == "dist" { "distortion".into() } else { f.mode.clone() }))
             }),
             Some(s @ Sel::Dot { cog, ring: rg, a }) => w.cog(cog).and_then(|c| c.track.as_ref()).map(|t| {
                 let k = |key| Key::Dot(cog, rg, a, key);
                 let sec = vec![
-                    Sector::num("odds", "probability", k("p"), 0.0, 1.0, 0.01),
+                    Sector::num("odds", "odds", k("p"), 0.0, 1.0, 0.01),
                     Sector::num("level", "velocity", k("v"), 0.0, 1.0, 0.01),
-                    Sector::num("div", "length steps", k("len"), 1.0, t.div, 1.0),
+                    Sector::num("div", "length", k("len"), 1.0, t.div, 1.0),
                 ];
-                ring(self, self.dot_at, 0.0, sec, s)
+                self.beside(w, (self.dot_at, self.dot_at), 0.0, None, sec, s, ("pin".into(), note_name(t.ring_note(rg as i64) as i64)))
             }),
-            Some(s @ Sel::Cog(i)) => w.cog(i).filter(|c| c.track.is_some() && !note_mode(c, z)).map(|c| {
+            Some(s @ Sel::Cog(i)) => w.cog(i).filter(|c| c.track.is_some() && !note_mode(c, w.s.zoom)).map(|c| {
                 let k = |key| Key::Track(i, key);
+                let t = c.track.as_ref().unwrap();
                 let sec = vec![
                     Sector::choice("scale", "scale", k("scale"), strs(&SCALES.map(|s| s.0)), Fmt::Plain),
                     Sector::step("fork", "root", k("root"), 0.0, 11.0, Fmt::NoteClass),
@@ -696,10 +715,8 @@ impl Stage {
                     Sector::step("range", "range", k("range"), 1.0, 3.0, Fmt::Oct),
                     Sector::num("div", "steps", k("div"), 1.0, 96.0, 1.0),
                 ];
-                let (t, bt) = (self.safe_top, self.shelf_top());
-                let r = (c.radius() * z + 40.0).max(92.0).min(self.cw.min(bt - t) / 2.0 - BEZEL_W - 8.0);
-                let sc = self.to_screen(w, c.x, c.y);
-                Bezel { cx: sc.0, cy: sc.1, r, sectors: sec, owner: Some(s), bw: BEZEL_W, labels: false, hub: None, leader: None }
+                let name = format!("{} {}", NOTE_NAMES[(t.root as usize) % 12], SCALES[t.scale].0);
+                self.beside(w, ((c.x, c.y), (c.x, c.y)), c.radius(), None, sec, s, (format!("disc {i}"), name))
             }),
             _ => None,
         };
@@ -710,41 +727,48 @@ impl Stage {
         }
         b
     }
-    /// A compact bezel beside a long part (a reader, a string): the spot near it, on screen, that covers the fewest
-    /// other parts, joined to it by a leader.
-    fn beside(&self, w: &World, seg: ((f64, f64), (f64, f64)), sectors: Vec<Sector>, owner: Sel, hub: (String, String)) -> Bezel {
-        const R: f64 = 58.0;
+    /// A compact bezel beside a part (the segment `seg`, `clear` world units wide about it): the spot near it, on
+    /// screen and above the controls, that covers the fewest other parts, joined to it by a leader.
+    fn beside(&self, w: &World, seg: ((f64, f64), (f64, f64)), clear: f64, leader: Option<(f64, f64)>, sectors: Vec<Sector>, owner: Sel, hub: (String, String)) -> Bezel {
         const BW: f64 = 26.0;
+        // more sectors, a wider ring, so each keeps room for its words
+        let r_mid = (58.0 + (sectors.len() as f64 - 6.0).max(0.0) * 5.0).min(80.0);
+        let z = w.s.zoom;
         let a = self.to_screen(w, seg.0 .0, seg.0 .1);
         let b = self.to_screen(w, seg.1 .0, seg.1 .1);
         let mid = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
-        let len = dist(a, b).max(1.0);
-        let (ux, uy) = ((b.0 - a.0) / len, (b.1 - a.1) / len);
-        let out = R + BW + 10.0;
-        let mut cand = Vec::new();
-        for t in [-1.0, 1.0] {
-            // past either end, and to either side of the middle and of each end
-            cand.push((mid.0 + ux * t * (len / 2.0 + out), mid.1 + uy * t * (len / 2.0 + out)));
-            cand.push((mid.0 - uy * t * out, mid.1 + ux * t * out));
+        let len = dist(a, b);
+        let (ux, uy) = if len > 1.0 { ((b.0 - a.0) / len, (b.1 - a.1) / len) } else { (1.0, 0.0) };
+        let rr = r_mid + BW;
+        let own = clear * z;
+        let out = rr + 10.0 + own;
+        let (t, bt) = (self.safe_top, self.thumb_top());
+        let m = rr + 6.0;
+        let mut cand = Vec::with_capacity(32);
+        for sg in [-1.0, 1.0] {
+            cand.push((mid.0 + ux * sg * (len / 2.0 + out), mid.1 + uy * sg * (len / 2.0 + out)));
+            cand.push((mid.0 - uy * sg * out, mid.1 + ux * sg * out));
             for e in [a, b] {
-                cand.push((e.0 - uy * t * out, e.1 + ux * t * out));
+                cand.push((e.0 - uy * sg * out, e.1 + ux * sg * out));
             }
         }
-        for k in 0..12 {
-            let ang = k as f64 * TAU / 12.0;
-            cand.push((mid.0 + ang.cos() * (out + 30.0), mid.1 + ang.sin() * (out + 30.0)));
+        for k in 0..16 {
+            let ang = k as f64 * TAU / 16.0;
+            for d in [out, out + 34.0] {
+                cand.push((mid.0 + ang.cos() * d, mid.1 + ang.sin() * d));
+            }
         }
-        let (t, bt) = (self.safe_top, self.shelf_top() - 110.0);
-        let rr = R + BW;
-        let z = w.s.zoom;
+        // the free corners of the stage, for a crowded machine
+        for x in [m, self.cw / 2.0, self.cw - m] {
+            for y in [t + m, bt - m] {
+                cand.push((x, y));
+            }
+        }
         let cost = |c: (f64, f64)| {
-            let mut k = 0.0;
-            // off the open stage
-            let m = rr + 6.0;
-            k += 8.0 * ((m - c.0).max(0.0) + (c.0 - (self.cw - m)).max(0.0) + (t + m - c.1).max(0.0) + (c.1 - (bt - m)).max(0.0));
+            let mut k = 8.0 * ((m - c.0).max(0.0) + (c.0 - (self.cw - m)).max(0.0) + (t + m - c.1).max(0.0) + (c.1 - (bt - m)).max(0.0));
             for cg in &w.cogs {
                 let s = self.to_screen(w, cg.x, cg.y);
-                k += (rr + cg.radius() * z - dist(c, s)).max(0.0).min(2.0 * rr);
+                k += (rr + cg.radius() * z - dist(c, s)).clamp(0.0, 2.0 * rr);
             }
             for p in &w.pads {
                 let s = self.to_screen(w, p.x, p.y);
@@ -752,14 +776,15 @@ impl Stage {
             }
             for p in &w.pits {
                 let s = self.to_screen(w, p.x, p.y);
-                k += (rr + p.w / 2.0 * z - dist(c, s)).max(0.0).min(2.0 * rr);
+                k += (rr + p.w / 2.0 * z - dist(c, s)).clamp(0.0, 2.0 * rr);
             }
-            // its own part, under the ring
-            k += 3.0 * (rr + 8.0 - super::seg_dist(c, a.0, a.1, b.0, b.1)).max(0.0);
+            // never over its own part
+            k += 4.0 * (rr + own + 8.0 - super::seg_dist(c, a.0, a.1, b.0, b.1)).max(0.0);
             k + 0.05 * dist(c, mid)
         };
         let best = cand.into_iter().min_by(|p, q| cost(*p).partial_cmp(&cost(*q)).unwrap()).unwrap_or(mid);
-        Bezel { cx: best.0, cy: best.1, r: R, sectors, owner: Some(owner), bw: BW, labels: true, hub: Some(hub), leader: Some(mid) }
+        let lead = leader.map_or(mid, |l| self.to_screen(w, l.0, l.1));
+        Bezel { cx: best.0, cy: best.1, r: r_mid, sectors, owner: Some(owner), bw: BW, labels: true, hub: Some(hub), leader: Some(lead) }
     }
     pub(super) fn bezel_hit(b: &Bezel, s: (f64, f64)) -> Option<usize> {
         let d = dist(s, (b.cx, b.cy));
@@ -949,15 +974,16 @@ impl Stage {
                     p.text(c + vec2(0.0, 10.0), Align2::CENTER_CENTER, "patch", FontId::proportional(11.0), alpha(HOT, ea));
                     continue;
                 }
-                let label: String = sec.label.chars().take(13).collect();
-                let size = if label.chars().count() > 9 { 9.0 } else { 10.0 };
-                p.text(c - vec2(0.0, 7.0), Align2::CENTER_CENTER, label, FontId::proportional(size), alpha(DIM, ea));
-                if let Some(v) = &val {
-                    let text: String = sec.format(v).chars().take(9).collect();
-                    p.text(c + vec2(0.0, 7.0), Align2::CENTER_CENTER, text, FontId::proportional(12.5), alpha(if active { HOT } else { FG }, ea));
-                } else {
-                    p.text(c + vec2(0.0, 7.0), Align2::CENTER_CENTER, "tap", FontId::proportional(12.0), alpha(FG, ea));
-                }
+                let (label, value) = match (&sec.action, &val) {
+                    (Some(_), _) => ("link".to_string(), if sec.label.starts_with("link to") { "tap".to_string() } else { "relink".to_string() }),
+                    (_, Some(v)) => (sec.label.chars().take(13).collect(), sec.format(v)),
+                    _ => (sec.label.clone(), String::new()),
+                };
+                let size = if label.chars().count() > 9 { 10.0 } else { 11.0 };
+                p.text(c - vec2(0.0, 7.0), Align2::CENTER_CENTER, label, FontId::proportional(size), alpha(Color32::from_gray(0x9a), ea));
+                let n = value.chars().count();
+                let value: String = if n > 10 { value.chars().take(9).collect::<String>() + "…" } else { value };
+                p.text(c + vec2(0.0, 7.0), Align2::CENTER_CENTER, value, FontId::proportional(if n > 7 { 11.5 } else { 13.0 }), alpha(if active { HOT } else { FG }, ea));
                 continue;
             }
             // the icon
