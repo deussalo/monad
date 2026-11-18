@@ -299,11 +299,13 @@ impl Stage {
     // ---------- the readout ----------
     pub(super) fn say_gesture(&mut self, w: &World, g: &Gesture, held: bool) {
         // these say what happened when it has happened (the glyph after its toggle), or nothing
-        if matches!(g, Gesture::Bezel { .. } | Gesture::Nothing | Gesture::Glyph | Gesture::Button(_) | Gesture::Hub) {
+        // and the view's numbers only while the view is moving
+        if matches!(g, Gesture::Bezel { .. } | Gesture::Nothing | Gesture::Glyph | Gesture::Button(_) | Gesture::Hub | Gesture::Pan { .. }) {
             return;
         }
-        let t = self.readout_of(w, g).unwrap_or_else(|| format!("view zoom: {}%", (w.s.zoom * 100.0).round()));
-        self.say(t, held);
+        if let Some(t) = self.readout_of(w, g) {
+            self.say(t, held);
+        }
     }
     pub(super) fn readout_of(&self, w: &World, g: &Gesture) -> Option<String> {
         let kind_label = |k: cogs_sim::VoiceKind| match k {

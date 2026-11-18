@@ -54,6 +54,8 @@ pub struct Edits {
     cur: Option<Snap>,
     /// When something last changed and is not yet a step.
     pub pending: Option<f64>,
+    /// What the last undo or redo changed, in words.
+    pub last_change: String,
 }
 impl Edits {
     pub fn can_undo(&self) -> bool {
@@ -105,9 +107,54 @@ impl Edits {
         if let Some(c) = self.cur.take() {
             if back { self.future.push(c) } else { self.past.push(c) }
         }
+        if let Some(c) = (if back { self.future.last() } else { self.past.last() }) {
+            self.last_change = what_changed(&c.key, &s.key);
+        }
         restore(w, &s);
         self.cur = Some(s);
         true
+    }
+}
+
+/// The parts two steps differ in, in words: "reader 9's sound", "pad 12 and 2 more", "the room".
+fn what_changed(a: &Value, b: &Value) -> String {
+    const LISTS: [(&str, &str); 10] = [("cogs", "plate"), ("arms", "arm"), ("pads", "pad"), ("readers", "reader"), ("belts", "belt"),
+        ("strings", "string"), ("cams", "cam"), ("pits", "sphere"), ("probes", "probe"), ("fields", "fx")];
+    let mut said: Vec<String> = Vec::new();
+    let empty = Vec::new();
+    for (k, name) in LISTS {
+        let (x, y) = (a[k].as_array().unwrap_or(&empty), b[k].as_array().unwrap_or(&empty));
+        let find = |l: &'_ [Value], id: &Value| l.iter().position(|o| o["id"] == *id);
+        for o in x {
+            match find(y, &o["id"]) {
+                None => said.push(format!("{name} {}", o["id"])),
+                Some(i) if y[i] != *o => {
+                    let only_voice = {
+                        let (mut p, mut q) = (o.clone(), y[i].clone());
+                        p["voice"] = Value::Null;
+                        q["voice"] = Value::Null;
+                        p == q
+                    };
+                    said.push(if only_voice { format!("{name} {}'s sound", o["id"]) } else { format!("{name} {}", o["id"]) });
+                }
+                _ => {}
+            }
+        }
+        for o in y {
+            if find(x, &o["id"]).is_none() {
+                said.push(format!("{name} {}", o["id"]));
+            }
+        }
+    }
+    for (k, name) in [("SPACE", "the room"), ("climax", "the line amp"), ("S", "the settings")] {
+        if a[k] != b[k] {
+            said.push(name.into());
+        }
+    }
+    match said.len() {
+        0 => "nothing visible".into(),
+        1 => said.remove(0),
+        n => format!("{} and {} more", said[0], n - 1),
     }
 }
 
@@ -153,7 +200,10 @@ fn restore(w: &mut World, s: &Snap) {
         }
     }
     let at_start = w.clock.at_start;
+    let before = w.clone();
     if w.reload(&j).is_ok() {
         w.clock.at_start = at_start;
+        // the restored voices start their versions past the old ones', so the engine takes every patch again
+        crate::play::bump_versions(&before, w);
     }
 }

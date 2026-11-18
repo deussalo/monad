@@ -274,8 +274,8 @@ impl Stage {
                 self.repinch(w);
                 return;
             }
+            // the camera is not an edit: nothing here to undo
             self.pinch = None;
-            self.changed(w, false);
             if let Some((&fid, f)) = self.fingers.iter().next() {
                 let g = Gesture::Pan { v0: (w.view.x, w.view.y), a: self.to_world(w, f.pos), boxing: false };
                 self.gesture = Some(Active { id: fid, g, s0: f.pos, last: f.pos, t0: self.now, moved: true });
@@ -994,9 +994,7 @@ impl Stage {
             Gesture::Pan { boxing, .. } => {
                 if *boxing {
                     self.marquee = None;
-                    return;
                 }
-                self.changed(w, false);
             }
             Gesture::Marquee { a } => {
                 let b = self.to_world(w, s);
@@ -1204,6 +1202,7 @@ impl Stage {
     pub(super) fn g_dbl(&mut self, w: &mut World, g: &mut Gesture, s: (f64, f64)) -> bool {
         match g {
             Gesture::Pan { .. } => {
+                self.readout = None;
                 self.fly_fit(w);
                 true
             }
