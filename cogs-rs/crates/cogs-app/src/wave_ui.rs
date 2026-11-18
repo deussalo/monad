@@ -25,6 +25,43 @@ const SEL: Color32 = Color32::from_rgb(0x5a, 0xa8, 0xff);
 const LINE: Color32 = Color32::from_rgb(0x44, 0x48, 0x50);
 const FG: Color32 = Color32::from_rgb(0xe8, 0xe8, 0xe8);
 const DIM: Color32 = Color32::from_rgb(0x90, 0x94, 0x9a);
+const BG: Color32 = Color32::from_rgb(0x16, 0x17, 0x1a);
+const CARD: Color32 = Color32::from_rgb(0x20, 0x22, 0x26);
+const WELL: Color32 = Color32::from_rgb(0x2a, 0x2c, 0x32);
+const ENVC: Color32 = Color32::from_rgb(0x6c, 0xd0, 0x8a);
+const ODD: Color32 = Color32::from_rgb(0xc0, 0x8c, 0xff);
+const TAB_NAMES: [&str; 9] = ["Main", "A", "B", "C", "Voice", "Mod", "FX", "Matrix", "Patch"];
+/// A source's colour by kind: envelopes green, LFOs blue, macros orange, the rest violet.
+fn src_col(s: u8) -> Color32 {
+    let s = s as usize;
+    if s < SRC_LFO0 { ENVC } else if s < SRC_MAC0 { SEL } else if s < SRC_VEL { HOT } else { ODD }
+}
+/// A rounded panel holding one group of controls, its title small and dim.
+fn card(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
+    egui::Frame::new().fill(CARD).corner_radius(10.).inner_margin(10.).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        if !title.is_empty() { ui.label(egui::RichText::new(title.to_uppercase()).size(10.5).color(DIM)); }
+        add(ui);
+    });
+}
+/// An envelope's shape from its knobs (each stage as wide as its knob is turned), so ADSR reads at a glance.
+fn env_graph(ui: &mut Ui, a: f64, d: f64, s: f64, r: f64, col: Color32) {
+    let w = ui.available_width().min(260.);
+    let (rect, _) = ui.allocate_exact_size(vec2(w, 40.), Sense::hover());
+    let tp = &wave_params()[O_A];
+    let n = |x: f64| wave_norm(tp, x).clamp(0., 1.) as f32;
+    let (wa, wd, wr) = (n(a) * 0.3 + 0.02, n(d) * 0.3 + 0.02, n(r) * 0.3 + 0.02);
+    let tot = wa + wd + 0.2 + wr;
+    let x = |u: f32| rect.left() + u / tot * rect.width();
+    let y = |v: f32| rect.bottom() - 2. - v * (rect.height() - 4.);
+    let s = s.clamp(0., 1.) as f32;
+    let pts = vec![pos2(x(0.), y(0.)), pos2(x(wa), y(1.)), pos2(x(wa + wd), y(s)), pos2(x(wa + wd + 0.2), y(s)), pos2(x(tot), y(0.))];
+    let p = ui.painter();
+    let mut fill = pts.clone(); fill.push(pos2(x(0.), y(0.)));
+    p.add(Shape::convex_polygon(vec![], Color32::TRANSPARENT, Stroke::NONE));
+    for k in 0..4 { p.add(Shape::convex_polygon(vec![pts[k], pts[k + 1], pos2(pts[k + 1].x, y(0.)), pos2(pts[k].x, y(0.))], col.gamma_multiply(0.15), Stroke::NONE)); }
+    p.add(Shape::line(pts, Stroke::new(2., col)));
+}
 
 pub enum EditorOut {
     /// Sound the part once (the play button, a preset step).
@@ -186,19 +223,24 @@ impl WaveEditor {
         let now = ctx.input(|i| i.time);
         let scr = ctx.content_rect();
         let (wd, ht) = ((scr.width() - 8.).min(560.), (scr.height() * 0.62).max(280.));
-        egui::Window::new("wave synth").id(egui::Id::new("wave-editor") /* a fixed id: the sheet keeps its scroll */).title_bar(false).resizable(false).collapsible(false)
+        let frame = egui::Frame::new().fill(BG).corner_radius(16.).inner_margin(10.).stroke(Stroke::new(1., Color32::from_gray(48)));
+        egui::Window::new("wave synth").id(egui::Id::new("wave-editor")).title_bar(false).resizable(false).collapsible(false).frame(frame)
             .anchor(Align2::CENTER_BOTTOM, [0., -4.]).fixed_size([wd, ht]).show(ctx, |ui| {
-                ui.spacing_mut().item_spacing = vec2(6., 6.);
+                let v = ui.visuals_mut();
+                v.selection.bg_fill = HOT; v.selection.stroke = Stroke::new(1., Color32::BLACK);
+                v.widgets.inactive.weak_bg_fill = WELL; v.widgets.inactive.bg_fill = WELL;
+                v.widgets.hovered.weak_bg_fill = Color32::from_gray(58); v.widgets.active.weak_bg_fill = Color32::from_gray(70);
+                for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] { w.corner_radius = 8.into(); w.bg_stroke = Stroke::NONE; }
+                v.extreme_bg_color = Color32::from_rgb(0x10, 0x11, 0x13);
+                ui.spacing_mut().item_spacing = vec2(6., 8.);
+                ui.spacing_mut().button_padding = vec2(10., 6.);
                 self.top(ui, now, &mut out);
-                egui::ScrollArea::horizontal().id_salt("chips").show(ui, |ui| ui.horizontal(|ui| self.chips(ui)));
-                egui::ScrollArea::horizontal().id_salt("tabs").show(ui, |ui| ui.horizontal(|ui| {
-                    for (i, t) in TABS.iter().enumerate() {
-                        if ui.add(egui::Button::new(*t).selected(i == self.tab).min_size(vec2(40., 34.))).clicked() { self.tab = i }
-                    }
-                }));
-                ui.separator();
+                self.tabs(ui);
+                let knobs = !matches!(TABS[self.tab], "MATRIX" | "PATCH");
+                if knobs { self.chips(ui) }
                 egui::ScrollArea::vertical().id_salt(("body", self.tab)).auto_shrink([false, false]).show(ui, |ui| {
                     ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing = vec2(6., 8.);
                     match TABS[self.tab] {
                         "MAIN" => self.tab_main(ui),
                         "A" => self.tab_osc(ui, 0), "B" => self.tab_osc(ui, 1), "C" => self.tab_osc(ui, 2),
@@ -208,6 +250,7 @@ impl WaveEditor {
                         "MATRIX" => self.tab_matrix(ui),
                         _ => self.tab_patch(ui, &mut out),
                     }
+                    ui.add_space(12.);
                 });
             });
         if self.dirty {
@@ -220,28 +263,63 @@ impl WaveEditor {
 
     fn top(&mut self, ui: &mut Ui, now: f64, out: &mut Vec<EditorOut>) {
         ui.horizontal(|ui| {
-            if ibtn(ui, Ico::Prev, vec2(40., 36.), true, false).clicked() { self.browse(-1); out.push(EditorOut::Audition(self.part.id())) }
+            if ibtn(ui, Ico::Prev, vec2(36., 34.), true, false).clicked() { self.browse(-1); out.push(EditorOut::Audition(self.part.id())) }
             let said = self.say.as_ref().filter(|(_, t)| now - t < 1.6).map(|(s, _)| s.clone());
             let name = said.clone().unwrap_or_else(|| if self.p.name.is_empty() { "patch".into() } else { self.p.name.clone() });
-            ui.add_sized([ui.available_width() - 140., 36.], egui::Label::new(egui::RichText::new(name).size(15.).color(if said.is_some() { SEL } else { FG })).truncate());
-            if ibtn(ui, Ico::Next, vec2(40., 36.), true, false).clicked() { self.browse(1); out.push(EditorOut::Audition(self.part.id())) }
-            if ui.add(egui::Button::new("play").selected(true).min_size(vec2(52., 36.))).clicked() { out.push(EditorOut::Audition(self.part.id())) }
-            if ibtn(ui, Ico::Close, vec2(40., 36.), true, false).clicked() { out.push(EditorOut::Close) }
+            let w = (ui.available_width() - 36. - 6. - 60. - 6. - 36. - 12.).max(60.);
+            ui.add_sized([w, 34.], egui::Label::new(egui::RichText::new(name).size(16.).color(if said.is_some() { SEL } else { FG }).strong()).truncate());
+            if ibtn(ui, Ico::Next, vec2(36., 34.), true, false).clicked() { self.browse(1); out.push(EditorOut::Audition(self.part.id())) }
+            if ui.add(egui::Button::new(egui::RichText::new("play").color(Color32::BLACK).strong()).fill(HOT).min_size(vec2(60., 34.))).clicked() { out.push(EditorOut::Audition(self.part.id())) }
+            if ibtn(ui, Ico::Close, vec2(36., 34.), true, false).clicked() { out.push(EditorOut::Close) }
         });
     }
+    /// The tabs as one segmented bar that fits the width.
+    fn tabs(&mut self, ui: &mut Ui) {
+        let n = TABS.len() as f32;
+        let gap = 3.;
+        let w = ((ui.available_width() - gap * (n - 1.)) / n).floor();
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            ui.spacing_mut().button_padding = vec2(2., 4.);
+            for (i, t) in TAB_NAMES.iter().enumerate() {
+                let on = i == self.tab;
+                let txt = egui::RichText::new(*t).size(12.5).color(if on { Color32::BLACK } else { FG });
+                if ui.add_sized([w, 32.], egui::Button::new(txt).selected(on)).clicked() { self.tab = i; self.drag = None }
+            }
+        });
+    }
+    /// The mod sources: tap one to arm it, then drag a knob to set how far it moves that knob.
     fn chips(&mut self, ui: &mut Ui) {
-        if ui.add(egui::Button::new("DIAL").selected(self.pin).min_size(vec2(44., 32.))).clicked() { self.pin = !self.pin; self.arm = None }
-        for s in 0..NS as u8 {
-            let mut b = egui::Button::new(egui::RichText::new(src_label(s)).size(12.)).selected(self.arm == Some(s)).min_size(vec2(38., 32.));
-            if self.p.mods.iter().any(|m| m.src == s) { b = b.stroke(Stroke::new(1., SEL)) }
-            if ui.add(b).clicked() { self.arm = if self.arm == Some(s) { None } else { Some(s) }; self.pin = false }
-        }
+        egui::ScrollArea::horizontal().id_salt("chips").show(ui, |ui| ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.;
+            if TABS[self.tab] == "MAIN" && self.chip(ui, "DIAL", FG, self.pin, false) { self.pin = !self.pin; self.arm = None }
+            for s in 0..NS as u8 {
+                let used = self.p.mods.iter().any(|m| m.src == s);
+                if self.chip(ui, &src_label(s), src_col(s), self.arm == Some(s), used) { self.arm = if self.arm == Some(s) { None } else { Some(s) }; self.pin = false }
+            }
+        }));
+        let hint = match (self.arm, self.pin) {
+            (Some(s), _) => format!("{} armed: drag a knob to set its depth, double tap to remove", src_label(s)),
+            (None, true) => "tap knobs to pin them to the part's dial".into(),
+            _ => "tap a source to modulate with it".into(),
+        };
+        ui.label(egui::RichText::new(hint).size(11.).color(if self.arm.is_some() || self.pin { FG } else { DIM }));
+    }
+    fn chip(&self, ui: &mut Ui, text: &str, col: Color32, on: bool, used: bool) -> bool {
+        let font = FontId::proportional(11.5);
+        let tw = ui.painter().layout_no_wrap(text.to_string(), font.clone(), col).size().x;
+        let (rect, r) = ui.allocate_exact_size(vec2(tw + 18., 30.), Sense::click());
+        let p = ui.painter();
+        if on { p.rect_filled(rect, 15., col); } else { p.rect_stroke(rect, 15., Stroke::new(1., col.gamma_multiply(0.7)), egui::StrokeKind::Inside); }
+        p.text(rect.center(), Align2::CENTER_CENTER, text, font, if on { Color32::BLACK } else { col });
+        if used && !on { p.circle_filled(pos2(rect.right() - 6., rect.top() + 6.), 2.5, col); }
+        r.clicked()
     }
 
     // ---------- the knob ----------
     fn knob(&mut self, ui: &mut Ui, i: usize, label: Option<String>) {
         let d = &wave_params()[i];
-        let (rect, resp) = ui.allocate_exact_size(vec2(60., 78.), Sense::click_and_drag());
+        let (rect, resp) = ui.allocate_exact_size(vec2(62., 78.), Sense::click_and_drag());
         let now = ui.input(|x| x.time);
         let n = wave_norm(d, self.p.values[i]).clamp(0., 1.);
         let routes: Vec<usize> = self.p.mods.iter().enumerate().filter(|(_, m)| m.dst as usize == i).map(|(j, _)| j).collect();
@@ -301,11 +379,14 @@ impl WaveEditor {
         if changed { self.dirty = true }
         // draw
         let p = ui.painter();
-        let c = pos2(rect.center().x, rect.top() + 28.);
+        let c = pos2(rect.center().x, rect.top() + 27.);
         let (a0, sw) = (PI * 0.75, PI * 1.5);
         let n = wave_norm(d, self.p.values[i]).clamp(0., 1.) as f32;
         let pinned = self.dial.contains(&d.path);
-        if self.pin || self.arm.is_some() { p.circle_filled(c, 27., Color32::from_rgba_unmultiplied(90, 168, 255, 18)); }
+        let ring = match self.arm { Some(s) => src_col(s), None if self.pin => FG, None => LINE };
+        p.circle_filled(c, 17., WELL);
+        if self.pin || self.arm.is_some() { p.circle_stroke(c, 26., Stroke::new(1., ring.gamma_multiply(0.35))); }
+        if resp.is_pointer_button_down_on() { p.circle_filled(c, 17., Color32::from_gray(52)); }
         p.add(Shape::line(arc(c, 22., a0, a0 + sw), Stroke::new(4., LINE)));
         let z = if d.min < 0. && d.max > 0. { wave_norm(d, 0.) as f32 } else { 0. };
         p.add(Shape::line(arc(c, 22., a0 + sw * z.min(n), a0 + sw * z.max(n) + 0.001), Stroke::new(4., HOT)));
@@ -313,25 +394,38 @@ impl WaveEditor {
         for m in self.p.mods.iter().filter(|m| m.dst as usize == i) {
             let (amt, nf) = (m.amt as f32, n);
             let (lo, hi) = if m.bi { (nf - amt.abs(), nf + amt.abs()) } else { ((nf).min(nf + amt), nf.max(nf + amt)) };
-            let col = if self.arm == Some(m.src) { HOT } else { SEL };
+            let col = src_col(m.src);
             let col = if m.off { col.gamma_multiply(0.3) } else { col };
             p.add(Shape::line(arc(c, r, a0 + sw * lo.max(0.), a0 + sw * hi.min(1.) + 0.001), Stroke::new(3., col)));
             r -= 4.;
             if r < 6. { break }
         }
         let a = a0 + sw * n;
-        p.line_segment([c + vec2(a.cos(), a.sin()) * 10., c + vec2(a.cos(), a.sin()) * 23.], Stroke::new(2., FG));
+        p.line_segment([c + vec2(a.cos(), a.sin()) * 6., c + vec2(a.cos(), a.sin()) * 15.], Stroke::new(2.5, FG));
         let name = label.unwrap_or_else(|| d.label.to_string());
         p.text(pos2(rect.center().x, rect.top() + 58.), Align2::CENTER_CENTER, name, FontId::proportional(10.5), if pinned { HOT } else { DIM });
         let val = match armed { Some(j) => { let m = &self.p.mods[j]; format!("{} {}{}", src_label(m.src), if m.amt > 0. { "+" } else { "" }, (m.amt * 100.).round()) }
             None => value_text(d, self.p.values[i]) };
-        p.text(pos2(rect.center().x, rect.top() + 71.), Align2::CENTER_CENTER, val, FontId::proportional(11.), if armed.is_some() { SEL } else { FG });
+        p.text(pos2(rect.center().x, rect.top() + 71.), Align2::CENTER_CENTER, val, FontId::proportional(11.), match armed { Some(j) => src_col(self.p.mods[j].src), None => FG });
     }
     fn k(&mut self, ui: &mut Ui, path: &str) { if let Some(i) = param_index(path) { self.knob(ui, i, None) } }
     fn group(&mut self, ui: &mut Ui, title: &str, paths: &[String]) {
-        ui.label(egui::RichText::new(title).size(12.).color(DIM));
-        ui.horizontal_wrapped(|ui| { for p in paths { self.k(ui, p) } });
-        ui.add_space(4.);
+        card(ui, title, |ui| self.knobs(ui, paths));
+    }
+    /// Four knobs with the envelope they shape beside them (on top, where the row is too narrow).
+    fn env_knobs(&mut self, ui: &mut Ui, paths: &[String], adsr: (f64, f64, f64, f64), col: Color32) {
+        let (a, d, s, r) = adsr;
+        if ui.available_width() >= paths.len() as f32 * 66. + 110. {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.;
+                for p in paths { self.k(ui, p) }
+                ui.add_space(6.);
+                ui.vertical(|ui| { ui.add_space(14.); env_graph(ui, a, d, s, r, col) });
+            });
+        } else { env_graph(ui, a, d, s, r, col); self.knobs(ui, paths) }
+    }
+    fn knobs(&mut self, ui: &mut Ui, paths: &[String]) {
+        ui.horizontal_wrapped(|ui| { ui.spacing_mut().item_spacing = vec2(4., 4.); for p in paths { self.k(ui, p) } });
     }
     fn combo(ui: &mut Ui, id: &str, label: &str, opts: &[&str], cur: &mut u8) -> bool {
         let mut ch = false;
@@ -346,57 +440,83 @@ impl WaveEditor {
     fn toggle(ui: &mut Ui, label: &str, v: &mut bool) -> bool {
         if ui.add(egui::Button::new(label).selected(*v).min_size(vec2(0., 32.))).clicked() { *v = !*v; true } else { false }
     }
+    /// An on/off switch with its label, for a module or an oscillator.
+    fn switch(ui: &mut Ui, label: &str, v: &mut bool) -> bool {
+        let font = FontId::proportional(14.);
+        let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), FG).size().x;
+        let (rect, r) = ui.allocate_exact_size(vec2(44. + tw, 32.), Sense::click());
+        let tr = Rect::from_min_size(pos2(rect.left(), rect.center().y - 10.), vec2(36., 20.));
+        let p = ui.painter();
+        p.rect_filled(tr, 10., if *v { HOT } else { WELL });
+        p.circle_filled(pos2(if *v { tr.right() - 10. } else { tr.left() + 10. }, tr.center().y), 7., if *v { Color32::BLACK } else { DIM });
+        p.text(pos2(tr.right() + 8., rect.center().y), Align2::LEFT_CENTER, label, font, if *v { FG } else { DIM });
+        if r.clicked() { *v = !*v; true } else { false }
+    }
 
     // ---------- tabs ----------
     fn tab_main(&mut self, ui: &mut Ui) {
-        ui.label(egui::RichText::new("macros").size(12.).color(DIM));
-        let per = (((ui.available_width() + 6.) / 78.).floor() as usize).clamp(1, WAVE_MACROS);
-        for row in (0..WAVE_MACROS).collect::<Vec<_>>().chunks(per) { ui.horizontal(|ui| {
-            for &m in row {
-                ui.vertical(|ui| {
-                    ui.set_width(72.);
-                    let name = self.p.macro_names[m].clone();
-                    self.knob(ui, P_MAC0 + m, Some(name));
-                    let mut s = self.p.macro_names[m].clone();
-                    if ui.add(egui::TextEdit::singleline(&mut s).desired_width(66.).char_limit(16)).changed() {
-                        self.p.macro_names[m] = if s.is_empty() { format!("macro {}", m + 1) } else { s }; self.dirty = true;
-                    }
-                });
-            }
-        }); }
+        card(ui, "macros", |ui| {
+            let per = (((ui.available_width() + 4.) / 76.).floor() as usize).clamp(1, WAVE_MACROS);
+            let per = if per >= 8 { 8 } else if per >= 4 { 4 } else { per };
+            for row in (0..WAVE_MACROS).collect::<Vec<_>>().chunks(per) { ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.;
+                for &m in row {
+                    ui.vertical(|ui| {
+                        ui.set_width(72.);
+                        ui.horizontal(|ui| { ui.add_space(5.); self.knob(ui, P_MAC0 + m, Some(String::new())) });
+                        let mut s = self.p.macro_names[m].clone();
+                        if ui.add(egui::TextEdit::singleline(&mut s).desired_width(68.).char_limit(16).font(FontId::proportional(11.)).align(egui::Align2::CENTER_CENTER)).changed() {
+                            self.p.macro_names[m] = if s.is_empty() { format!("macro {}", m + 1) } else { s }; self.dirty = true;
+                        }
+                    });
+                }
+            }); }
+        });
         let pinned = !self.dial.is_empty();
         let list: Vec<String> = if pinned { self.dial.clone() } else { QUICK.iter().map(|s| s.to_string()).collect() };
-        ui.label(egui::RichText::new(if pinned { "on the dial" } else { "quick" }).size(12.).color(DIM));
-        ui.horizontal_wrapped(|ui| { for p in &list { if let Some(i) = param_index(p) { let l = long_label(&self.p, i); self.knob(ui, i, Some(l)) } } });
-        ui.label(egui::RichText::new("Arm DIAL, then tap knobs to pin them to the part's dial.").size(11.).color(DIM));
+        card(ui, if pinned { "on the dial" } else { "quick" }, |ui| {
+            ui.horizontal_wrapped(|ui| { ui.spacing_mut().item_spacing = vec2(4., 4.); for p in &list { if let Some(i) = param_index(p) { let l = long_label(&self.p, i); self.knob(ui, i, Some(l)) } } });
+        });
     }
     fn tab_osc(&mut self, ui: &mut Ui, i: usize) {
         let t = ["A", "B", "C"][i];
-        ui.horizontal(|ui| {
-            let mut on = self.p.osc[i].on;
-            if Self::toggle(ui, &format!("osc {t}"), &mut on) { self.p.osc[i].on = on; self.dirty = true }
-            let o = &mut self.p.osc[i];
-            if Self::combo(ui, &format!("tab{i}"), "table", &WAVE_TABLES, &mut o.table) { self.dirty = true }
-            let o = &mut self.p.osc[i];
-            if Self::combo(ui, &format!("flt{i}"), "filter", &WAVE_FILTERS, &mut o.filter) { self.dirty = true }
-        });
-        self.preview(ui, i);
-        if self.p.osc[i].table == 1 { self.harmonics(ui, i) }
+        let on = self.p.osc[i].on;
         let o = |k: &str| format!("osc{}.{k}", i + 1);
         let g = |ks: &[&str]| ks.iter().map(|k| o(k)).collect::<Vec<_>>();
-        self.group(ui, "wave", &g(&["pos", "phase", "level", "pan"]));
-        ui.horizontal(|ui| {
-            let q = &mut self.p.osc[i];
-            if Self::combo(ui, &format!("w1{i}"), "warp", &WARP_MODES, &mut q.warp_mode) { self.dirty = true }
-            let q = &mut self.p.osc[i];
-            if Self::combo(ui, &format!("w2{i}"), "warp 2", &WARP_MODES, &mut q.warp2_mode) { self.dirty = true }
+        card(ui, "", |ui| {
+            ui.horizontal(|ui| {
+                let mut on = self.p.osc[i].on;
+                if Self::switch(ui, &format!("Oscillator {t}"), &mut on) { self.p.osc[i].on = on; self.dirty = true }
+            });
+            if !on { ui.multiply_opacity(0.45) }
+            ui.horizontal(|ui| {
+                let o = &mut self.p.osc[i];
+                if Self::combo(ui, &format!("tab{i}"), "table", &WAVE_TABLES, &mut o.table) { self.dirty = true }
+                let o = &mut self.p.osc[i];
+                if Self::combo(ui, &format!("flt{i}"), "filter", &WAVE_FILTERS, &mut o.filter) { self.dirty = true }
+            });
+            self.preview(ui, i);
+            if self.p.osc[i].table == 1 { self.harmonics(ui, i) }
+            self.knobs(ui, &g(&["pos", "phase", "level", "pan"]));
         });
-        self.group(ui, "warp", &g(&["warp", "warp2"]));
-        self.group(ui, "pitch", &g(&["oct", "semi", "fine"]));
-        self.group(ui, "unison", &g(&["uni", "detune", "blend", "spread"]));
-        self.group(ui, "amp envelope", &g(&["a", "d", "s", "r"]));
-        self.group(ui, "filter", &g(&["cut", "res", "drive", "key"]));
-        self.group(ui, "filter envelope", &g(&["famt", "fa", "fd", "fs", "fr"]));
+        if !on { ui.multiply_opacity(0.45) }
+        card(ui, "warp", |ui| {
+            ui.horizontal(|ui| {
+                let q = &mut self.p.osc[i];
+                if Self::combo(ui, &format!("w1{i}"), "warp 1", &WARP_MODES, &mut q.warp_mode) { self.dirty = true }
+                let q = &mut self.p.osc[i];
+                if Self::combo(ui, &format!("w2{i}"), "warp 2", &WARP_MODES, &mut q.warp2_mode) { self.dirty = true }
+            });
+            self.knobs(ui, &g(&["warp", "warp2"]));
+        });
+        card(ui, "pitch · unison", |ui| self.knobs(ui, &g(&["oct", "semi", "fine", "uni", "detune", "blend", "spread"])));
+        let vals = self.p.values;
+        let v = |k: usize| vals[i * OSC_N + k];
+        let (a, d, s, r) = (v(O_A), v(O_D), v(O_S), v(O_R));
+        card(ui, "amp envelope", |ui| self.env_knobs(ui, &g(&["a", "d", "s", "r"]), (a, d, s, r), HOT));
+        card(ui, "filter", |ui| self.knobs(ui, &g(&["cut", "res", "drive", "key"])));
+        let (a, d, s, r) = (v(O_FA), v(O_FD), v(O_FS), v(O_FR));
+        card(ui, "filter envelope", |ui| { env_graph(ui, a, d, s, r, SEL); self.knobs(ui, &g(&["famt", "fa", "fd", "fs", "fr"])) });
     }
     /// The table's current frame, drawn from its spectrum, so the position knob shows as a shape.
     fn preview(&mut self, ui: &mut Ui, i: usize) {
@@ -440,66 +560,73 @@ impl WaveEditor {
         }
     }
     fn tab_voice(&mut self, ui: &mut Ui) {
-        self.group(ui, "voice", &["tune.oct", "tune.semi", "vol", "glide", "gate"].map(String::from));
-        ui.horizontal(|ui| {
-            if Self::combo(ui, "voicing", "voicing", &VOICE_MODES, &mut self.p.voice_mode) { self.dirty = true }
-            if Self::toggle(ui, "glide always", &mut self.p.glide_always) { self.dirty = true }
-            if Self::toggle(ui, "glide scales", &mut self.p.glide_scale) { self.dirty = true }
+        card(ui, "voice", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if Self::combo(ui, "voicing", "voicing", &VOICE_MODES, &mut self.p.voice_mode) { self.dirty = true }
+                ui.vertical(|ui| { ui.label(egui::RichText::new("glide").size(11.).color(DIM)); ui.horizontal(|ui| {
+                    if Self::toggle(ui, "always", &mut self.p.glide_always) { self.dirty = true }
+                    if Self::toggle(ui, "scaled", &mut self.p.glide_scale) { self.dirty = true }
+                }); });
+            });
+            self.knobs(ui, &["tune.oct", "tune.semi", "vol", "glide", "gate"].map(String::from));
         });
-        self.group(ui, "sub (on ENV1)", &["sub.level", "sub.oct"].map(String::from));
-        self.group(ui, "noise (on ENV1)", &["noise.level", "noise.color"].map(String::from));
+        card(ui, "sub · noise (on ENV1)", |ui| self.knobs(ui, &["sub.level", "sub.oct", "noise.level", "noise.color"].map(String::from)));
     }
     fn tab_mod(&mut self, ui: &mut Ui) {
         for e in 1..=WAVE_ENVS {
             let t = if e == 1 { "ENV1 · also sub and noise".to_string() } else { format!("ENV{e}") };
-            self.group(ui, &t, &["a", "d", "s", "r"].map(|k| format!("env{e}.{k}")));
+            let base = P_ENV0 + 4 * (e - 1);
+            let (a, d, s, r) = (self.p.values[base], self.p.values[base + 1], self.p.values[base + 2], self.p.values[base + 3]);
+            card(ui, &t, |ui| self.env_knobs(ui, &["a", "d", "s", "r"].map(|k| format!("env{e}.{k}")), (a, d, s, r), ENVC));
         }
         let syncs: Vec<&str> = LFO_SYNCS.iter().map(|x| x.0).collect();
         for l in 0..WAVE_LFOS {
-            ui.label(egui::RichText::new(format!("LFO{}", l + 1)).size(12.).color(DIM));
-            ui.horizontal(|ui| {
-                if Self::combo(ui, &format!("ls{l}"), "shape", &LFO_SHAPES, &mut self.p.lfo[l].shape) { self.dirty = true }
-                if Self::combo(ui, &format!("ly{l}"), "sync", &syncs, &mut self.p.lfo[l].sync) { self.dirty = true }
-                if Self::toggle(ui, "retrig", &mut self.p.lfo[l].retrig) { self.dirty = true }
+            card(ui, &format!("LFO{}", l + 1), |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    if Self::combo(ui, &format!("ls{l}"), "shape", &LFO_SHAPES, &mut self.p.lfo[l].shape) { self.dirty = true }
+                    if Self::combo(ui, &format!("ly{l}"), "sync", &syncs, &mut self.p.lfo[l].sync) { self.dirty = true }
+                    ui.vertical(|ui| { ui.label(egui::RichText::new(" ").size(11.)); if Self::toggle(ui, "retrig", &mut self.p.lfo[l].retrig) { self.dirty = true } });
+                });
+                self.knobs(ui, &[format!("lfo{}.rate", l + 1), format!("lfo{}.phase", l + 1)]);
             });
-            ui.horizontal_wrapped(|ui| { self.k(ui, &format!("lfo{}.rate", l + 1)); self.k(ui, &format!("lfo{}.phase", l + 1)); });
         }
     }
     fn tab_fx(&mut self, ui: &mut Ui) {
         const KNOBS: [&[&str]; 9] = [&["voices", "rate", "detune", "dim", "mix"], &["drive", "mix"], &["rate", "depth", "fb", "spread", "mix"],
             &["rate", "depth", "freq", "fb", "spread", "mix"], &["rate", "depth", "mix"], &["time", "fb", "tone", "mix"],
             &["mix", "predelay", "decay", "size", "attack", "early", "late", "mod", "rate", "lowcut", "highcut"], &["thresh", "ratio", "gain"], &["low", "high"]];
-        const NAMES: [&str; 9] = ["hyper / dimension", "distortion", "flanger", "phaser", "chorus", "delay", "reverb", "compressor", "eq"];
+        const NAMES: [&str; 9] = ["Hyper / dimension", "Distortion", "Flanger", "Phaser", "Chorus", "Delay", "Reverb", "Compressor", "EQ"];
         ui.label(egui::RichText::new("The rack runs top to bottom. Its knobs take macros from the matrix.").size(11.).color(DIM));
         let order = self.p.fx_order;
         let mut mv: Option<(usize, i32)> = None;
         for (pos, &k) in order.iter().enumerate() {
             let k = k as usize;
-            ui.separator();
-            ui.horizontal(|ui| {
-                let mut on = self.p.fx_on[k];
-                if Self::toggle(ui, NAMES[k], &mut on) { self.p.fx_on[k] = on; self.dirty = true }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ibtn(ui, Ico::Down, vec2(36., 32.), pos + 1 < order.len(), false).clicked() { mv = Some((pos, 1)) }
-                    if ibtn(ui, Ico::Up, vec2(36., 32.), pos > 0, false).clicked() { mv = Some((pos, -1)) }
+            card(ui, "", |ui| {
+                ui.horizontal(|ui| {
+                    let mut on = self.p.fx_on[k];
+                    if Self::switch(ui, NAMES[k], &mut on) { self.p.fx_on[k] = on; self.dirty = true }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ibtn(ui, Ico::Down, vec2(34., 30.), pos + 1 < order.len(), false).clicked() { mv = Some((pos, 1)) }
+                        if ibtn(ui, Ico::Up, vec2(34., 30.), pos > 0, false).clicked() { mv = Some((pos, -1)) }
+                    });
                 });
+                if !self.p.fx_on[k] { return }
+                ui.horizontal_wrapped(|ui| match k {
+                    FX_DIST => { if Self::combo(ui, "dmode", "mode", &DIST_MODES, &mut self.p.dist_mode) { self.dirty = true } }
+                    FX_REVERB => {
+                        if Self::combo(ui, "vmode", "mode", &VERB_MODES, &mut self.p.verb_mode) { self.dirty = true }
+                        if Self::combo(ui, "vcolor", "color", &VERB_COLORS, &mut self.p.verb_color) { self.dirty = true }
+                    }
+                    FX_DELAY => {
+                        let s: Vec<&str> = DELAY_SYNCS.iter().map(|x| x.0).collect();
+                        if Self::combo(ui, "dsync", "sync", &s, &mut self.p.delay_sync) { self.dirty = true }
+                        ui.vertical(|ui| { ui.label(egui::RichText::new(" ").size(11.)); if Self::toggle(ui, "ping-pong", &mut self.p.delay_ping) { self.dirty = true } });
+                    }
+                    _ => {}
+                });
+                let paths: Vec<String> = KNOBS[k].iter().map(|q| format!("{}.{q}", WAVE_FX[k])).collect();
+                self.knobs(ui, &paths);
             });
-            if !self.p.fx_on[k] { continue }
-            ui.horizontal(|ui| match k {
-                FX_DIST => { if Self::combo(ui, "dmode", "mode", &DIST_MODES, &mut self.p.dist_mode) { self.dirty = true } }
-                FX_REVERB => {
-                    if Self::combo(ui, "vmode", "mode", &VERB_MODES, &mut self.p.verb_mode) { self.dirty = true }
-                    if Self::combo(ui, "vcolor", "color", &VERB_COLORS, &mut self.p.verb_color) { self.dirty = true }
-                }
-                FX_DELAY => {
-                    let s: Vec<&str> = DELAY_SYNCS.iter().map(|x| x.0).collect();
-                    if Self::combo(ui, "dsync", "sync", &s, &mut self.p.delay_sync) { self.dirty = true }
-                    if Self::toggle(ui, "ping-pong", &mut self.p.delay_ping) { self.dirty = true }
-                }
-                _ => {}
-            });
-            let paths: Vec<String> = KNOBS[k].iter().map(|q| format!("{}.{q}", WAVE_FX[k])).collect();
-            ui.horizontal_wrapped(|ui| { for p in &paths { self.k(ui, p) } });
         }
         if let Some((pos, d)) = mv {
             let j = (pos as i32 + d) as usize;
