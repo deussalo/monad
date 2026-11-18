@@ -80,7 +80,14 @@ struct Held { started: bool, on: bool, stopped: bool, delta: egui::Vec2, pos: Op
 fn held_drag(ui: &mut Ui, size: egui::Vec2) -> (Rect, egui::Response, Held) {
     let key = ui.next_auto_id().with("held");
     let was = ui.ctx().data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
-    let touch = was || ui.input(|i| i.any_touches());
+    // egui hit-tests a press against the previous frame's senses, so the control must already be click-only when the
+    // finger lands: go by what pressed last (a phone starts out as touch), not by what is touching now
+    let mode = egui::Id::new("cogs-editor-touch-input");
+    let last = ui.ctx().data(|d| d.get_temp::<bool>(mode)).unwrap_or(cfg!(target_os = "android"));
+    let (now, mouse) = ui.input(|i| (i.any_touches(), i.pointer.any_pressed() && !i.any_touches()));
+    let touch_input = now || (last && !mouse);
+    if touch_input != last { ui.ctx().data_mut(|d| { d.insert_temp(mode, touch_input); }); }
+    let touch = was || touch_input;
     let (rect, resp) = ui.allocate_exact_size(size, if touch && !was { Sense::click() } else { Sense::click_and_drag() });
     let (down, still, since, delta, pos) = ui.input(|i| {
         let p = &i.pointer;
