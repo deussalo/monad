@@ -100,6 +100,7 @@ fn android_main(app: AndroidApp) {
     if stream.is_none() { *status.lock().unwrap() = "Audio failed to open".into() }
     let (vm, act) = (app.vm_as_ptr() as usize, app.activity_as_ptr() as usize);
     let connect = Box::new(move || call_activity(vm, act, "connectMidi", "()V", &[]));
+    let leave: Box<dyn Fn()> = Box::new(move || call_activity(vm, act, "leaveApp", "()V", &[]));
     let open_file: Box<dyn Fn()> = Box::new(move || call_activity(vm, act, "openFile", "()V", &[]));
     let save_file: Box<dyn Fn(&str, &str)> = Box::new(move |name, text| {
         let Ok(jvm) = (unsafe { JavaVM::from_raw(vm as *mut _) }) else { return };
@@ -109,6 +110,6 @@ fn android_main(app: AndroidApp) {
         if let Err(e) = env.call_method(&act, "saveFile", "(Ljava/lang/String;Ljava/lang/String;)V", &[(&n).into(), (&t).into()]) { log::error!("saveFile: {e}") }
     });
     let opts = eframe::NativeOptions { android_app: Some(app), ..Default::default() };
-    let _ = eframe::run_native("cogs", opts, Box::new(move |_cc| { let mut a = ui::App::new(sh, status, connect); a.data = data; a.open_file = Some(open_file); a.save_file = Some(save_file); Ok(Box::new(a)) }));
+    let _ = eframe::run_native("cogs", opts, Box::new(move |_cc| { let mut a = ui::App::new(sh, status, connect); a.data = data; a.open_file = Some(open_file); a.save_file = Some(save_file); a.leave = Some(leave); Ok(Box::new(a)) }));
     drop(stream);
 }

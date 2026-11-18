@@ -37,11 +37,13 @@ pub struct App {
     offs: Vec<(u32, f64)>,
     pub open_file: Option<Box<dyn Fn()>>,
     pub save_file: Option<Box<dyn Fn(&str, &str)>>,
+    /// Back with nothing left to close: send the app to the background.
+    pub leave: Option<Box<dyn Fn()>>,
 }
 
 impl App {
     pub fn new(sh: Arc<Shared>, status: Arc<Mutex<String>>, connect: Box<dyn Fn()>) -> Self {
-        App { sh, status, connect, stage: Stage::new(), panel: false, world_ix: 0, fitted: false, note: None, editor: None, data: None, save_at: None, rec: None, can_record: false, foreign: Default::default(), offs: Vec::new(), open_file: None, save_file: None }
+        App { sh, status, connect, stage: Stage::new(), panel: false, world_ix: 0, fitted: false, note: None, editor: None, data: None, save_at: None, rec: None, can_record: false, foreign: Default::default(), offs: Vec::new(), open_file: None, save_file: None, leave: None }
     }
     /// The part a selection plays from the keyboard: a reader, pad or box; a plate means its reader.
     fn keyboard_part(w: &World, sel: Option<Sel>) -> Option<u32> {
@@ -132,7 +134,7 @@ impl eframe::App for App {
                     ui.horizontal_wrapped(|ui| {
                         if ui.add_sized([150.0, 40.0], egui::Button::new("connect keyboard")).clicked() { connect = true }
                         for (i, (name, _)) in crate::WORLDS.iter().enumerate() {
-                            if ui.add_sized([0.0, 40.0], egui::Button::new(*name).selected(i == ix)).clicked() { *load = Some(i) }
+                            if ui.add(egui::Button::new(*name).selected(i == ix).min_size(egui::vec2(0.0, 40.0))).clicked() { *load = Some(i) }
                         }
                     });
                     let sr = m.sample_rate.load(Relaxed).max(1) as f32;
@@ -199,7 +201,10 @@ impl eframe::App for App {
         if self.panel { self.panel_ui(&ctx) }
         // Android's Back closes what is open, the editor first
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::BrowserBack)) {
-            if self.editor.is_some() { self.editor = None } else if self.panel { self.panel = false }
+            let closed = if self.editor.is_some() { self.editor = None; true }
+                else if self.panel { self.panel = false; true }
+                else { self.sh.world.lock().map(|mut w| self.stage.back(&mut w)).unwrap_or(true) };
+            if !closed { if let Some(f) = &self.leave { f() } }
         }
         if let Some(ed) = self.editor.as_mut() {
             ed.safe_bottom = io.safe_bottom;

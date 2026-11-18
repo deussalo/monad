@@ -53,6 +53,10 @@ class MainActivity : NativeActivity(), MidiHub.Listener {
     @Suppress("unused")
     fun connectMidi() = runOnUiThread { connectFlow() }
 
+    /** Called from Rust: Back with nothing left to close. */
+    @Suppress("unused")
+    fun leaveApp() = runOnUiThread { moveTaskToBack(true) }
+
     /** Called from Rust: pick a .cogs.json to open; its text goes back through Native.fileText. */
     @Suppress("unused")
     fun openFile() = runOnUiThread {
