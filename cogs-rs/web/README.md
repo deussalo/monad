@@ -4,6 +4,10 @@ The same Rust app as on Android, in any browser with WebAssembly, WebGL and Audi
 
     sh web/build.sh            # from cogs-rs/; needs wasm-bindgen-cli 0.2.130 (cargo install wasm-bindgen-cli --version 0.2.130)
 
+The app's wasm builds with the `web` cargo profile (opt-level "z", fat LTO) and both wasm files go through wasm-opt
+when it is there (`mkdir -p ~/.cache/cogs-binaryen && cd ~/.cache/cogs-binaryen && npm install binaryen@132.0.0`; slow, a
+few minutes, and optional). The worklet stays on the fast release profile.
+
 It writes `web/dist/`: `index.html` with `cogs.js` + `cogs_bg.wasm` (the app), `worklet.js` + `worklet.wasm` (the
 sound) and `cogs-web.js` (the glue). Serve the folder over http, or open `web/dist/cogs.html`, the same thing in one
 self-contained page (it works from a file too).
@@ -28,5 +32,9 @@ The machine therefore lives twice (crates/cogs-app/src/link.rs has the details):
   which are chaotic, so only the worklet's world knows where they are. The UI lays them over its own.
 - **MIDI**: Web MIDI and Web Bluetooth (BLE-MIDI packets parsed as cogs/src/midi.js does) in `cogs-web.js`, straight
   to the worklet: `{"type":"midi","d":[status,d1,d2]}`.
+
+- **Recording**: the UI tells the worklet (`{"type":"rec","on":b}`); the worklet stamps each key with the sim time heard
+  with it, as on Android, and posts them in its state; the UI writes them onto its plate with `rec::Rec`, and the world
+  goes back. Pins a held key must keep silent travel with it (`skips`: the save has no such field).
 
 The sound starts on the first tap or key (the browsers' autoplay rule).
