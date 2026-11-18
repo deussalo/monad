@@ -61,6 +61,9 @@ impl Rng {
     }
 }
 
+/// The room's dry knob; SPACE_DEFS in sim.js is this, then VERB_DEFS.
+pub const SPACE_DRY_DEF: (&str, &str, f64, f64, f64) = ("dry", "dry", 0., 1., 0.001);
+
 /// The room's space (SPACE in sim.js): the reverb's knobs and the dry level beside it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SpaceParams { pub verb: VerbParams, pub dry: f64 }
@@ -168,6 +171,7 @@ pub struct Engine {
     space: SpaceParams, dry: f64, listen: f64,
     master: f64, master_target: f64, master_glide: f64, master_level: f64,
     quiet_frames: u64,
+    silent_frames: u64,
     raw: bool,
     retired: Vec<Arc<CompiledPatch>>,
     stats: Stats,
@@ -195,7 +199,7 @@ impl Engine {
             aux: Aux::new(),
             dl: [0.; BLOCK], dr: [0.; BLOCK], ol: [0.; BLOCK], or: [0.; BLOCK],
             space, dry: space.dry, listen: 0., master, master_target: master, master_level: master, master_glide: 1. - (-1. / (0.08 * fs)).exp(),
-            quiet_frames: 0, raw: false, retired: Vec::with_capacity(64), stats: Stats::default(),
+            quiet_frames: 0, silent_frames: 0, raw: false, retired: Vec::with_capacity(64), stats: Stats::default(),
         }
     }
     /// Frames rendered so far: the engine's clock.
@@ -297,6 +301,14 @@ impl Engine {
         self.fields.process(frame, n, &self.aux, ol, or);
         // master gain (gliding as setTargetAtTime), the line amp, the distance low-pass, the limiter
         if self.raw { self.frame += n as u64; return; }
+        // nothing has reached the master for 2 s: every filter and the limiter's lookahead have run dry, so the chain
+        // is skipped (silence out) until something arrives
+        let mut pk = 0f32; for s in 0..n { pk = pk.max(ol[s].abs()).max(or[s].abs()); }
+        self.silent_frames = if pk < 1e-9 { self.silent_frames + n as u64 } else { 0 };
+        if self.silent_frames > 2 * self.fs as u64 {
+            self.master += (self.master_target - self.master) * (1. - (1. - self.master_glide).powi(n as i32));
+            ol.fill(0.); or.fill(0.); self.stats.peak = 0.; self.frame += n as u64; return;
+        }
         for s in 0..n {
             self.master += (self.master_target - self.master) * self.master_glide;
             let g = self.master as f32; ol[s] *= g; or[s] *= g;

@@ -179,17 +179,18 @@ impl Modal {
     pub(crate) fn process(&mut self, frame: u64, n: usize, dry_l: &mut [f32], dry_r: &mut [f32], aux: &mut Aux) -> usize {
         self.frame = frame; self.n = n;
         let end = frame + n as u64;
-        let mut starts = 0;
-        while starts < self.max_starts {
-            let Some(mut d) = self.queue.front().copied() else { break };
-            if d.at >= end { break; }
+        // due strikes in the order they came (one sent ahead for a later block waits in place)
+        let mut starts = 0; let mut i = 0;
+        while starts < self.max_starts && i < self.queue.len() {
+            let mut d = self.queue[i];
+            if d.at >= end { i += 1; continue; }
             starts += 1;
             if !self.start(&mut d) {
                 let wf = *self.wait_from.get_or_insert(frame);
                 if frame - wf < self.max_wait { break; }
                 self.strikes += 1; self.drops += 1;
             }
-            self.wait_from = None; self.queue.pop_front();
+            self.wait_from = None; self.queue.remove(i);
         }
         if !self.damps.is_empty() {
             let mut i = 0;
