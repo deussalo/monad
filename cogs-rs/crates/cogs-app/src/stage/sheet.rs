@@ -976,12 +976,11 @@ impl Stage {
                     ("vel curve", &mut s.vel_curve, 0.1, 3.0, 0.01, false), ("lookahead s", &mut s.lookahead, 0.12, 0.5, 0.005, false), ("step rad", &mut s.max_step, 0.005, 0.3, 0.005, false),
                     ("zoom", &mut s.zoom, 0.1, 8.0, 0.01, false)]
                 {
-                    ui.label(l);
-                    if ui.add(egui::Slider::new(v, a..=b).step_by(st)).changed() {
+                    if let Some(x) = num_row(ui, l, *v, a, b, st) {
+                        *v = x;
                         changed = true;
                         structural |= solve;
                     }
-                    ui.end_row();
                 }
                 for (l, v) in [("windows", &mut s.windows), ("ids", &mut s.ids), ("ratio snap", &mut s.ratios)] {
                     ui.label(l);
@@ -1402,6 +1401,7 @@ impl Stage {
                 *w = nw;
                 w.set_paused(paused);
                 self.loaded(w);
+                self.fly_fit(w);
                 self.out.push(StageOut::Changed);
                 let n = w.cogs.len() + w.arms.len() + w.pads.len() + w.readers.len() + w.belts.len() + w.strings.len() + w.cams.len() + w.probes.len();
                 format!("machine loaded: {n} part{}", if n == 1 { "" } else { "s" })
@@ -1501,9 +1501,10 @@ fn setting(x: f64) -> String {
 fn num_row(ui: &mut egui::Ui, label: &str, v: f64, lo: f64, hi: f64, step: f64) -> Option<f64> {
     ui.label(label);
     let mut x = v;
-    let r = ui.add(egui::Slider::new(&mut x, lo..=hi).step_by(step));
+    // a slider only shows a value until a finger moves it: drawing must not round or clamp what the machine holds
+    let r = ui.add(egui::Slider::new(&mut x, lo..=hi).step_by(step).clamping(egui::SliderClamping::Edits));
     ui.end_row();
-    if r.changed() && x != v { Some(x) } else { None }
+    if r.changed() && (x - v).abs() > step.abs() * 1e-6 { Some(x) } else { None }
 }
 fn key_row(ui: &mut egui::Ui, label: &str, k: &Key, w: &mut World, lo: f64, hi: f64, step: f64) -> bool {
     let v = get(w, k).n();

@@ -705,7 +705,7 @@ impl Stage {
                 ];
                 self.beside(w, (self.dot_at, self.dot_at), 0.0, None, sec, s, ("pin".into(), note_name(t.ring_note(rg as i64) as i64)))
             }),
-            Some(s @ Sel::Cog(i)) => w.cog(i).filter(|c| c.track.is_some() && !note_mode(c, w.s.zoom)).map(|c| {
+            Some(s @ Sel::Cog(i)) => w.cog(i).filter(|c| c.track.is_some()).map(|c| {
                 let k = |key| Key::Track(i, key);
                 let t = c.track.as_ref().unwrap();
                 let sec = vec![
@@ -717,6 +717,11 @@ impl Stage {
                 ];
                 let name = format!("{} {}", NOTE_NAMES[(t.root as usize) % 12], SCALES[t.scale].0);
                 self.beside(w, ((c.x, c.y), (c.x, c.y)), c.radius(), None, sec, s, (format!("disc {i}"), name))
+            }).filter(|b| {
+                // a disc zoomed into a score so far that the bezel could only sit on its face: the face is for pins
+                let c = w.cog(i).unwrap();
+                let at = self.to_screen(w, c.x, c.y);
+                !(note_mode(c, w.s.zoom) && dist((b.cx, b.cy), at) < c.radius() * w.s.zoom)
             }),
             _ => None,
         };
@@ -740,8 +745,10 @@ impl Stage {
         let len = dist(a, b);
         let (ux, uy) = if len > 1.0 { ((b.0 - a.0) / len, (b.1 - a.1) / len) } else { (1.0, 0.0) };
         let rr = r_mid + BW;
-        let own = clear * z;
-        let out = rr + 10.0 + own;
+        // a part with a body also wears its teeth and selection ring; the bezel keeps a clear gap from them
+        let own = if clear > 0.0 { clear * z + 3.2 * z + 5.0 } else { 0.0 };
+        const GAP: f64 = 14.0;
+        let out = rr + GAP + own;
         let (t, bt) = (self.safe_top, self.thumb_top());
         let m = rr + 6.0;
         let mut cand = Vec::with_capacity(32);
@@ -779,7 +786,7 @@ impl Stage {
                 k += (rr + p.w / 2.0 * z - dist(c, s)).clamp(0.0, 2.0 * rr);
             }
             // never over its own part
-            k += 4.0 * (rr + own + 8.0 - super::seg_dist(c, a.0, a.1, b.0, b.1)).max(0.0);
+            k += 6.0 * (rr + own + GAP - super::seg_dist(c, a.0, a.1, b.0, b.1)).max(0.0);
             k + 0.05 * dist(c, mid)
         };
         let best = cand.into_iter().min_by(|p, q| cost(*p).partial_cmp(&cost(*q)).unwrap()).unwrap_or(mid);
@@ -838,8 +845,8 @@ impl Stage {
             if p.options.is_some() || steps > 0.0 {
                 self.buzz(3);
             }
+            self.say(format!("{}: {}", p.label, p.format(&get(w, &key))), true);
         }
-        self.say(format!("{}: {}", p.label, p.format(&get(w, &key))), true);
     }
     pub(super) fn bezel_tap(&mut self, w: &mut World, i: usize) {
         let Some(b) = self.active_bezel(w) else { return };

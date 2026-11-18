@@ -156,6 +156,9 @@ struct Active {
     last: (f64, f64),
     t0: f64,
     moved: bool,
+    /// What the readout would have said at the press: it speaks only once that has changed.
+    hint0: Option<String>,
+    hinted: bool,
 }
 
 struct Pinch {
@@ -170,6 +173,8 @@ struct GripState {
     hand: Grip,
     mid0: (f64, f64),
     d0: f64,
+    hint0: String,
+    hinted: bool,
 }
 
 /// The speed knob being scrubbed: a hand on a turntable, sprung toward the drag's speed.
@@ -265,6 +270,8 @@ pub struct Stage {
     auto_fit: Option<((f64, f64, f64), [f64; 4])>,
     /// A destructive panel button pressed once: which, and when.
     confirm: Option<(&'static str, f64)>,
+    /// The voices' versions, summed: a change from outside the stage (the synth editor) is an edit of its own.
+    voice_sig: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -288,7 +295,7 @@ impl Stage {
             scrap: false, snapped: false, caught: false, last_tap: None, dot_at: (0.0, 0.0), hover: None, shift: false,
             edits: edits::Edits::default(), out: Vec::new(), rect: Rect::NOTHING, cw: 0.0, ch: 0.0, safe_top: 0.0, safe_bot: 0.0, now: 0.0,
             io: StageIo::default(), shelf_x: 0.0, shelf_fling: None, icons: icons::Icons::default(), readout: None, readout_held: false,
-            mouse_down: false, seen_touch: false, started: false, trackpad: None, down_t: 0.0, clip: None, bezel_owner: None, bezel_at: 0.0, seal_at: -9.0, linking: None, sheet: None, roll: None, brush: sheet::Brush::default(), sheet_fingers: BTreeMap::new(), json: String::new(), file_msg: None, snap_pop: false, pop: None, pop_rect: None, framed: None, auto_fit: None, confirm: None,
+            mouse_down: false, seen_touch: false, started: false, trackpad: None, down_t: 0.0, clip: None, bezel_owner: None, bezel_at: 0.0, seal_at: -9.0, linking: None, sheet: None, roll: None, brush: sheet::Brush::default(), sheet_fingers: BTreeMap::new(), json: String::new(), file_msg: None, snap_pop: false, pop: None, pop_rect: None, framed: None, auto_fit: None, confirm: None, voice_sig: 0,
         }
     }
 
@@ -314,11 +321,18 @@ impl Stage {
         if !self.started {
             self.started = true;
             self.edits.reset(w);
+            self.voice_sig = voice_sig(w);
         }
         if !w.clock.paused {
             w.clock.view = w.clock.view.max(io.heard);
         }
         self.validate(w);
+        // a voice changed by someone else (the synth editor) becomes its own undo step, not part of the next gesture
+        let sig = voice_sig(w);
+        if sig != self.voice_sig {
+            self.voice_sig = sig;
+            self.edits.mark(self.now);
+        }
         self.refit_if_moved(w);
         self.input(ui, w);
         self.tick(w);
@@ -367,17 +381,22 @@ impl Stage {
     }
     pub fn undo(&mut self, w: &mut World) {
         if self.edits.undo(w) {
-            self.validate(w);
-            self.buzz(6);
-            self.out.push(StageOut::Changed);
+            self.stepped(w, "undo");
         }
     }
     pub fn redo(&mut self, w: &mut World) {
         if self.edits.redo(w) {
-            self.validate(w);
-            self.buzz(6);
-            self.out.push(StageOut::Changed);
+            self.stepped(w, "redo");
         }
+    }
+    /// After an undo or redo: say what it changed, since a sound or a setting does not show on the stage.
+    fn stepped(&mut self, w: &World, verb: &str) {
+        self.validate(w);
+        self.voice_sig = voice_sig(w);
+        self.buzz(6);
+        let what = self.edits.last_change.clone();
+        self.say(format!("{verb}: {what}"), false);
+        self.out.push(StageOut::Changed);
     }
     /// A world was loaded whole: forget the selection and the history.
     pub fn loaded(&mut self, w: &World) {
@@ -385,6 +404,16 @@ impl Stage {
         self.group.clear();
         self.gesture = None;
         self.edits.reset(w);
+        self.voice_sig = voice_sig(w);
+        // a new machine: the view to come back to is its own whole-stage fit, not the old machine's
+        self.room = false;
+        self.framed = None;
+        if self.sheet.as_ref().map_or(false, |s| s.kind == sheet::SheetKind::Panel && !s.min) {
+            let (full, at) = (self.full_fit(w), self.fit_target(w));
+            let at = (at.0, at.1, at.2);
+            self.framed = Some(Framed { kind: 1, home: full, at });
+            self.fly_to(w, at.0, at.1, at.2);
+        }
     }
 
     // ---------- geometry ----------
@@ -451,6 +480,10 @@ impl Stage {
         }
         self.edits.mark(self.now);
     }
+    /// What the readout strip says now.
+    pub fn hint(&self) -> Option<&str> {
+        self.readout.as_ref().filter(|r| self.now <= r.1).map(|r| r.0.as_str())
+    }
     pub(crate) fn say(&mut self, text: String, held: bool) {
         self.readout = Some((text, if held { f64::INFINITY } else { self.now + 1.8 }));
         self.readout_held = held;
@@ -483,17 +516,34 @@ impl Stage {
     }
     /// fitTarget: the whole machine in the open stage.
     pub fn fit_target(&self, w: &World) -> (f64, f64, f64, f64) {
-        let Some((cx, cy, bw, bh)) = bounds(w) else { return (0.0, 0.0, 1.0, 1.0) };
         let (t, b) = self.free_area();
-        let fit = ((self.cw - 24.0) / bw).min((b - t - 24.0) / bh);
-        let z = fit.clamp(ZMIN, 2.0);
-        let c = self.centred((cx, cy), z);
+        let (x, y, z, fit) = self.fit_in(w, t, b);
         // shrunk into the room ring on purpose: the listener is not to hear that as walking away
         let fit = match self.framed {
             Some(f) if f.kind == 2 => fit.min(w.s.zoom),
             _ => fit,
         };
-        (c.0, c.1, z, fit)
+        (x, y, z, fit)
+    }
+    /// The whole machine between screen heights t and b.
+    fn fit_in(&self, w: &World, t: f64, b: f64) -> (f64, f64, f64, f64) {
+        let Some((cx, cy, bw, bh)) = bounds(w) else { return (0.0, 0.0, 1.0, 1.0) };
+        let fit = ((self.cw - 24.0) / bw).min((b - t - 24.0) / bh);
+        let z = fit.clamp(ZMIN, 2.0);
+        (cx, cy - ((t + b) / 2.0 - self.ch / 2.0) / z, z, fit)
+    }
+    /// From this zoom a disc's face is a score: pins can be tapped on it, and it is drawn as one. Well past the
+    /// whole-stage fit, so that a tap at the overview never edits.
+    pub(crate) fn score_zoom(&self, w: &World) -> f64 {
+        1.25 * self.full_fit(w).2
+    }
+    pub(crate) fn pins_live(&self, w: &World, c: &cogs_sim::Cog) -> bool {
+        note_mode(c, w.s.zoom) && w.s.zoom >= self.score_zoom(w)
+    }
+    /// The fit for the open stage, whatever sheet is up now.
+    fn full_fit(&self, w: &World) -> (f64, f64, f64) {
+        let f = self.fit_in(w, self.safe_top, self.thumb_top().max(self.safe_top + 60.0));
+        (f.0, f.1, f.2)
     }
     fn fit_layout(&self) -> [f64; 4] {
         [self.cw, self.ch, self.safe_top, self.safe_bot]
@@ -562,7 +612,20 @@ impl Stage {
         w.view.x = f.0;
         w.view.y = f.1;
         w.s.zoom = f.2;
+        self.fly = None;
         self.auto_fit = Some(((f.0, f.1, f.2), self.fit_layout()));
+        // under an open panel this is the panel's framing: closing it goes to the fit for the whole stage
+        if let Some(m) = &mut self.framed {
+            if m.kind == 1 {
+                m.at = (f.0, f.1, f.2);
+            }
+        }
+        if self.framed.map_or(false, |m| m.kind == 1) {
+            let home = self.full_fit(w);
+            if let Some(m) = &mut self.framed {
+                m.home = home;
+            }
+        }
     }
     pub(crate) fn fly_fit(&mut self, w: &World) {
         let f = self.fit_target(w);
@@ -600,7 +663,8 @@ impl Stage {
             Sel::Cog(i) => {
                 let Some(c) = w.cog(i) else { return };
                 if c.track.is_some() {
-                    let z = 14.0 / ring_gap(c);
+                    // far enough in that the face takes pins
+                    let z = (14.0 / ring_gap(c)).max(1.4 * self.full_fit(w).2);
                     let q = self.to_world(w, s);
                     if w.s.zoom < z * 0.9 {
                         self.fly_to(w, q.0 - (s.0 - self.cw / 2.0) / z, q.1 - (s.1 - self.ch / 2.0) / z, z);
@@ -695,7 +759,7 @@ impl Stage {
     fn draw(&mut self, painter: &egui::Painter, w: &World) {
         painter.rect_filled(self.rect, 0.0, BG);
         let pen = self.pen(painter, w);
-        let mut marks = Marks::default();
+        let mut marks = Marks { score_zoom: self.score_zoom(w), ..Marks::default() };
         if let Some(Sel::Dot { cog, ring, a }) = self.sel {
             marks.dot = Some((cog, ring, a));
         }
@@ -899,6 +963,10 @@ impl Stage {
 }
 
 // ---------- helpers ----------
+fn voice_sig(w: &World) -> u64 {
+    let vs = w.pads.iter().map(|o| &o.voice).chain(w.readers.iter().map(|o| &o.voice)).chain(w.pits.iter().map(|o| &o.voice));
+    vs.fold(0u64, |h, v| h.wrapping_add(v.ver as u64))
+}
 fn s_not_dragged(s: &sheet::Sheet) -> bool {
     !s.dragging()
 }

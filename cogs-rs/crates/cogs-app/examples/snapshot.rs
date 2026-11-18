@@ -169,6 +169,15 @@ fn main() {
                 frames.push(vec![Event::Text("__back".into())]);
                 frames.extend(std::iter::repeat_with(Vec::new).take(3));
             }
+            "undo" => {
+                frames.push(vec![Event::Text("__undo".into())]);
+                frames.extend(std::iter::repeat_with(Vec::new).take(3));
+            }
+            // what the app does when a world is picked in the panel (ui.rs load)
+            "load" => {
+                frames.push(vec![Event::Text(format!("__load{}", parts.next().unwrap()))]);
+                frames.extend(std::iter::repeat_with(Vec::new).take(3));
+            }
             "wait" => frames.extend(std::iter::repeat_with(Vec::new).take(parts.next().unwrap().parse().unwrap())),
             o => panic!("unknown op {o}"),
         }
@@ -192,6 +201,22 @@ fn main() {
         if events.iter().any(|e| matches!(e, Event::Text(t) if t == "__back")) {
             events.clear();
             eprintln!("frame {k}: back -> {}", stage.back(&mut w));
+        }
+        if events.iter().any(|e| matches!(e, Event::Text(t) if t == "__undo")) {
+            events.clear();
+            let v0 = w.readers.iter().map(|r| r.voice.ver).max();
+            stage.undo(&mut w);
+            eprintln!("frame {k}: undo said {:?}; newest reader version {v0:?} -> {:?}", stage.edits.last_change, w.readers.iter().map(|r| r.voice.ver).max());
+        }
+        if let Some(i) = events.iter().find_map(|e| match e { Event::Text(t) => t.strip_prefix("__load").and_then(|n| n.parse::<usize>().ok()), _ => None }) {
+            events.clear();
+            let mut nw = cogs_sim::World::from_str(cogs::WORLDS[i].1).unwrap();
+            cogs::play::bump_versions(&w, &mut nw);
+            let paused = w.clock.paused;
+            w = nw;
+            w.set_paused(paused);
+            stage.loaded(&w);
+            stage.fit_now(&mut w, size, &io);
         }
         let mut sim = Vec::new();
         for e in &events {
@@ -254,5 +279,6 @@ fn main() {
     enc.set_depth(png::BitDepth::Eight);
     enc.write_header().unwrap().write_image_data(&flipped).unwrap();
     painter.destroy();
-    eprintln!("wrote {out}: {} parts, zoom {:.3}, sel {:?}, group {}", w.cogs.len() + w.pads.len() + w.readers.len(), w.s.zoom, stage.sel, stage.group.len());
+    eprintln!("wrote {out}: {} parts, zoom {:.3}, sel {:?}, group {}, undo {}, view {:.0},{:.0}, pins {}, hint {:?}", w.cogs.len() + w.pads.len() + w.readers.len(), w.s.zoom, stage.sel, stage.group.len(), stage.edits.can_undo(), w.view.x, w.view.y,
+        w.cogs.iter().filter_map(|c| c.track.as_ref()).map(|t| t.dots.len()).sum::<usize>(), stage.hint());
 }

@@ -121,7 +121,10 @@ impl Stage {
             Some(_) => format!("{}: {}", p.label, p.format(&v0)),
             None => p.label.clone(),
         };
-        self.say(text, true);
+        // a labelled sector already shows its name and value; the room ring's icons need the words
+        if !b.labels {
+            self.say(text, true);
+        }
         Some(Gesture::Bezel { i, v0, s0: s, owner: b.owner })
     }
     pub(super) fn press(&mut self, w: &mut World, b: Btn) {
@@ -297,14 +300,6 @@ impl Stage {
     }
 
     // ---------- the readout ----------
-    pub(super) fn say_gesture(&mut self, w: &World, g: &Gesture, held: bool) {
-        // these say what happened when it has happened (the glyph after its toggle), or nothing
-        if matches!(g, Gesture::Bezel { .. } | Gesture::Nothing | Gesture::Glyph | Gesture::Button(_) | Gesture::Hub) {
-            return;
-        }
-        let t = self.readout_of(w, g).unwrap_or_else(|| format!("view zoom: {}%", (w.s.zoom * 100.0).round()));
-        self.say(t, held);
-    }
     pub(super) fn readout_of(&self, w: &World, g: &Gesture) -> Option<String> {
         let kind_label = |k: cogs_sim::VoiceKind| match k {
             cogs_sim::VoiceKind::Synth => "modal".to_string(),
