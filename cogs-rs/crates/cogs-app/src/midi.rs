@@ -11,6 +11,8 @@ pub enum Midi {
     Audition { part: u32, midi: f32, key: u32 },
     /// Let go of an audition by its key (the roll's preview).
     Release { key: u32 },
+    /// Every voice off at once.
+    Panic,
 }
 
 /// One complete message (status, data1, data2) into an event; None for what we don't play.

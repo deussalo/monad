@@ -40,6 +40,8 @@ pub struct Meters {
     pub owed_max_us: AtomicU32,
     /// Machine notes that reached the engine after their own frame had gone (the world was held too long).
     pub late_notes: AtomicU64,
+    /// The last block's peak, thousandths of full scale.
+    pub peak_milli: AtomicU32,
 }
 
 /// Where the camera is, for the listener: a sound pans across the open stage and darkens off it (stage.js heard()).
@@ -96,6 +98,8 @@ pub struct Shared {
     pub velcurve: AtomicU32,
     midi_tx: Mutex<Producer<Midi>>,
     pub running: AtomicBool,
+    /// The output is parked: the machine is paused with the app out of sight.
+    pub idle: AtomicBool,
     /// Keys go to `rec` too, stamped with the sim time heard with them, while this is set.
     pub recording: AtomicBool,
     pub rec: Mutex<Consumer<RecEv>>,
@@ -137,7 +141,11 @@ pub fn start(world: World, sr: f32) -> (Arc<Shared>, Render) {
     let (sh, render, mut sync) = parts(world, sr);
     let s2 = sh.clone();
     std::thread::Builder::new().name("cogs-sync".into()).spawn(move || {
-        while s2.running.load(Relaxed) { sync.step(&s2); std::thread::sleep(std::time::Duration::from_millis(20)); }
+        while s2.running.load(Relaxed) {
+            // with the sound parked (out of sight and paused) nothing changes: no work, hardly any wakeups
+            if s2.idle.load(Relaxed) { std::thread::sleep(std::time::Duration::from_millis(250)); continue }
+            sync.step(&s2); std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }).ok();
     (sh, render)
 }
@@ -151,7 +159,7 @@ pub fn parts(world: World, sr: f32) -> (Arc<Shared>, Render, Sync) {
     let (rp, rc) = RingBuffer::new(512);
     let velcurve = world.s.vel_curve;
     let sh = Arc::new(Shared { world: Mutex::new(world), listen: Mutex::new(Listen::default()), meters: Meters::default(), midi_part: AtomicU32::new(0),
-        velcurve: AtomicU32::new((velcurve as f32).to_bits()), midi_tx: Mutex::new(mp), running: AtomicBool::new(true),
+        velcurve: AtomicU32::new((velcurve as f32).to_bits()), midi_tx: Mutex::new(mp), running: AtomicBool::new(true), idle: AtomicBool::new(false),
         recording: AtomicBool::new(false), rec: Mutex::new(rc) });
     // Room for the busiest shipped world: every field with its reverb, and plenty of synth racks.
     let engine = Engine::with_config(sr, cogs_dsp::EngineConfig { parts: 96, rack_delays: 24, rack_verbs: 12, field_verbs: 8, modal_voices: 64, drum_voices: 64 });
@@ -385,6 +393,7 @@ impl Render {
                 Midi::Cc { cc: 120 | 123, .. } => { for i in 0..128 { self.key_off(i as u8, f0, true) } }
                 Midi::Audition { part, midi, key } => self.audition(part, midi, key, f0),
                 Midi::Release { key } => self.engine.command(Cmd::Off { at: f0, key }),
+                Midi::Panic => { self.held = [0; 128]; self.sustained = [false; 128]; self.engine.command(Cmd::Panic) }
                 _ => {}
             }
         }
@@ -430,6 +439,7 @@ impl Render {
         for p in self.engine.retired() { let _ = self.dead.push(p); }
         self.sh.meters.block.store(n as u32, Relaxed);
         self.sh.meters.blocks.fetch_add(1, Relaxed);
+        self.sh.meters.peak_milli.store((self.engine.peak() * 1000.) as u32, Relaxed);
     }
 }
 

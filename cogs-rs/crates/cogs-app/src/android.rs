@@ -19,6 +19,17 @@ pub extern "system" fn Java_help_techmate_cogs_Native_midi(_env: JNIEnv, _c: JCl
 #[no_mangle]
 pub extern "system" fn Java_help_techmate_cogs_Native_lifecycle(_env: JNIEnv, _c: JClass, what: jint) { aaudio::lifecycle(what) }
 
+/// The machine is running, for the activity deciding whether leaving needs the playback service.
+#[no_mangle]
+pub extern "system" fn Java_help_techmate_cogs_Native_playing(_env: JNIEnv, _c: JClass) -> jboolean {
+    let sh = SHARED.lock().ok().and_then(|g| g.clone());
+    sh.and_then(|s| s.world.lock().ok().map(|w| !w.clock.paused)).unwrap_or(false) as jboolean
+}
+
+/// The notification's and media session's buttons: 1 play, 2 pause, 3 stop.
+#[no_mangle]
+pub extern "system" fn Java_help_techmate_cogs_Native_control(_env: JNIEnv, _c: JClass, what: jint) { aaudio::control(what) }
+
 #[no_mangle]
 pub extern "system" fn Java_help_techmate_cogs_Native_status(mut env: JNIEnv, _c: JClass, text: JString, _connected: jboolean) {
     if let (Some(s), Ok(t)) = (STATUS.get(), env.get_string(&text)) { if let Ok(mut s) = s.lock() { *s = t.into() } }
