@@ -111,6 +111,15 @@ fn main() {
                 frames.push(vec![touch(1, TouchPhase::End, x, y)]);
                 frames.extend(std::iter::repeat_with(Vec::new).take(30));
             }
+            "dbl" => {
+                let (x, y) = pair(parts.next().unwrap());
+                for _ in 0..2 {
+                    frames.push(vec![touch(1, TouchPhase::Start, x, y)]);
+                    frames.push(vec![touch(1, TouchPhase::End, x, y)]);
+                    frames.extend(std::iter::repeat_with(Vec::new).take(3));
+                }
+                frames.extend(std::iter::repeat_with(Vec::new).take(30));
+            }
             "drag" | "hold" => {
                 let (x0, y0) = pair(parts.next().unwrap());
                 let (x1, y1) = parts.next().map(pair).unwrap_or((x0, y0));
