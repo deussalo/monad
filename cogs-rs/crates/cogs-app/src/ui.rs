@@ -45,7 +45,14 @@ impl App {
     }
     fn load(&mut self, i: usize) {
         let Ok(nw) = World::from_str(crate::WORLDS[i].1) else { return };
-        if let Ok(mut w) = self.sh.world.lock() { let paused = w.clock.paused; *w = nw; w.set_paused(paused); self.stage.loaded(&w); }
+        let mut nw = nw;
+        if let Ok(mut w) = self.sh.world.lock() {
+            // the new world's voices start their versions past the old ones', so the sync thread recompiles every
+            // patch even where a part id is reused
+            let base = w.pads.iter().map(|o| o.voice.ver).chain(w.readers.iter().map(|o| o.voice.ver)).chain(w.pits.iter().map(|o| o.voice.ver)).max().unwrap_or(0).wrapping_add(1);
+            for v in nw.pads.iter_mut().map(|o| &mut o.voice).chain(nw.readers.iter_mut().map(|o| &mut o.voice)).chain(nw.pits.iter_mut().map(|o| &mut o.voice)) { v.ver = v.ver.wrapping_add(base) }
+            let paused = w.clock.paused; *w = nw; w.set_paused(paused); self.stage.loaded(&w);
+        }
         self.world_ix = i; self.fitted = false; self.sh.midi_part.store(0, Relaxed); self.editor = None;
         self.save_at = Some(0.0);
     }

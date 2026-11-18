@@ -326,12 +326,16 @@ dependencies = [
  "egui_glow",
  "glow",
  "jni 0.21.1",
+ "js-sys",
  "khronos-egl",
  "log",
  "ndk",
  "png",
  "rtrb",
  "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "winit",
 ]
 
@@ -349,6 +353,13 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "cogs-worklet"
+version = "0.1.0"
+dependencies = [
+ "cogs-app",
 ]
 
 [[package]]
