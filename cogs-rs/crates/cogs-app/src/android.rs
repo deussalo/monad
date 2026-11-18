@@ -67,7 +67,10 @@ fn android_main(app: AndroidApp) {
     let status = STATUS.get_or_init(|| Arc::new(Mutex::new("No keyboard · tap Connect".into()))).clone();
     // The engine is made here, off the audio thread: wavetables and buffers.
     let sr = 48000.0f32;
-    let world = cogs_sim::World::from_str(crate::WORLDS[0].1).unwrap_or_else(|_| cogs_sim::World::demo());
+    let data = app.internal_data_path();
+    // The world as it was left; the first launch (or a save that no longer loads) starts on the default world.
+    let saved = data.as_ref().and_then(|d| std::fs::read_to_string(d.join("world.json")).ok()).and_then(|s| cogs_sim::World::from_str(&s).ok());
+    let world = saved.unwrap_or_else(|| cogs_sim::World::from_str(crate::WORLDS[0].1).unwrap_or_else(|_| cogs_sim::World::demo()));
     let (sh, render) = play::start(world, sr);
     let _ = SHARED.set(sh.clone());
     let stream = open_audio(render, sh.clone(), sr);
@@ -80,6 +83,6 @@ fn android_main(app: AndroidApp) {
         if let Err(e) = env.call_method(&act, "connectMidi", "()V", &[]) { log::error!("connectMidi: {e}") }
     });
     let opts = eframe::NativeOptions { android_app: Some(app), ..Default::default() };
-    let _ = eframe::run_native("cogs", opts, Box::new(move |_cc| Ok(Box::new(ui::App::new(sh, status, connect)))));
+    let _ = eframe::run_native("cogs", opts, Box::new(move |_cc| { let mut a = ui::App::new(sh, status, connect); a.data = data; Ok(Box::new(a)) }));
     drop(stream);
 }

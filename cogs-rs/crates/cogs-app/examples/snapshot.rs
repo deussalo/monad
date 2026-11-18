@@ -156,16 +156,40 @@ fn main() {
     }
     frames.extend(std::iter::repeat_with(Vec::new).take(25));
 
+    // --editor TAB: the wave synth editor open on the selected part (or the first reader), on that tab
+    let mut editor = arg(&args, "--editor").and_then(|tab| {
+        let part = match stage.sel { Some(Sel::Reader(i)) => cogs_sim::Part::Reader(i), Some(Sel::Pad(i)) => cogs_sim::Part::Pad(i), _ => cogs_sim::Part::Reader(w.readers.iter().find(|r| r.voice.kind == cogs_sim::VoiceKind::Wave)?.id) };
+        let mut e = cogs::wave_ui::WaveEditor::open(&w, part, Some(std::path::PathBuf::from("/tmp/cogs-patches")))?;
+        e.set_tab(tab);
+        Some(e)
+    });
     let ctx = egui::Context::default();
+    let mut foreign = std::collections::HashSet::new();
     let mut time = 0.0;
     let n = frames.len();
     for (k, events) in frames.into_iter().enumerate() {
+        // as egui-winit does on a phone: the first finger is also the pointer, so widgets take it
+        let mut events = events;
+        let mut sim = Vec::new();
+        for e in &events {
+            if let Event::Touch { id: TouchId(1), phase, pos, .. } = e {
+                sim.push(Event::PointerMoved(*pos));
+                match phase {
+                    TouchPhase::Start => sim.push(Event::PointerButton { pos: *pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }),
+                    TouchPhase::End | TouchPhase::Cancel => { sim.push(Event::PointerButton { pos: *pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }); sim.push(Event::PointerGone) }
+                    _ => {}
+                }
+            }
+        }
+        events.extend(sim);
         let mut raw = RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), size)), time: Some(time), events, ..Default::default() };
         raw.viewports.entry(ViewportId::ROOT).or_default().native_pixels_per_point = Some(ppp);
         time += 1.0 / 60.0;
         let mut outs = Vec::new();
         let full = ctx.run_ui(raw, |ui| {
+            if editor.is_some() { cogs::wave_ui::strip_foreign(ui.ctx(), &mut foreign); }
             outs = stage.show(ui, &mut w, &io);
+            if let Some(e) = editor.as_mut() { let ctx = ui.ctx().clone(); let _ = e.show_in(&ctx, &mut |f| f(&mut w)); }
         });
         for o in outs {
             eprintln!("frame {k}: {o:?}");

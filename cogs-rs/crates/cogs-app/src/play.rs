@@ -75,6 +75,9 @@ pub struct Shared {
     pub velcurve: AtomicU32,
     midi_tx: Mutex<Producer<Midi>>,
     pub running: AtomicBool,
+    /// Keys go to `rec` too, stamped with the sim time heard with them, while this is set.
+    pub recording: AtomicBool,
+    pub rec: Mutex<Consumer<crate::rec::RecEv>>,
 }
 impl Shared {
     pub fn midi(&self, m: Midi) { if let Ok(mut p) = self.midi_tx.lock() { let _ = p.push(m); } }
@@ -95,6 +98,9 @@ pub struct Render {
     sustained: [bool; 128],
     listen: Listen,
     velcurve: f64,
+    rec: Producer<crate::rec::RecEv>,
+    /// The sim time this block starts on: heard together with a key played now.
+    t_now: f64,
 }
 
 const MIDI_KEY: u32 = 0x4000_0000;
@@ -105,15 +111,17 @@ pub fn start(world: World, sr: f32) -> (Arc<Shared>, Render) {
     let (mp, mc) = RingBuffer::new(1024);
     let (cp, cc) = RingBuffer::new(4096);
     let (dp, dc) = RingBuffer::new(256);
+    let (rp, rc) = RingBuffer::new(512);
     let velcurve = world.s.vel_curve;
     let sh = Arc::new(Shared { world: Mutex::new(world), listen: Mutex::new(Listen::default()), meters: Meters::default(), midi_part: AtomicU32::new(0),
-        velcurve: AtomicU32::new((velcurve as f32).to_bits()), midi_tx: Mutex::new(mp), running: AtomicBool::new(true) });
+        velcurve: AtomicU32::new((velcurve as f32).to_bits()), midi_tx: Mutex::new(mp), running: AtomicBool::new(true),
+        recording: AtomicBool::new(false), rec: Mutex::new(rc) });
     // Room for the busiest shipped world: every field with its reverb, and plenty of synth racks.
     let engine = Engine::with_config(sr, cogs_dsp::EngineConfig { parts: 96, rack_delays: 24, rack_verbs: 12, field_verbs: 8, modal_voices: 64, drum_voices: 64 });
     let s2 = sh.clone();
     std::thread::Builder::new().name("cogs-sync".into()).spawn(move || sync(s2, cp, dc, sr as f64)).ok();
     let render = Render { sh: sh.clone(), engine, midi: mc, ctl: cc, dead: dp, parts: HashMap::with_capacity(512), sr: sr as f64, owed: 0., held: [0; 128],
-        sustain: false, sustained: [false; 128], listen: Listen::default(), velcurve };
+        sustain: false, sustained: [false; 128], listen: Listen::default(), velcurve, rec: rp, t_now: 0. };
     (sh, render)
 }
 
@@ -259,6 +267,7 @@ impl Render {
             Prep::Str { bar, decay, damp, hard, level, vel_sense } => self.engine.command(Cmd::Strike(pluck(at, key, note as f64, 0.3, g(level, vel_sense), 0., vx, 0., bar, decay, damp, hard, s))),
         }
         self.held[note as usize] = key;
+        if self.sh.recording.load(Relaxed) { let _ = self.rec.push(crate::rec::RecEv { on: true, note, vel, at: self.t_now }); }
         let m = &self.sh.meters; m.notes.fetch_add(1, Relaxed); m.last_note.store(note as u32, Relaxed);
     }
     /// stage.js sound(): now, at a middling velocity, its own part's voice; a short note for the synths.
@@ -278,6 +287,7 @@ impl Render {
         if self.sustain && !now { self.sustained[note as usize] = true; return }
         self.held[note as usize] = 0; self.sustained[note as usize] = false;
         self.engine.command(Cmd::Off { at, key: k });
+        if self.sh.recording.load(Relaxed) { let _ = self.rec.push(crate::rec::RecEv { on: false, note, vel: 0, at: self.t_now }); }
     }
 
     pub fn block(&mut self, l: &mut [f32], r: &mut [f32], latency: f64) {
@@ -322,6 +332,7 @@ impl Render {
                 // collect into a fixed scratch to keep the borrow of `w` apart from `self.engine`
                 let mut buf = std::mem::take(&mut SCRATCH.with(|s| s.take()));
                 w.advance(t1, &mut |e: Event| buf.push(e));
+                self.t_now = w.clock.sim_t;
                 let heard = (w.clock.sim_t - latency - dt).max(0.);
                 self.sh.meters.heard.store(heard.to_bits(), Relaxed);
                 drop(w);
@@ -336,7 +347,7 @@ impl Render {
                 let _ = sr;
                 SCRATCH.with(|s| s.set(buf));
             }
-            Ok(w) => { let h = w.clock.view; drop(w); self.sh.meters.heard.store(h.to_bits(), Relaxed) }
+            Ok(w) => { let h = w.clock.view; self.t_now = w.clock.sim_t; drop(w); self.sh.meters.heard.store(h.to_bits(), Relaxed) }
             Err(_) => self.owed += dt,
         }
         self.engine.process(l, r);

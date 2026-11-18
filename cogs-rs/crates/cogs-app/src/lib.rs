@@ -3,7 +3,9 @@
 //! it never waits on.
 pub mod midi;
 pub mod play;
+pub mod rec;
 pub mod stage;
+pub mod wave_ui;
 #[cfg(target_os = "android")]
 pub mod ui;
 #[cfg(target_os = "android")]
