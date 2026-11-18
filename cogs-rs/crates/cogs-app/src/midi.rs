@@ -9,6 +9,8 @@ pub enum Midi {
     Bend { value: i16 },
     /// Sound a part once, as a tap or a placed note does (stage.js sound): part 0 is the first synth.
     Audition { part: u32, midi: f32, key: u32 },
+    /// Let go of an audition by its key (the roll's preview).
+    Release { key: u32 },
 }
 
 /// One complete message (status, data1, data2) into an event; None for what we don't play.

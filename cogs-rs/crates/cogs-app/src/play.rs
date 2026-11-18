@@ -316,6 +316,7 @@ impl Render {
                 Midi::Cc { cc: 64, value } => { self.sustain = value >= 64; if !self.sustain { for i in 0..128 { if self.sustained[i] { self.key_off(i as u8, f0, true) } } } }
                 Midi::Cc { cc: 120 | 123, .. } => { for i in 0..128 { self.key_off(i as u8, f0, true) } }
                 Midi::Audition { part, midi, key } => self.audition(part, midi, key, f0),
+                Midi::Release { key } => self.engine.command(Cmd::Off { at: f0, key }),
                 _ => {}
             }
         }

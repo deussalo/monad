@@ -27,11 +27,13 @@ pub struct App {
     rec: Option<Rec>,
     can_record: bool,
     foreign: std::collections::HashSet<u64>,
+    /// Auditions to let go of, by key, at an egui time.
+    offs: Vec<(u32, f64)>,
 }
 
 impl App {
     pub fn new(sh: Arc<Shared>, status: Arc<Mutex<String>>, connect: Box<dyn Fn()>) -> Self {
-        App { sh, status, connect, stage: Stage::new(), panel: false, world_ix: 0, fitted: false, note: None, editor: None, data: None, save_at: None, rec: None, can_record: false, foreign: Default::default() }
+        App { sh, status, connect, stage: Stage::new(), panel: false, world_ix: 0, fitted: false, note: None, editor: None, data: None, save_at: None, rec: None, can_record: false, foreign: Default::default(), offs: Vec::new() }
     }
     /// The part a selection plays from the keyboard: a reader, pad or box; a plate means its reader.
     fn keyboard_part(w: &World, sel: Option<Sel>) -> Option<u32> {
@@ -82,7 +84,7 @@ impl App {
         match sel? { Sel::Reader(i) => Some(Part::Reader(i)), Sel::Pad(i) => Some(Part::Pad(i)), Sel::Pit(i) => Some(Part::Pit(i)), _ => None }
     }
     /// The world into the app's storage, written whole then renamed, so a kill mid-write keeps the last one.
-    fn save(&self) {
+    fn save_world(&self) {
         let Some(d) = &self.data else { return };
         let Ok(s) = self.sh.world.lock().map(|w| w.to_string()) else { return };
         let _ = std::fs::create_dir_all(d);
@@ -123,6 +125,13 @@ impl eframe::App for App {
                 StageOut::OpenEditor(kind) => self.note = Some((format!("The {kind} editor is being ported next."), ctx.input(|i| i.time))),
                 StageOut::Changed => { if self.save_at.is_none() { self.save_at = Some(ctx.input(|i| i.time) + 1.5) } }
                 StageOut::Record => self.toggle_rec(connected, ctx.input(|i| i.time)),
+                StageOut::AuditionOff { key, after } => self.offs.push((key, ctx.input(|i| i.time) + after)),
+                StageOut::Share(link) => { ctx.copy_text(link); self.note = Some(("share link copied".into(), ctx.input(|i| i.time))) }
+                StageOut::SaveFile { name, text } => {
+                    let r = self.data.as_ref().ok_or_else(|| "no storage".to_string()).and_then(|d| { let p = d.join("files"); std::fs::create_dir_all(&p).map_err(|e| e.to_string())?; std::fs::write(p.join(&name), text).map_err(|e| e.to_string()).map(|_| name.clone()) });
+                    self.note = Some((match r { Ok(n) => format!("saved {n} in the app's files"), Err(e) => format!("not saved: {e}") }, ctx.input(|i| i.time)));
+                }
+                StageOut::OpenFile => self.note = Some(("Opening files from the phone comes next.".into(), ctx.input(|i| i.time))),
                 _ => {}
             }
         }
@@ -132,6 +141,10 @@ impl eframe::App for App {
             }
         }
         self.drain_rec(ctx.input(|i| i.time));
+        let now = ctx.input(|i| i.time);
+        let sh = self.sh.clone();
+        self.offs.retain(|&(key, at)| if now >= at { sh.midi(Midi::Release { key }); false } else { true });
+        if !self.offs.is_empty() { ctx.request_repaint() }
         if self.panel { self.panel_ui(&ctx) }
         if let Some(ed) = self.editor.as_mut() {
             let ver0 = self.sh.world.lock().ok().and_then(|w| w.voice(ed.part).map(|v| v.ver));
@@ -147,7 +160,7 @@ impl eframe::App for App {
         }
         if let Some(t) = self.save_at {
             let now = ctx.input(|i| i.time);
-            if now >= t { self.save(); self.save_at = None } else { ctx.request_repaint_after(std::time::Duration::from_secs_f64(t - now)) }
+            if now >= t { self.save_world(); self.save_at = None } else { ctx.request_repaint_after(std::time::Duration::from_secs_f64(t - now)) }
         }
     }
 }
