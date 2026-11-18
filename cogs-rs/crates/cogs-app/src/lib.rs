@@ -17,6 +17,8 @@ pub mod web;
 pub mod link;
 #[cfg(all(feature = "gui", target_os = "android"))]
 mod android;
+#[cfg(all(feature = "gui", target_os = "android"))]
+mod aaudio;
 
 /// The worlds that ship with the app.
 pub const WORLDS: [(&str, &str); 3] = [

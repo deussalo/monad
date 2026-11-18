@@ -29,7 +29,15 @@ pub struct Meters {
     /// The sim time now coming out of the speaker, as f64 bits: what the stage draws.
     pub heard: AtomicU64,
     pub events: AtomicU64,
+    /// The audio thread's whole CPU use over the last half second, % of one core (what `top` shows for it).
     pub busy: AtomicU32,
+    /// The slowest callback of the last half second, % of the time its frames last: at 100 it is late.
+    pub busy_peak: AtomicU32,
+    /// Blocks rendered, those that found the world locked by the UI, and the most sim time owed by that, microseconds
+    /// (the reader takes and resets the last).
+    pub blocks: AtomicU64,
+    pub lock_misses: AtomicU64,
+    pub owed_max_us: AtomicU32,
 }
 
 /// Where the camera is, for the listener: a sound pans across the open stage and darkens off it (stage.js heard()).
@@ -395,11 +403,17 @@ impl Render {
                 SCRATCH.with(|s| s.set(buf));
             }
             Ok(w) => { let h = w.clock.view; self.t_now = w.clock.sim_t; drop(w); self.sh.meters.heard.store(h.to_bits(), Relaxed) }
-            Err(_) => self.owed += dt,
+            Err(_) => {
+                self.owed += dt;
+                let m = &self.sh.meters;
+                m.lock_misses.fetch_add(1, Relaxed);
+                m.owed_max_us.fetch_max((self.owed * 1e6) as u32, Relaxed);
+            }
         }
         self.engine.process(l, r);
         for p in self.engine.retired() { let _ = self.dead.push(p); }
         self.sh.meters.block.store(n as u32, Relaxed);
+        self.sh.meters.blocks.fetch_add(1, Relaxed);
     }
 }
 
