@@ -48,7 +48,14 @@ class MainActivity : NativeActivity(), MidiHub.Listener {
         if (hub.savedAddress != null && hasBtPermissions() && hub.bluetoothOn) hub.scan(auto = true)
     }
 
-    override fun onDestroy() { hub.stop(); PlaybackService.activityGone(); super.onDestroy() }
+    override fun onDestroy() {
+        hub.stop()
+        PlaybackService.activityGone()
+        // The native side cannot outlive its activity: super.onDestroy would wait on it forever, and the playback service
+        // would keep that frozen process alive, still sounding, with the app unable to open again. End the process here.
+        android.os.Process.killProcess(android.os.Process.myPid())
+        super.onDestroy()
+    }
     override fun onResume() { super.onResume(); picker = false; Native.lifecycle(1); PlaybackService.back(this) }
     override fun onPause() {
         Native.lifecycle(2)

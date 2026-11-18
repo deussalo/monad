@@ -71,53 +71,6 @@ pub enum EditorOut {
 
 struct Drag { n0: f64, a0: f64, acc: f64, x0: f32, route: Option<usize>, fresh: bool }
 
-/// How long a finger rests on a control before it takes the drag; a quicker swipe scrolls the sheet.
-const HOLD_S: f64 = 0.15;
-/// A dragged control's gesture this frame, from a mouse at once or from a finger after its hold.
-struct Held { started: bool, on: bool, stopped: bool, delta: egui::Vec2, pos: Option<Pos2> }
-/// Allocate a control dragged inside the scrolling sheet. To touch it senses only clicks until the finger has rested
-/// on it for `HOLD_S` without moving, so the scroll area beneath gets every swipe; then it takes the drag over.
-fn held_drag(ui: &mut Ui, size: egui::Vec2) -> (Rect, egui::Response, Held) {
-    let key = ui.next_auto_id().with("held");
-    let was = ui.ctx().data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
-    // egui hit-tests a press against the previous frame's senses, so the control must already be click-only when the
-    // finger lands: go by what pressed last (a phone starts out as touch), not by what is touching now
-    let mode = egui::Id::new("cogs-editor-touch-input");
-    let last = ui.ctx().data(|d| d.get_temp::<bool>(mode)).unwrap_or(cfg!(target_os = "android"));
-    let (now, mouse) = ui.input(|i| (i.any_touches(), i.pointer.any_pressed() && !i.any_touches()));
-    let touch_input = now || (last && !mouse);
-    if touch_input != last { ui.ctx().data_mut(|d| { d.insert_temp(mode, touch_input); }); }
-    let touch = was || touch_input;
-    let (rect, resp) = ui.allocate_exact_size(size, if touch && !was { Sense::click() } else { Sense::click_and_drag() });
-    let (down, still, since, delta, pos) = ui.input(|i| {
-        let p = &i.pointer;
-        (p.any_down(), p.could_any_button_be_click(), p.press_start_time().map(|t| i.time - t), p.delta(), p.latest_pos())
-    });
-    let mut h = Held { started: false, on: false, stopped: false, delta: egui::Vec2::ZERO, pos };
-    if !touch {
-        h = Held { started: resp.drag_started(), on: resp.dragged(), stopped: resp.drag_stopped(), delta: resp.drag_delta(), pos: resp.interact_pointer_pos() };
-    } else if was {
-        if down {
-            h.on = true;
-            h.delta = delta;
-            ui.ctx().set_dragged_id(resp.id);
-        } else {
-            h.stopped = true;
-            ui.ctx().data_mut(|d| d.remove::<bool>(key));
-        }
-    } else if let (true, true, Some(t)) = (resp.is_pointer_button_down_on(), still, since) {
-        if t >= HOLD_S {
-            ui.ctx().data_mut(|d| d.insert_temp(key, true));
-            ui.ctx().set_dragged_id(resp.id);
-            h.started = true;
-            h.on = true;
-        } else {
-            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(HOLD_S - t));
-        }
-    }
-    (rect, resp, h)
-}
-
 pub struct WaveEditor {
     /// Room to leave under the sheet for the system's navigation bar, in points.
     pub safe_bottom: f32,
@@ -378,7 +331,7 @@ impl WaveEditor {
     fn knob(&mut self, ui: &mut Ui, i: usize, label: Option<String>) {
         let d = &wave_params()[i];
         let bare = label.as_deref() == Some("");
-        let (rect, resp, held) = held_drag(ui, vec2(62., if bare { 66. } else { 78. }));
+        let (rect, resp) = ui.allocate_exact_size(vec2(62., if bare { 66. } else { 78. }), Sense::click_and_drag());
         let now = ui.input(|x| x.time);
         let n = wave_norm(d, self.p.values[i]).clamp(0., 1.);
         let routes: Vec<usize> = self.p.mods.iter().enumerate().filter(|(_, m)| m.dst as usize == i).map(|(j, _)| j).collect();
@@ -390,7 +343,7 @@ impl WaveEditor {
             else { self.speak(format!("the dial is full: {DIAL_MAX} knobs"), now) }
             self.dirty = true;
         } else if !self.pin {
-            if held.started {
+            if resp.drag_started() {
                 let (route, fresh) = match (self.arm, armed) {
                     (Some(_), Some(j)) => (Some(j), false),
                     (Some(s), None) => {
@@ -399,18 +352,15 @@ impl WaveEditor {
                     }
                     _ => (None, false),
                 };
-                let x0 = held.pos.map_or(rect.center().x, |p| p.x);
+                let x0 = resp.interact_pointer_pos().map_or(rect.center().x, |p| p.x);
                 self.drag = Some((i, Drag { n0: n, a0: route.map_or(0., |j| self.p.mods[j].amt), acc: 0., x0, route, fresh }));
-                // the finger has the knob: say so before it moves
-                let txt = value_text(d, self.p.values[i]);
-                self.speak(format!("{}: {txt}", long_label(&self.p, i)), now);
             }
-            if held.on && held.delta.y != 0. {
+            if resp.dragged() {
                 if let Some((di, dr)) = self.drag.as_mut().filter(|(di, _)| *di == i) {
                     let _ = di;
-                    let px = held.pos.map_or(dr.x0, |p| p.x);
+                    let px = resp.interact_pointer_pos().map_or(dr.x0, |p| p.x);
                     let fine = 1. + (px - dr.x0).abs() as f64 / 60.;
-                    dr.acc += -held.delta.y as f64 / (150. * fine);
+                    dr.acc += -resp.drag_delta().y as f64 / (150. * fine);
                     let txt;
                     if let Some(j) = dr.route {
                         let a = ((dr.a0 + dr.acc).clamp(-1., 1.) * 1000.).round() / 1000.;
@@ -425,12 +375,11 @@ impl WaveEditor {
                     changed = true;
                 }
             }
-            if held.stopped {
+            if resp.drag_stopped() {
                 if let Some((_, dr)) = self.drag.take().filter(|(di, _)| *di == i) {
-                    let mut gone = false;
-                    if let Some(j) = dr.route { if self.p.mods[j].amt == 0. { self.p.mods.remove(j); gone = true; } }
-                    // a hold that never moved changed nothing, and a route it made has just gone again
-                    if dr.acc != 0. || (gone && !dr.fresh) { changed = true }
+                    if let Some(j) = dr.route { if self.p.mods[j].amt == 0. { self.p.mods.remove(j); } }
+                    let _ = dr.fresh;
+                    changed = true;
                 }
             }
             if resp.double_clicked() {
@@ -449,9 +398,7 @@ impl WaveEditor {
         let ring = match self.arm { Some(s) => src_col(s), None if self.pin => FG, None => LINE };
         p.circle_filled(c, 17., WELL);
         if self.pin || self.arm.is_some() { p.circle_stroke(c, 26., Stroke::new(1., ring.gamma_multiply(0.35))); }
-        let has_it = self.drag.as_ref().is_some_and(|(di, _)| *di == i);
-        if has_it || (resp.is_pointer_button_down_on() && ui.input(|x| x.pointer.could_any_button_be_click())) { p.circle_filled(c, 17., Color32::from_gray(52)); }
-        if has_it { p.circle_stroke(c, 26., Stroke::new(1.5, HOT)); }
+        if resp.is_pointer_button_down_on() { p.circle_filled(c, 17., Color32::from_gray(52)); }
         p.add(Shape::line(arc(c, 22., a0, a0 + sw), Stroke::new(4., LINE)));
         let z = if d.min < 0. && d.max > 0. { wave_norm(d, 0.) as f32 } else { 0. };
         p.add(Shape::line(arc(c, 22., a0 + sw * z.min(n), a0 + sw * z.max(n) + 0.001), Stroke::new(4., HOT)));
@@ -605,9 +552,9 @@ impl WaveEditor {
     /// The additive table's own harmonics: drag across the bars to draw levels.
     fn harmonics(&mut self, ui: &mut Ui, i: usize) {
         let w = ui.available_width().min(340.);
-        let (rect, resp, held) = held_drag(ui, vec2(w, 76.));
+        let (rect, resp) = ui.allocate_exact_size(vec2(w, 76.), Sense::click_and_drag());
         let bw = w / WAVE_HARMS as f32;
-        if let Some(pp) = if held.on { held.pos } else if resp.clicked() { resp.interact_pointer_pos() } else { None } {
+        if let Some(pp) = resp.interact_pointer_pos().filter(|_| resp.is_pointer_button_down_on() || resp.clicked()) {
             let k = ((pp.x - rect.left()) / bw).floor() as i32;
             if (0..WAVE_HARMS as i32).contains(&k) {
                 let v = ((1. - (pp.y - rect.top()) / rect.height()).clamp(0., 1.) * 100.).round() as f64 / 100.;
@@ -761,8 +708,8 @@ impl WaveEditor {
         let mut ch = false;
         ui.vertical(|ui| {
             ui.label(egui::RichText::new("curve").size(11.).color(DIM));
-            let (rect, resp, held) = held_drag(ui, vec2(56., 36.));
-            if held.on && held.delta.y != 0. { *c = ((*c - held.delta.y as f64 / 80.).clamp(-1., 1.) * 100.).round() / 100.; ch = true }
+            let (rect, resp) = ui.allocate_exact_size(vec2(56., 36.), Sense::click_and_drag());
+            if resp.dragged() { *c = ((*c - resp.drag_delta().y as f64 / 80.).clamp(-1., 1.) * 100.).round() / 100.; ch = true }
             if resp.double_clicked() { *c = 0.; ch = true }
             let p = ui.painter();
             p.rect_stroke(rect, 3., Stroke::new(1., LINE), egui::StrokeKind::Inside);

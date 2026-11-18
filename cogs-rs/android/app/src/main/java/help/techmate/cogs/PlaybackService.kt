@@ -71,7 +71,10 @@ class PlaybackService : Service() {
     }
 
     /** The app was swiped away from recents: everything stops. */
-    override fun onTaskRemoved(rootIntent: Intent?) { stopAll() }
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        stopAll()
+        android.os.Process.killProcess(android.os.Process.myPid())
+    }
 
     private fun setPlaying(p: Boolean, tell: Boolean = true) {
         pausedByFocus = false
