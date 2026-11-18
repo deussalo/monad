@@ -1423,24 +1423,61 @@ impl Stage {
                     o.y2 = p.1;
                 }
             }
-            ("reader" | "comb", m) => {
-                if let Some(m) = m {
-                    w.remove(m);
-                } else {
-                    self.buzz(6);
-                }
+            ("reader" | "comb", None) => {
                 *made = Some(PartRef::Reader(w.add_reader(p.0, p.1, *kind == "comb")));
+                self.buzz(6);
             }
-            ("arm" | "cam" | "probe", m) => {
-                if let Some(m) = m {
-                    w.remove(m);
+            ("reader" | "comb", Some(PartRef::Reader(id))) => {
+                if let Some(ri) = w.reader_ix(id) {
+                    place_reader(w, ri, p);
                 }
+            }
+            ("arm", Some(PartRef::Arm(id))) => match w.pick_cog(p.0, p.1, false, 0.0) {
+                Some(ci) => {
+                    let (cx, cy, cid) = (w.cogs[ci].x, w.cogs[ci].y, w.cogs[ci].id);
+                    let rth = w.render_th(ci);
+                    if let Some(a) = w.arms.iter_mut().find(|a| a.id == id) {
+                        a.cog = cid;
+                        a.cog_ix = ci;
+                        a.a = cogs_sim::wrap((p.1 - cy).atan2(p.0 - cx) - rth);
+                        a.len = (p.0 - cx).hypot(p.1 - cy).max(4.0);
+                    }
+                    w.solve();
+                }
+                None => {
+                    w.remove(PartRef::Arm(id));
+                    *made = None;
+                }
+            },
+            ("cam", Some(PartRef::Cam(id))) => match w.pick_cog(p.0, p.1, false, 0.0) {
+                Some(ci) => {
+                    let (cx, cy, cid) = (w.cogs[ci].x, w.cogs[ci].y, w.cogs[ci].id);
+                    if let Some(m) = w.cams.iter_mut().find(|m| m.id == id) {
+                        m.cog = cid;
+                        m.ang = (p.1 - cy).atan2(p.0 - cx);
+                    }
+                    w.solve();
+                }
+                None => {
+                    w.remove(PartRef::Cam(id));
+                    *made = None;
+                }
+            },
+            ("probe", Some(PartRef::Probe(id))) => {
+                if let Some(i) = idx(&w.probes, |q| q.id == id) {
+                    if !w.probe_attach(i, p.0, p.1, z, false) {
+                        w.remove(PartRef::Probe(id));
+                        *made = None;
+                    }
+                }
+            }
+            ("arm" | "cam" | "probe", None) => {
                 let id = match *kind {
                     "arm" => w.add_arm(p.0, p.1).map(PartRef::Arm),
                     "cam" => w.add_cam(p.0, p.1).map(PartRef::Cam),
                     _ => w.add_probe(p.0, p.1, z).map(PartRef::Probe),
                 };
-                if id.is_some() && m.is_none() {
+                if id.is_some() {
                     self.buzz(6);
                 }
                 *made = id;
@@ -1827,6 +1864,29 @@ impl Stage {
     }
 }
 
+
+/// stage.js placePart for a reader: on a disc it lies along the radius there, seated, spanning the rings; elsewhere
+/// it lies level, free.
+fn place_reader(w: &mut World, ri: usize, p: (f64, f64)) {
+    match w.pick_cog(p.0, p.1, true, 0.0) {
+        Some(di) => {
+            let d = w.cogs[di].clone();
+            let a = (p.1 - d.y).atan2(p.0 - d.x);
+            let rings = d.track.as_ref().unwrap().rings();
+            let (r0, r1) = (d.ring_r(0.0) - 6.0, d.ring_r((rings - 1) as f64) + 6.0);
+            let r = &mut w.readers[ri];
+            (r.x1, r.y1, r.x2, r.y2) = (d.x + a.cos() * r0, d.y + a.sin() * r0, d.x + a.cos() * r1, d.y + a.sin() * r1);
+            cogs_sim::solve::seat_reader(r, &d);
+        }
+        None => {
+            let r = &mut w.readers[ri];
+            (r.x1, r.y1, r.x2, r.y2) = (p.0 - 30.0, p.1, p.0 + 30.0, p.1);
+            r.on = None;
+            r.seat = None;
+        }
+    }
+    w.solve();
+}
 
 pub(super) fn sel_of(p: PartRef) -> Sel {
     match p {
