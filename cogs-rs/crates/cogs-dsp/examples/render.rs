@@ -4,7 +4,19 @@
 //! `raw` skips the master chain (to compare with the JS worklets alone).
 
 use cogs_dsp::*;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+
+/// Counts allocations and frees made while the audio thread's calls run: there must be none.
+struct Counting;
+static WATCH: AtomicBool = AtomicBool::new(false);
+static ALLOCS: AtomicUsize = AtomicUsize::new(0);
+unsafe impl std::alloc::GlobalAlloc for Counting {
+    unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 { if WATCH.load(Ordering::Relaxed) { ALLOCS.fetch_add(1, Ordering::Relaxed); } std::alloc::System.alloc(l) }
+    unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) { if WATCH.load(Ordering::Relaxed) { ALLOCS.fetch_add(1, Ordering::Relaxed); } std::alloc::System.dealloc(p, l) }
+}
+#[global_allocator]
+static A: Counting = Counting;
 
 const FS: f32 = 48000.;
 
@@ -51,11 +63,19 @@ fn run(s: &Scene, raw: bool, dry_room: bool) {
     let t0 = std::time::Instant::now();
     while done < n {
         let m = block.min(n - done);
-        while ci < cmds.len() && ((cmds[ci].0 * FS) as usize) < done + m { e.command(stamp(cmds[ci].1.clone(), (cmds[ci].0 * FS) as u64)); ci += 1; }
+        while ci < cmds.len() && ((cmds[ci].0 * FS) as usize) < done + m {
+            let c = stamp(cmds[ci].1.clone(), (cmds[ci].0 * FS) as u64);
+            WATCH.store(true, Ordering::Relaxed); e.command(c); WATCH.store(false, Ordering::Relaxed);
+            ci += 1;
+        }
+        WATCH.store(true, Ordering::Relaxed);
         e.process(&mut l[done..done + m], &mut r[done..done + m]);
+        WATCH.store(false, Ordering::Relaxed);
         done += m;
     }
     let el = t0.elapsed().as_secs_f64();
+    let allocs = ALLOCS.swap(0, Ordering::Relaxed);
+    if allocs > 0 { println!("{}: {allocs} allocations on the audio thread!", s.name); }
     let nan = l.iter().chain(r.iter()).any(|x| !x.is_finite());
     let peak = l.iter().chain(r.iter()).fold(0f32, |a, x| a.max(x.abs()));
     let rms = (l.iter().chain(r.iter()).map(|x| (*x as f64).powi(2)).sum::<f64>() / (2 * n) as f64).sqrt();
@@ -77,6 +97,15 @@ fn main() {
             for (i, m) in [48., 55., 60., 64.].iter().enumerate() { cmds.push(at(note(1, i as u32, *m, 0.8, 2.), 0.)); }
         } else { cmds.extend(arp(1)); }
         scenes.push(Scene { name: Box::leak(format!("wave-{}", name.replace(' ', "-")).into_boxed_str()), secs: 4., cmds });
+    }
+    // the worst case: 3 oscillators × 8 unison, 16 notes, a rack with chorus, delay and reverb
+    {
+        let mut p = WavePatch::preset("super saw").unwrap();
+        for i in 0..3 { p.osc[i].on = true; p.set(&format!("osc{}.uni", i + 1), 8.); p.set(&format!("osc{}.level", i + 1), 0.4); }
+        p.fx_on[cogs_dsp::params::FX_REVERB] = true;
+        let mut cmds = vec![at(Cmd::Patch { part: 1, patch: Arc::new(CompiledPatch::new(&p)) }, 0.)];
+        for i in 0..16 { cmds.push(at(note(1, i, 40. + i as f32 * 3., 0.5, 3.), 0.)); }
+        scenes.push(Scene { name: "stress", secs: 4., cmds });
     }
     // a modal strike: a bell chord
     let bell = ModalVoice::default();
@@ -102,6 +131,10 @@ fn main() {
     }
     for (i, m) in [48., 55., 63.].iter().enumerate() { mix.push(at(note(2, 50 + i as u32, *m, 0.5, 3.5), 0.)); }
     mix.push(at(Cmd::Modal { at: 0, key: 99, voice: bell, midi: 79., amp: 0.5, pan: -0.4, x: 0.8, hold: 0., dark: 0., sends: Sends::default() }, 2.));
+    // a patch edited while it plays, another part removed, a cam on the pluck's macro
+    mix.push(at(patch(1, "wobble"), 3.)); mix.push(at(Cmd::RemovePart { part: 2 }, 5.));
+    let mut table = [0f32; cogs_dsp::wave::MOTION_POINTS]; for (i, x) in table.iter_mut().enumerate().take(64) { *x = (i as f32 / 64.).sin(); }
+    mix.push(at(Cmd::Motion { part: 1, slot: 0, prog: Some(MotionProg { table, len: 64, step: false, f0: 0., ph0: 0., rate: 0.5, lo: 0., hi: 1., glide: 0. }) }, 1.));
     scenes.push(Scene { name: "mix", secs: 6., cmds: mix });
     // the far listener: quieter, wetter, low-passed
     let mut far = scenes.last().unwrap().cmds.clone(); far.push(at(Cmd::Listen { e: 1. }, 0.));
