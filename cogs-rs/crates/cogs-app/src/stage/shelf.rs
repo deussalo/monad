@@ -85,7 +85,10 @@ impl Stage {
         }
         let label = self.io.midi_label.unwrap_or("MIDI");
         let mw = (16.0 + 6.0 + 20.0 + label.len() as f64 * 7.8).clamp(44.0, 170.0);
-        out.push((Btn::Midi, r(self.cw - 8.0 - mw, clip, mw)));
+        let mx = self.cw - 8.0 - mw;
+        out.push((Btn::Midi, r(mx, clip, mw)));
+        out.push((Btn::Fit, r(mx - 44.0, clip, 44.0)));
+        out.push((Btn::Room, r(mx - 88.0, clip, 44.0)));
         out.push((Btn::Undo, r(self.cw - 106.0 - 88.0, top, 44.0)));
         out.push((Btn::Redo, r(self.cw - 106.0 - 44.0, top, 44.0)));
         out.push((Btn::Start, r(self.cw - 62.0 - 44.0, top, 44.0)));
@@ -108,6 +111,9 @@ impl Stage {
             }
         }
         let b = self.active_bezel(w)?;
+        if b.leader.is_some() && dist(s, (b.cx, b.cy)) < b.r - b.bw {
+            return Some(Gesture::Hub);
+        }
         let i = Stage::bezel_hit(&b, s)?;
         let v0 = b.sectors[i].key.as_ref().map(|k| super::bezel::get(w, k)).unwrap_or(super::bezel::Val::N(0.0));
         let p = &b.sectors[i];
@@ -147,6 +153,21 @@ impl Stage {
             Btn::Undo => self.undo(w),
             Btn::Redo => self.redo(w),
             Btn::Start => self.to_start(w),
+            Btn::Fit => {
+                self.room = false;
+                self.framed = None;
+                self.readout = None;
+                self.fly_fit(w);
+                self.buzz(6);
+            }
+            Btn::Room => {
+                self.room = !self.room;
+                if self.room {
+                    self.select(None);
+                    self.room = true;
+                }
+                self.buzz(6);
+            }
         }
     }
 
@@ -242,6 +263,11 @@ impl Stage {
                 Btn::Undo => icon(self, "Reset", false, alpha(FG, if self.edits.can_undo() { 1.0 } else { 0.3 })),
                 Btn::Redo => icon(self, "Reset", true, alpha(FG, if self.edits.can_redo() { 1.0 } else { 0.3 })),
                 Btn::Start => icon(self, "TrackPrevious", false, if w.clock.at_start { HOT } else { FG }),
+                Btn::Fit => {
+                    let lost = self.machine_lost(w);
+                    icon(self, "EnterFullScreen", false, if lost { HOT } else { FG })
+                }
+                Btn::Room => icon(self, "MixerHorizontal", false, if self.room { HOT } else { FG }),
                 Btn::Midi => {
                     let on = self.io.midi_connected;
                     let (bg, ink) = if on { (SEL, BG) } else { (PAD, SEL) };
@@ -272,7 +298,8 @@ impl Stage {
 
     // ---------- the readout ----------
     pub(super) fn say_gesture(&mut self, w: &World, g: &Gesture, held: bool) {
-        if matches!(g, Gesture::Bezel { .. } | Gesture::Nothing) {
+        // these say what happened when it has happened (the glyph after its toggle), or nothing
+        if matches!(g, Gesture::Bezel { .. } | Gesture::Nothing | Gesture::Glyph | Gesture::Button(_) | Gesture::Hub) {
             return;
         }
         let t = self.readout_of(w, g).unwrap_or_else(|| format!("view zoom: {}%", (w.s.zoom * 100.0).round()));
@@ -295,7 +322,6 @@ impl Stage {
                     format!("place part: {kind}")
                 }
             }
-            Gesture::Glyph => format!("playback: {}", if w.clock.paused { "paused" } else { "playing" }),
             Gesture::Arm { id, .. } | Gesture::ArmBody(id) => {
                 let a = w.arms.iter().find(|a| a.id == *id)?;
                 format!("arm length: {} px · angle: {}°", a.len.round(), (cogs_sim::wrap(a.a) * 180.0 / std::f64::consts::PI).round())

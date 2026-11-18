@@ -17,6 +17,8 @@ pub(crate) enum Gesture {
     Shelf { s0: (f64, f64), x0: f64, kind: &'static str, mode: u8, inner: Option<Box<Gesture>>, last: (f64, f64), v: f64 },
     Glyph,
     Button(Btn),
+    /// The middle of a compact bezel: a tap puts it away.
+    Hub,
     /// A sector of the bezel: what it held when pressed.
     Bezel { i: usize, v0: super::bezel::Val, s0: (f64, f64), owner: Option<Sel> },
     /// A press that has done its work (a link made or cancelled).
@@ -52,6 +54,10 @@ pub(crate) enum Btn {
     Undo,
     Redo,
     Start,
+    /// Bring the whole machine back into view.
+    Fit,
+    /// The room's ring.
+    Room,
 }
 
 /// Two fingers on a part: the midpoint moves it, the spread sizes it. Never turns it.
@@ -436,9 +442,12 @@ impl Stage {
             reader, id, p0: p, k: [x1, y1, x2, y2], end, note: 0, turn: 0.0,
         };
         for o in &w.readers {
-            near(d((o.x1, o.y1)), 22.0, span(true, o.id, o.x1, o.y1, o.x2, o.y2, 1));
-            near(d((o.x2, o.y2)), 22.0, span(true, o.id, o.x1, o.y1, o.x2, o.y2, 2));
-            near(seg_dist(p, o.x1, o.y1, o.x2, o.y2) * z + 8.0, 22.0, span(true, o.id, o.x1, o.y1, o.x2, o.y2, 0));
+            // a reader lying on a plate takes only a press close to it: the rest of the face is the plate's
+            let on_plate = o.on_ix.map_or(false, |ci| dist(p, (w.cogs[ci].x, w.cogs[ci].y)) <= w.cogs[ci].radius());
+            let (end, body) = if on_plate { (16.0, 20.0) } else { (22.0, 22.0) };
+            near(d((o.x1, o.y1)), end, span(true, o.id, o.x1, o.y1, o.x2, o.y2, 1));
+            near(d((o.x2, o.y2)), end, span(true, o.id, o.x1, o.y1, o.x2, o.y2, 2));
+            near(seg_dist(p, o.x1, o.y1, o.x2, o.y2) * z + 8.0, body, span(true, o.id, o.x1, o.y1, o.x2, o.y2, 0));
         }
         for o in &w.strings {
             near(d((o.x1, o.y1)), 22.0, span(false, o.id, o.x1, o.y1, o.x2, o.y2, 1));
@@ -484,6 +493,10 @@ impl Stage {
         if let Some(kc) = self.knob_cog(w) {
             let (k, _) = self.knob_at(w, kc, -std::f64::consts::FRAC_PI_2);
             near(dist(s, k) - KNOB_R, (22.0 - KNOB_R).max(8.0), Gesture::Knob { id: kc, mode: 0, at: 0.0, acc: 0.0, th0: 0.0, dial: 0.0 });
+        }
+        // the hub is the plate's: what merely passes over it (an arm, a reader, a belt) does not take the press
+        if c.is_some() && cd <= 24f64.max(rs * 0.22).min(rs * 0.7) && matches!(best, Some((_, Gesture::Arm { .. } | Gesture::Span { .. } | Gesture::Belt(_)))) {
+            best = None;
         }
         if let Some((_, g)) = best {
             return self.started(w, g, s);
@@ -945,7 +958,7 @@ impl Stage {
                 let (i, v0, s0) = (*i, v0.clone(), *s0);
                 self.bezel_move(w, i, &v0, s0, s);
             }
-            Gesture::Glyph | Gesture::Button(_) | Gesture::Nothing => {}
+            Gesture::Glyph | Gesture::Button(_) | Gesture::Nothing | Gesture::Hub => {}
         }
     }
     fn gesture_s0(&self) -> (f64, f64) {
@@ -1085,15 +1098,17 @@ impl Stage {
                 self.throw(w, *id, *w0, *ball, vx, vy);
             }
             Gesture::Bezel { .. } => self.changed(w, true),
-            Gesture::Glyph | Gesture::Button(_) | Gesture::Nothing => {}
+            Gesture::Glyph | Gesture::Button(_) | Gesture::Nothing | Gesture::Hub => {}
         }
     }
     pub(super) fn g_tap(&mut self, w: &mut World, g: &mut Gesture, s: (f64, f64)) {
         match g {
+            // a tap on empty ground only lets go of the selection (and of the room ring)
             Gesture::Pan { .. } => {
-                self.room = self.sel.is_none() && self.group.is_empty() && !self.room;
+                self.room = false;
                 self.select(None);
             }
+            Gesture::Hub => self.select(None),
             Gesture::Marquee { .. } => {
                 self.marquee = None;
                 let mut g2 = self.begin(w, s, false);
@@ -1122,6 +1137,7 @@ impl Stage {
                 let p = !w.clock.paused;
                 let from_start = w.set_paused(p);
                 self.out.push(StageOut::Paused { paused: p, from_start });
+                self.say(format!("playback: {}", if p { "paused" } else { "playing" }), false);
             }
             Gesture::Button(b) => self.press(w, *b),
             Gesture::Bezel { i, .. } => {
@@ -1273,7 +1289,7 @@ impl Stage {
                 }
                 true
             }
-            Gesture::Notes { .. } | Gesture::Glyph | Gesture::Button(_) | Gesture::Nothing => true,
+            Gesture::Notes { .. } | Gesture::Glyph | Gesture::Button(_) | Gesture::Nothing | Gesture::Hub => true,
             Gesture::Bezel { .. } => {
                 self.changed(w, true);
                 true
