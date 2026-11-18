@@ -33,6 +33,8 @@ pub enum Key {
     Space(&'static str),
     S(&'static str),
     Climax(&'static str),
+    /// A wave patch knob pinned to the part's dial, by its index in cogs_dsp's params; read and set normalised.
+    Dial(Part, usize),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -62,6 +64,8 @@ pub enum Fmt {
     Color,
     Axis,
     FxMode,
+    /// A patch knob's value, from its normalised position.
+    Dial(usize),
 }
 
 #[derive(Clone, Debug)]
@@ -134,6 +138,11 @@ impl Sector {
             (Fmt::Oct, _) => format!("{n} oct"),
             (Fmt::Verb, _) => VERB_MODES.get(n as usize).copied().unwrap_or("").into(),
             (Fmt::Color, _) => VERB_COLORS.get(n as usize).copied().unwrap_or("").into(),
+            (Fmt::Dial(i), _) => {
+                let p = &cogs_dsp::params::wave_params()[i];
+                let x = cogs_dsp::params::wave_denorm(p, n);
+                if x.abs() >= 1000.0 { format!("{:.1}k", x / 1000.0) } else { setting_text((x * 100.0).round() / 100.0) }
+            }
             _ => setting_text(n),
         }
     }
@@ -252,6 +261,13 @@ pub fn get(w: &World, k: &Key) -> Val {
                 "v" => d.v,
                 _ => d.len,
             }),
+            None => num(0.0),
+        },
+        Key::Dial(p, i) => match w.voice(*p) {
+            Some(v) => {
+                let patch = crate::play::wave_patch(&v.raw);
+                num(cogs_dsp::params::wave_norm(&cogs_dsp::params::wave_params()[*i], patch.values[*i]))
+            }
             None => num(0.0),
         },
         Key::Space(key) => num(n(w.space.get(*key))),
@@ -420,6 +436,26 @@ pub fn set(w: &mut World, k: &Key, v: Val) -> bool {
                 }
             }
         }
+        Key::Dial(p, i) => {
+            if let Some(v) = w.voice_mut(*p) {
+                // as the synth editor writes a patch back: the patch's keys over the voice's, its pitch folded in
+                let mut patch = crate::play::wave_patch(&v.raw);
+                patch.values[*i] = cogs_dsp::params::wave_denorm(&cogs_dsp::params::wave_params()[*i], x);
+                let mut raw = v.raw.clone();
+                raw.remove("preset");
+                if let Value::Object(o) = patch.to_json() {
+                    for (k, val) in o {
+                        if k != "dial" {
+                            raw.insert(k, val);
+                        }
+                    }
+                }
+                raw.insert("octave".into(), json!(0));
+                raw.insert("semi".into(), json!(0));
+                v.raw = raw;
+                v.recache();
+            }
+        }
         Key::Space(key) => {
             w.space.insert((*key).into(), jnum(x));
         }
@@ -499,7 +535,7 @@ fn voice_sectors(w: &World, p: Part, with_note: bool) -> Vec<Sector> {
             out.push(Sector::num("fork", "note", Key::Voice(p, "note"), 12.0, 108.0, 1.0));
         }
         out.push(Sector::num("level", "volume", Key::Voice(p, "level"), 0.0, 1.5, 0.01));
-        // the patch's own knobs pinned to the dial come with the synth editor
+        out.extend(dial_sectors(v, p));
         return out;
     }
     for (k, l, a, b, s) in voice_defs(v.kind).into_iter().filter(|d| with_note || d.0 != "note").take(BEZEL_PARAMS) {
@@ -542,6 +578,7 @@ impl Stage {
                     sec.push(Sector::action("patch", "edit patch".into(), Act::Patch));
                     sec.push(Sector::num("level", "volume", Key::Voice(p, "level"), 0.0, 1.5, 0.01));
                     sec.push(Sector::num("vel", "vel sense", Key::Voice(p, "velSense"), 0.0, 1.0, 0.01));
+                    sec.extend(dial_sectors(&r.voice, p));
                     sec.push(Sector::choice("kind", "voice", Key::VoiceKind(p), strs(&KINDS), Fmt::Kind));
                 } else {
                     sec = voice_sectors(w, p, false);
@@ -912,8 +949,9 @@ impl Stage {
                     p.text(c + vec2(0.0, 10.0), Align2::CENTER_CENTER, "patch", FontId::proportional(11.0), alpha(HOT, ea));
                     continue;
                 }
-                let label: String = sec.label.chars().take(10).collect();
-                p.text(c - vec2(0.0, 7.0), Align2::CENTER_CENTER, label, FontId::proportional(10.0), alpha(DIM, ea));
+                let label: String = sec.label.chars().take(13).collect();
+                let size = if label.chars().count() > 9 { 9.0 } else { 10.0 };
+                p.text(c - vec2(0.0, 7.0), Align2::CENTER_CENTER, label, FontId::proportional(size), alpha(DIM, ea));
                 if let Some(v) = &val {
                     let text: String = sec.format(v).chars().take(9).collect();
                     p.text(c + vec2(0.0, 7.0), Align2::CENTER_CENTER, text, FontId::proportional(12.5), alpha(if active { HOT } else { FG }, ea));
@@ -950,6 +988,27 @@ impl Stage {
             }
         }
     }
+}
+
+/// The patch knobs a synth voice pins to its dial (its raw `dial`: paths like "osc1.cut"), as the synth editor sets them.
+fn dial_sectors(v: &cogs_sim::Voice, p: Part) -> Vec<Sector> {
+    let Some(Value::Array(d)) = v.raw.get("dial") else { return vec![] };
+    let params = cogs_dsp::params::wave_params();
+    d.iter().filter_map(|x| x.as_str()).filter_map(|path| cogs_dsp::params::param_index(path).map(|i| (path, i))).take(8).map(|(path, i)| {
+        let def = &params[i];
+        let int = def.curve == cogs_dsp::params::Curve::Int;
+        // the oscillator or section first, so "osc1 cut" reads apart from "osc2 cut"
+        let section = path.split('.').next().unwrap_or("");
+        let label = if path.contains('.') && section != def.label { format!("{section} {}", def.label) } else { def.label.to_string() };
+        let mut s = Sector::num("knob", &label, Key::Dial(p, i), 0.0, 1.0, 0.001);
+        s.fmt = Fmt::Dial(i);
+        s.log = false;
+        if int {
+            // an integer knob turns a step at a time
+            s.step = 1.0 / (def.max - def.min).max(1.0);
+        }
+        s
+    }).collect()
 }
 
 /// The room's bezel: its reverb, the master, tempo, the line amp, and the seal.
