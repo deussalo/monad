@@ -98,11 +98,14 @@ fn android_main(app: AndroidApp) {
     let (vm, act) = (app.vm_as_ptr() as usize, app.activity_as_ptr() as usize);
     let opts = aaudio::Options::parse(&intent_audio(vm, act));
     log_audio_device(vm, act);
+    if opts.bench { aaudio::bench() }
     if opts.probe { aaudio::probe("early", &opts) }
     let data = app.internal_data_path();
     // The world as it was left; the first launch (or a save that no longer loads) starts on the default world.
     let saved = data.as_ref().and_then(|d| std::fs::read_to_string(d.join("world.json")).ok()).and_then(|s| cogs_sim::World::from_str(&s).ok());
-    let world = saved.unwrap_or_else(|| cogs_sim::World::from_str(crate::WORLDS[0].1).unwrap_or_else(|_| cogs_sim::World::demo()));
+    // `world=N` in the launch options starts on a shipped world, for testing
+    let forced = opts.world.and_then(|i| crate::WORLDS.get(i)).and_then(|w| cogs_sim::World::from_str(w.1).ok());
+    let world = forced.or(saved).unwrap_or_else(|| cogs_sim::World::from_str(crate::WORLDS[0].1).unwrap_or_else(|_| cogs_sim::World::demo()));
     // The stream first: the engine runs at the rate it is granted. The engine is made here, off the audio thread.
     let stream = aaudio::open_best(&opts, None);
     let sr = stream.as_ref().map_or(48000, |s| s.info.rate) as f32;
