@@ -107,7 +107,16 @@ impl Stage {
                 return Some(Gesture::Button(b));
             }
         }
-        None
+        let b = self.active_bezel(w)?;
+        let i = Stage::bezel_hit(&b, s)?;
+        let v0 = b.sectors[i].key.as_ref().map(|k| super::bezel::get(w, k)).unwrap_or(super::bezel::Val::N(0.0));
+        let p = &b.sectors[i];
+        let text = match &p.key {
+            Some(_) => format!("{}: {}", p.label, p.format(&v0)),
+            None => p.label.clone(),
+        };
+        self.say(text, true);
+        Some(Gesture::Bezel { i, v0, s0: s, owner: b.owner })
     }
     pub(super) fn press(&mut self, w: &mut World, b: Btn) {
         match b {
@@ -151,6 +160,7 @@ impl Stage {
             let ghost = Pen { ..pen };
             draw_arm(&ghost, -24.0, 0.0, 0.0, 0.0, 24.0, 0.0, f64::NEG_INFINITY);
         }
+        self.draw_bezel(p, w);
         self.draw_shelf(p);
         self.draw_glyph(p, w);
         self.draw_buttons(p, w);
@@ -263,6 +273,9 @@ impl Stage {
 
     // ---------- the readout ----------
     pub(super) fn say_gesture(&mut self, w: &World, g: &Gesture, held: bool) {
+        if matches!(g, Gesture::Bezel { .. } | Gesture::Nothing) {
+            return;
+        }
         let t = self.readout_of(w, g).unwrap_or_else(|| format!("view zoom: {}%", (w.s.zoom * 100.0).round()));
         self.say(t, held);
     }

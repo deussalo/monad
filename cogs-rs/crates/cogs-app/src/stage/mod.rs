@@ -7,6 +7,7 @@
 //! comes back as `StageOut`s. Bezels, the notes roll, the synth editor and panels come later: `StageOut::OpenEditor`
 //! and `StageOut::TogglePanel` are their hooks, and `Stage::bezel_rect` will reserve their hit area.
 
+pub mod bezel;
 pub mod draw;
 pub mod edits;
 mod gesture;
@@ -100,6 +101,8 @@ pub enum StageOut {
     ConnectMidi,
     /// Start or stop recording onto the plate.
     Record,
+    /// The seal was pressed: copy this share link (the HTML build opens it).
+    Share(String),
 }
 
 /// What the app tells the stage each frame.
@@ -232,6 +235,11 @@ pub struct Stage {
     trackpad: Option<(Option<u32>, f64, f64, f64, f64)>,
     down_t: f64,
     clip: Option<serde_json::Value>,
+    bezel_owner: Option<Option<Sel>>,
+    bezel_at: f64,
+    seal_at: f64,
+    /// A cam or probe waiting for the next tap to link it.
+    linking: Option<Sel>,
 }
 
 impl Default for Stage {
@@ -248,7 +256,7 @@ impl Stage {
             scrap: false, snapped: false, caught: false, last_tap: None, dot_at: (0.0, 0.0), hover: None, shift: false,
             edits: edits::Edits::default(), out: Vec::new(), rect: Rect::NOTHING, cw: 0.0, ch: 0.0, safe_top: 0.0, safe_bot: 0.0, now: 0.0,
             io: StageIo::default(), shelf_x: 0.0, shelf_fling: None, icons: icons::Icons::default(), readout: None, readout_held: false,
-            mouse_down: false, seen_touch: false, started: false, trackpad: None, down_t: 0.0, clip: None,
+            mouse_down: false, seen_touch: false, started: false, trackpad: None, down_t: 0.0, clip: None, bezel_owner: None, bezel_at: 0.0, seal_at: -9.0, linking: None,
         }
     }
 
