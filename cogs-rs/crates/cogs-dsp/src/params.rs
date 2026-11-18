@@ -70,8 +70,15 @@ pub const REVERB_ATTACK: usize = 148; pub const REVERB_EARLY: usize = 149; pub c
 pub const REVERB_RATE: usize = 152; pub const REVERB_LOWCUT: usize = 153; pub const REVERB_HIGHCUT: usize = 154;
 pub const EQ_LOW: usize = 155; pub const EQ_HIGH: usize = 156;
 pub const COMP_THRESH: usize = 157; pub const COMP_RATIO: usize = 158; pub const COMP_GAIN: usize = 159;
+// the EQ's other knobs: the two shelves' corners and two bell bands (added after the first patches were saved, so old indices hold)
+pub const EQ_LOWF: usize = 160; pub const EQ_M1: usize = 161; pub const EQ_M1F: usize = 162; pub const EQ_M1Q: usize = 163;
+pub const EQ_M2: usize = 164; pub const EQ_M2F: usize = 165; pub const EQ_M2Q: usize = 166; pub const EQ_HIGHF: usize = 167;
+/// One past the FX rack's knobs.
+pub const P_FX_END: usize = 168;
+/// The global amp envelope: P_AMP0 + (a, d, s, r).
+pub const P_AMP0: usize = 168;
 /// How many knobs a patch has.
-pub const NP: usize = 160;
+pub const NP: usize = 172;
 
 /// Mod sources: env1-4, lfo1-4, m1-8, vel, note, rand.
 pub const NS: usize = 19;
@@ -121,10 +128,16 @@ fn build() -> Vec<ParamDef> {
         ("reverb.size", "size", 0., 1., 0.55, Lin), ("reverb.attack", "attack", 0., 1., 0.15, Lin), ("reverb.early", "early diff", 0., 1., 0.75, Lin),
         ("reverb.late", "late diff", 0., 1., 0.7, Lin), ("reverb.mod", "mod depth", 0., 1., 0.5, Lin), ("reverb.rate", "mod rate", 0.05, 10., 0.6, Log),
         ("reverb.lowcut", "low cut", 10., 1000., 80., Log), ("reverb.highcut", "high cut", 1000., 20000., 9000., Log),
-        ("eq.low", "low dB", -15., 15., 0., Lin), ("eq.high", "high dB", -15., 15., 0., Lin),
+        ("eq.low", "low", -15., 15., 0., Lin), ("eq.high", "high", -15., 15., 0., Lin),
         ("comp.thresh", "threshold", -40., 0., -12., Lin), ("comp.ratio", "ratio", 1., 20., 4., Log), ("comp.gain", "makeup", 0., 18., 3., Lin),
     ];
     for (a, b, c, d, e, f) in fx { push(a.into(), b, c, d, e, f); }
+    push("eq.lowf".into(), "low Hz", 20., 2000., 200., Log);
+    push("eq.m1".into(), "mid 1", -15., 15., 0., Lin); push("eq.m1f".into(), "mid 1 Hz", 60., 8000., 500., Log); push("eq.m1q".into(), "mid 1 Q", 0.3, 10., 1., Log);
+    push("eq.m2".into(), "mid 2", -15., 15., 0., Lin); push("eq.m2f".into(), "mid 2 Hz", 200., 16000., 2000., Log); push("eq.m2q".into(), "mid 2 Q", 0.3, 10., 1., Log);
+    push("eq.highf".into(), "high Hz", 1000., 20000., 4000., Log);
+    push("amp.a".into(), "attack", 0., 8., 0.003, Time); push("amp.d".into(), "decay", 0., 8., 0.8, Time);
+    push("amp.s".into(), "sustain", 0., 1., 1., Lin); push("amp.r".into(), "release", 0., 8., 0.3, Time);
     p
 }
 
@@ -136,7 +149,7 @@ pub fn wave_params() -> &'static [ParamDef] {
 /// A knob's index by its path (`osc1.cut`, `env2.a`, `m3`, `delay.fb`).
 pub fn param_index(path: &str) -> Option<usize> { wave_params().iter().position(|p| p.path == path) }
 /// Whether a knob belongs to the FX rack (a rack is shared by a patch's voices, so only macros reach it).
-pub fn is_fx_param(i: usize) -> bool { i >= P_FX0 && i < NP }
+pub fn is_fx_param(i: usize) -> bool { i >= P_FX0 && i < P_FX_END }
 
 /// Normalised position (0..1) of a value on its knob.
 pub fn wave_norm(p: &ParamDef, x: f64) -> f64 {

@@ -50,6 +50,8 @@ pub struct WavePatch {
     pub lfo: [LfoSetup; WAVE_LFOS],
     /// index into VOICE_MODES
     pub voice_mode: u8,
+    /// One envelope for the whole voice, in place of the oscillators' own and ENV1 on the sub and noise.
+    pub amp_on: bool,
     pub glide_always: bool,
     pub glide_scale: bool,
     /// the rack's order: indices into WAVE_FX, each once
@@ -110,7 +112,7 @@ fn home(path: &str) -> Home<'_> {
     }
     if let Some(r) = path.strip_prefix('m') { if r.len() == 1 && r.as_bytes()[0].is_ascii_digit() { return Home::Macro((r.as_bytes()[0] - b'1') as usize); } }
     if let Some((g, k)) = path.split_once('.') {
-        if ["sub", "noise", "tune"].contains(&g) { return Home::Group(g, k); }
+        if ["sub", "noise", "tune", "amp"].contains(&g) { return Home::Group(g, k); }
         if WAVE_FX.contains(&g) { return Home::Fx(g, k); }
     }
     Home::Top(path)
@@ -148,7 +150,7 @@ impl WavePatch {
             name: "init".into(), values, osc: [osc(true), osc(false), osc(false)],
             lfo: std::array::from_fn(|_| LfoSetup { shape: 0, retrig: true, sync: 0 }),
             voice_mode: 0, glide_always: true, glide_scale: false,
-            fx_order: std::array::from_fn(|i| i as u8), fx_on: [false; 9], dist_mode: 0,
+            amp_on: false, fx_order: std::array::from_fn(|i| i as u8), fx_on: [false; 9], dist_mode: 0,
             delay_sync: index_in(&DELAY_SYNCS.map(|x| x.0), "1/8.").unwrap() as u8, delay_ping: true, verb_mode: 0, verb_color: 1,
             macro_names: std::array::from_fn(|i| format!("macro {}", i + 1)), mods: Vec::new(),
         }
@@ -188,6 +190,7 @@ impl WavePatch {
             if let Some(a) = get(vc, "always") { p.glide_always = js_truthy(a); }
             p.glide_scale = get(vc, "scale").map_or(false, js_truthy);
         }
+        p.amp_on = get(j, "amp").and_then(|a| get(a, "on")).map_or(false, js_truthy);
         p.fx_order = fx_order(get(j, "fxOrder"));
         if let Some(fx) = get(j, "fx") {
             for (k, name) in WAVE_FX.iter().enumerate() {
@@ -223,7 +226,7 @@ impl WavePatch {
 
     /// The patch as the HTML build saves it (patchOf(v): no part-level keys).
     pub fn to_json(&self) -> Value {
-        let mut j = json!({"name": self.name, "osc": [], "sub": {}, "noise": {}, "tune": {}, "env": [{}, {}, {}, {}], "lfo": [], "macro": [0, 0, 0, 0, 0, 0, 0, 0],
+        let mut j = json!({"name": self.name, "osc": [], "sub": {}, "noise": {}, "tune": {}, "amp": {}, "env": [{}, {}, {}, {}], "lfo": [], "macro": [0, 0, 0, 0, 0, 0, 0, 0],
             "macroNames": self.macro_names, "mods": [], "fx": {}});
         for o in &self.osc {
             j["osc"].as_array_mut().unwrap().push(json!({"on": o.on, "table": WAVE_TABLES[o.table as usize], "filter": WAVE_FILTERS[o.filter as usize],
@@ -233,6 +236,7 @@ impl WavePatch {
             j["lfo"].as_array_mut().unwrap().push(json!({"shape": LFO_SHAPES[l.shape as usize], "retrig": l.retrig, "sync": LFO_SYNCS[l.sync as usize].0}));
         }
         j["voicing"] = json!({"mode": VOICE_MODES[self.voice_mode as usize], "always": self.glide_always, "scale": self.glide_scale});
+        j["amp"]["on"] = json!(self.amp_on);
         j["fxOrder"] = json!(self.fx_order.iter().map(|&k| WAVE_FX[k as usize]).collect::<Vec<_>>());
         for (k, name) in WAVE_FX.iter().enumerate() {
             let mut q = json!({"on": self.fx_on[k]});

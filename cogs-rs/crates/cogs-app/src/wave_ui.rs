@@ -30,7 +30,7 @@ const CARD: Color32 = Color32::from_rgb(0x20, 0x22, 0x26);
 const WELL: Color32 = Color32::from_rgb(0x2a, 0x2c, 0x32);
 const ENVC: Color32 = Color32::from_rgb(0x6c, 0xd0, 0x8a);
 const ODD: Color32 = Color32::from_rgb(0xc0, 0x8c, 0xff);
-const TAB_NAMES: [&str; 9] = ["Main", "A", "B", "C", "Voice", "Mod", "FX", "Matrix", "Patch"];
+const TAB_NAMES: [&str; 9] = ["Main", "A", "B", "C", "Global", "Mod", "FX", "Matrix", "Patch"];
 /// A source's colour by kind: envelopes green, LFOs blue, macros orange, the rest violet.
 fn src_col(s: u8) -> Color32 {
     let s = s as usize;
@@ -69,7 +69,8 @@ pub enum EditorOut {
     Close,
 }
 
-struct Drag { n0: f64, a0: f64, acc: f64, x0: f32, route: Option<usize>, fresh: bool }
+/// `route` names the route by its source: its place in the list can change under a held finger.
+struct Drag { n0: f64, a0: f64, acc: f64, x0: f32, route: Option<u8>, fresh: bool }
 
 pub struct WaveEditor {
     /// Room to leave under the sheet for the system's navigation bar, in points.
@@ -93,6 +94,8 @@ pub struct WaveEditor {
     say: Option<(String, f64)>,
     dirty: bool,
     redraw_fx: bool,
+    /// The EQ band whose point a finger has on the curve.
+    eq_grab: Option<usize>,
 }
 
 fn src_label(s: u8) -> String {
@@ -106,6 +109,8 @@ fn long_label(p: &WavePatch, i: usize) -> String {
     if let Some(r) = path.strip_prefix("osc") { return format!("{} {}", &"ABC"[(r.as_bytes()[0] - b'1') as usize..][..1], d.label) }
     for g in ["env", "lfo"] { if let Some(r) = path.strip_prefix(g) { if r.as_bytes().first().map_or(false, |c| c.is_ascii_digit()) { return format!("{}{} {}", g.to_uppercase(), &r[..1], d.label) } } }
     if path.len() == 2 && path.starts_with('m') { return p.macro_names[(path.as_bytes()[1] - b'1') as usize].clone() }
+    if path.starts_with("amp.") { return format!("amp {}", d.label) }
+    if path.starts_with("eq.") { return format!("EQ {}", d.label) }
     if is_fx_param(i) { return format!("{} {}", path.split('.').next().unwrap_or(""), d.label) }
     if path.starts_with("tune.") { return format!("synth {}", d.label) }
     d.label.to_string()
@@ -116,6 +121,7 @@ fn kfmt(x: f64) -> String {
 /// waveText: a knob's value as the editor reads it out.
 fn value_text(d: &ParamDef, x: f64) -> String {
     let p = d.path.as_str();
+    if p.starts_with("eq.") && d.curve == Curve::Log { return if p.ends_with('q') { format!("{x:.2}") } else { format!("{} Hz", kfmt(x)) } }
     if p.starts_with("eq.") || p == "comp.thresh" || p == "comp.gain" { return format!("{}{:.1} dB", if x > 0. { "+" } else { "" }, x) }
     if p == "comp.ratio" { return format!("{x:.1}:1") }
     if d.curve == Curve::Time { return if x < 1. { format!("{} ms", (x * 1000.).round()) } else { format!("{x:.2} s") } }
@@ -186,7 +192,7 @@ impl WaveEditor {
         let v = w.voice(part)?;
         if v.kind != VoiceKind::Wave { return None }
         let mut e = WaveEditor { live: Vec::new(), driven: [None; WAVE_MACROS], part, p: WavePatch::init(), dial: Vec::new(), ver: 0, tab: 0, arm: None, pin: false, msg: String::new(), json: String::new(),
-            lib, open_routes: HashSet::new(), drag: None, say: None, dirty: false, redraw_fx: false, safe_bottom: 0. };
+            lib, open_routes: HashSet::new(), drag: None, say: None, dirty: false, redraw_fx: false, eq_grab: None, safe_bottom: 0. };
         e.load(w);
         Some(e)
     }
@@ -378,15 +384,15 @@ impl WaveEditor {
         } else if !self.pin {
             if resp.drag_started() {
                 let (route, fresh) = match (self.arm, armed) {
-                    (Some(_), Some(j)) => (Some(j), false),
+                    (Some(s), Some(_)) => (Some(s), false),
                     (Some(s), None) => {
                         self.p.mods.push(cogs_dsp::patch::ModRoute { src: s, dst: i as u16, amt: 0., bi: (SRC_LFO0..SRC_LFO0 + 4).contains(&(s as usize)), off: false, aux: None, aux_inv: false, curve: 0. });
-                        (Some(self.p.mods.len() - 1), true)
+                        (Some(s), true)
                     }
                     _ => (None, false),
                 };
                 let x0 = resp.interact_pointer_pos().map_or(rect.center().x, |p| p.x);
-                self.drag = Some((i, Drag { n0: n, a0: route.map_or(0., |j| self.p.mods[j].amt), acc: 0., x0, route, fresh }));
+                self.drag = Some((i, Drag { n0: n, a0: route.and_then(|s| self.p.mods.iter().find(|m| m.dst as usize == i && m.src == s)).map_or(0., |m| m.amt), acc: 0., x0, route, fresh }));
             }
             if resp.dragged() {
                 if let Some((di, dr)) = self.drag.as_mut().filter(|(di, _)| *di == i) {
@@ -395,10 +401,10 @@ impl WaveEditor {
                     let fine = 1. + (px - dr.x0).abs() as f64 / 60.;
                     dr.acc += -resp.drag_delta().y as f64 / (150. * fine);
                     let txt;
-                    if let Some(j) = dr.route {
+                    if let Some(s) = dr.route {
                         let a = ((dr.a0 + dr.acc).clamp(-1., 1.) * 1000.).round() / 1000.;
-                        self.p.mods[j].amt = a;
-                        txt = format!("{} {}{}", src_label(self.p.mods[j].src), if a > 0. { "+" } else { "" }, (a * 100.).round());
+                        if let Some(m) = self.p.mods.iter_mut().find(|m| m.dst as usize == i && m.src == s) { m.amt = a; }
+                        txt = format!("{} {}{}", src_label(s), if a > 0. { "+" } else { "" }, (a * 100.).round());
                     } else {
                         self.p.values[i] = wave_denorm(d, dr.n0 + dr.acc);
                         txt = value_text(d, self.p.values[i]);
@@ -410,18 +416,30 @@ impl WaveEditor {
             }
             if resp.drag_stopped() {
                 if let Some((_, dr)) = self.drag.take().filter(|(di, _)| *di == i) {
-                    if let Some(j) = dr.route { if self.p.mods[j].amt == 0. { self.p.mods.remove(j); } }
+                    if let Some(s) = dr.route { self.p.mods.retain(|m| !(m.dst as usize == i && m.src == s && m.amt == 0.)); }
                     let _ = dr.fresh;
                     changed = true;
                 }
             }
             if resp.double_clicked() {
-                if let Some(j) = armed { self.p.mods.remove(j); } else { self.p.values[i] = d.default; }
-                self.speak(format!("{}: reset", long_label(&self.p, i)), now);
+                // looked up afresh: a drag ending in this same frame may have changed the list
+                match self.arm.and_then(|s| self.p.mods.iter().position(|m| m.dst as usize == i && m.src == s)) {
+                    Some(j) => {
+                        let s = self.p.mods.remove(j).src;
+                        self.speak(format!("{}: {} removed", long_label(&self.p, i), src_label(s)), now);
+                    }
+                    None if self.arm.is_some() => {}
+                    None => {
+                        self.p.values[i] = d.default;
+                        self.speak(format!("{}: reset", long_label(&self.p, i)), now);
+                    }
+                }
                 changed = true;
             }
         }
         if changed { self.dirty = true }
+        // the routes as they stand now: a double tap may just have taken this one away
+        let armed = self.arm.and_then(|s| self.p.mods.iter().position(|m| m.dst as usize == i && m.src == s));
         // draw
         let p = ui.painter();
         let c = pos2(rect.center().x, rect.top() + 27.);
@@ -613,6 +631,22 @@ impl WaveEditor {
         }
     }
     fn tab_voice(&mut self, ui: &mut Ui) {
+        card(ui, "", |ui| {
+            let mut on = self.p.amp_on;
+            if Self::switch(ui, "Amp envelope", &mut on) { self.p.amp_on = on; self.dirty = true }
+            if !on {
+                ui.label(egui::RichText::new("Off: each oscillator keeps its own envelope. On: this one shapes the whole voice.").size(11.).color(DIM));
+                return;
+            }
+            let v = &self.p.values;
+            let adsr = (v[P_AMP0], v[P_AMP0 + 1], v[P_AMP0 + 2], v[P_AMP0 + 3]);
+            self.env_knobs(ui, &["a", "d", "s", "r"].map(|k| format!("amp.{k}")), adsr, HOT);
+        });
+        card(ui, "", |ui| {
+            let mut on = self.p.fx_on[FX_EQ];
+            if Self::switch(ui, "EQ", &mut on) { self.p.fx_on[FX_EQ] = on; self.dirty = true }
+            if on { self.eq_body(ui) }
+        });
         card(ui, "voice", |ui| {
             ui.horizontal_wrapped(|ui| {
                 if Self::combo(ui, "voicing", "voicing", &VOICE_MODES, &mut self.p.voice_mode) { self.dirty = true }
@@ -624,6 +658,50 @@ impl WaveEditor {
             self.knobs(ui, &["tune.oct", "tune.semi", "vol", "glide", "gate"].map(String::from));
         });
         card(ui, "sub · noise (on ENV1)", |ui| self.knobs(ui, &["sub.level", "sub.oct", "noise.level", "noise.color"].map(String::from)));
+    }
+    /// The EQ: its curve, a point per band to drag (across for frequency, up and down for gain, double tap for flat),
+    /// and the knobs, which take macros like the rest of the rack.
+    fn eq_body(&mut self, ui: &mut Ui) {
+        const BANDS: [(usize, usize, &str, &str); 4] = [(EQ_LOW, EQ_LOWF, "L", "low"), (EQ_M1, EQ_M1F, "1", "mid 1"), (EQ_M2, EQ_M2F, "2", "mid 2"), (EQ_HIGH, EQ_HIGHF, "H", "high")];
+        const DB: f32 = 18.;
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 132.), Sense::click_and_drag());
+        let span = 1000f32.ln();
+        let xf = |f: f64| rect.left() + rect.width() * ((f as f32 / 20.).ln() / span).clamp(0., 1.);
+        let fx = |x: f32| 20. * (((x - rect.left()) / rect.width()).clamp(0., 1.) * span).exp() as f64;
+        let yd = |db: f32| rect.center().y - (db / DB).clamp(-1., 1.) * (rect.height() / 2. - 6.);
+        let dy = |y: f32| ((rect.center().y - y) / (rect.height() / 2. - 6.) * DB) as f64;
+        let node = |v: &[f64; NP], b: usize| pos2(xf(v[BANDS[b].1]), yd(v[BANDS[b].0] as f32));
+        let nearest = |v: &[f64; NP], p: Pos2| (0..4).min_by(|&a, &b| node(v, a).distance_sq(p).total_cmp(&node(v, b).distance_sq(p))).unwrap_or(0);
+        let params = wave_params();
+        if resp.drag_started() { self.eq_grab = ui.input(|i| i.pointer.press_origin()).map(|p| nearest(&self.p.values, p)) }
+        if resp.dragged() {
+            if let (Some(b), Some(p)) = (self.eq_grab, resp.interact_pointer_pos()) {
+                let (g, f, _, name) = BANDS[b];
+                self.p.values[f] = fx(p.x).clamp(params[f].min, params[f].max);
+                self.p.values[g] = (dy(p.y).clamp(params[g].min, params[g].max) * 10.).round() / 10.;
+                self.speak(format!("{name}: {} · {}", value_text(&params[f], self.p.values[f]), value_text(&params[g], self.p.values[g])), ui.input(|i| i.time));
+                self.dirty = true;
+            }
+        }
+        if resp.drag_stopped() { self.eq_grab = None }
+        if resp.double_clicked() {
+            if let Some(p) = resp.interact_pointer_pos() { self.p.values[BANDS[nearest(&self.p.values, p)].0] = 0.; self.dirty = true }
+        }
+        let v = self.p.values;
+        let p = ui.painter();
+        p.rect_filled(rect, 8., Color32::from_rgb(0x18, 0x1a, 0x1e));
+        for f in [100., 1000., 10000.] { let x = xf(f); p.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1., LINE.gamma_multiply(0.5))); }
+        p.line_segment([pos2(rect.left(), yd(0.)), pos2(rect.right(), yd(0.))], Stroke::new(1., LINE));
+        let pts: Vec<Pos2> = (0..=120).map(|k| { let x = rect.left() + rect.width() * k as f32 / 120.; pos2(x, yd(cogs_dsp::wave::eq_db(&v, fx(x), 48000.) as f32)) }).collect();
+        p.add(Shape::line(pts, Stroke::new(2., HOT)));
+        for b in 0..4 {
+            let c = node(&v, b);
+            let held = self.eq_grab == Some(b);
+            p.circle_filled(c, if held { 12. } else { 9. }, if held { HOT } else { WELL });
+            p.circle_stroke(c, if held { 12. } else { 9. }, Stroke::new(1.5, HOT));
+            p.text(c, Align2::CENTER_CENTER, BANDS[b].2, FontId::proportional(10.), if held { Color32::BLACK } else { FG });
+        }
+        self.knobs(ui, &["low", "lowf", "high", "highf", "m1", "m1f", "m1q", "m2", "m2f", "m2q"].map(|k| format!("eq.{k}")));
     }
     fn tab_mod(&mut self, ui: &mut Ui) {
         for e in 1..=WAVE_ENVS {
@@ -664,6 +742,7 @@ impl WaveEditor {
                     });
                 });
                 if !self.p.fx_on[k] { return }
+                if k == FX_EQ { self.eq_body(ui); return }
                 ui.horizontal_wrapped(|ui| match k {
                     FX_DIST => { if Self::combo(ui, "dmode", "mode", &DIST_MODES, &mut self.p.dist_mode) { self.dirty = true } }
                     FX_REVERB => {

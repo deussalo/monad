@@ -43,6 +43,7 @@ pub struct CompiledPatch {
     always: bool,
     glide_scale: bool,
     fx_on: [bool; 9],
+    amp_on: bool,
     fx_order: [u8; 9],
     dist_mode: u8,
     verb_mode: u8,
@@ -88,7 +89,7 @@ impl CompiledPatch {
             warp_mode2: std::array::from_fn(|i| p.osc[i].warp2_mode), ftype: std::array::from_fn(|i| p.osc[i].filter),
             lfo_shape: std::array::from_fn(|i| p.lfo[i].shape), lfo_retrig: std::array::from_fn(|i| p.lfo[i].retrig),
             lfo_sync: std::array::from_fn(|i| LFO_SYNCS[p.lfo[i].sync as usize].1),
-            mode: p.voice_mode, always: p.glide_always, glide_scale: p.glide_scale, fx_on: p.fx_on, fx_order: p.fx_order,
+            mode: p.voice_mode, always: p.glide_always, glide_scale: p.glide_scale, amp_on: p.amp_on, fx_on: p.fx_on, fx_order: p.fx_order,
             dist_mode: p.dist_mode, verb_mode: p.verb_mode, verb_color: p.verb_color, delay_sync: DELAY_SYNCS[p.delay_sync as usize].1, ping: p.delay_ping,
         }
     }
@@ -141,13 +142,13 @@ struct LfoState { ph: f64, held: f64, prev: f64 }
 
 struct Voice {
     on: bool, slot: usize, ver: u64, vals: [f64; NP], src: [f64; NS], osc: [OscState; WAVE_OSCS], envs: [Env; WAVE_ENVS], ecs: [[f64; 3]; WAVE_ENVS],
-    lfo: [LfoState; WAVE_LFOS], sub_ph: f64, nz: f64, dl: f64, dr: f64, kill: f64, age: u64, released: bool, key: u32,
+    lfo: [LfoState; WAVE_LFOS], aenv: Env, aec: [f64; 3], sub_ph: f64, nz: f64, dl: f64, dr: f64, kill: f64, age: u64, released: bool, key: u32,
     midi: f64, from: f64, glide_t: f64, t0: f64, off_at: f64, amp: f64, pan: f64, dark: f64, vel: f64, rand: f64, sends: Sends,
 }
 impl Voice {
     fn new() -> Self {
         Voice { on: false, slot: 0, ver: 0, vals: [0.; NP], src: [0.; NS], osc: [OscState::default(); 3], envs: [Env::default(); 4], ecs: [[0.; 3]; 4],
-            lfo: [LfoState { ph: 0., held: 0.5, prev: 0.5 }; 4], sub_ph: 0., nz: 0., dl: 0., dr: 0., kill: 0., age: 0, released: false, key: 0,
+            lfo: [LfoState { ph: 0., held: 0.5, prev: 0.5 }; 4], aenv: Env::default(), aec: [0.; 3], sub_ph: 0., nz: 0., dl: 0., dr: 0., kill: 0., age: 0, released: false, key: 0,
             midi: 60., from: 60., glide_t: 0., t0: 0., off_at: 0., amp: 0., pan: 0., dark: 0., vel: 0., rand: 0., sends: Sends::default() }
     }
 }
@@ -159,7 +160,7 @@ impl DelayLine { pub fn new(fs: f64) -> Self { let n = (fs * 2.1).ceil() as usiz
 struct FxState {
     held: [f64; 2], hc: u32, cb: [Vec<f32>; 2], cw: i64, cph: f64,
     db: Option<Box<DelayLine>>, dw: usize, dlp: [f64; 2],
-    eq: [[f64; 4]; 4], eq_key: (i64, i64), eqc: [[f64; 5]; 2], env: f64,
+    eq: [[f64; 4]; 8], eq_key: [i64; 10], eqc: [[f64; 5]; 4], env: f64,
     hb: [Vec<f32>; 2], hw: i64, hph: [f64; 7], fbuf: [Vec<f32>; 2], fw: i64, fph: f64,
     ap: [f64; 12], pph: f64, pz: [f64; 2], pa: [f64; 2],
     verb: Option<Box<Verb>>, verb_fresh: bool, vp: VerbParams, vl: [f32; BLOCK], vr: [f32; BLOCK],
@@ -167,7 +168,7 @@ struct FxState {
 impl FxState {
     fn new() -> Self {
         FxState { held: [0.; 2], hc: 0, cb: [vec![0.; 4096], vec![0.; 4096]], cw: 0, cph: 0., db: None, dw: 0, dlp: [0.; 2],
-            eq: [[0.; 4]; 4], eq_key: (i64::MIN, i64::MIN), eqc: [[0.; 5]; 2], env: 0., hb: [vec![0.; 4096], vec![0.; 4096]], hw: 0, hph: [0.; 7],
+            eq: [[0.; 4]; 8], eq_key: [i64::MIN; 10], eqc: [[0.; 5]; 4], env: 0., hb: [vec![0.; 4096], vec![0.; 4096]], hw: 0, hph: [0.; 7],
             fbuf: [vec![0.; 1024], vec![0.; 1024]], fw: 0, fph: 0., ap: [0.; 12], pph: 0., pz: [0.; 2], pa: [0.; 2],
             verb: None, verb_fresh: false, vp: VerbParams::default(), vl: [0.; BLOCK], vr: [0.; BLOCK] }
     }
@@ -180,7 +181,7 @@ impl FxState {
     }
     fn new_light() -> Self {
         FxState { held: [0.; 2], hc: 0, cb: [Vec::new(), Vec::new()], cw: 0, cph: 0., db: None, dw: 0, dlp: [0.; 2],
-            eq: [[0.; 4]; 4], eq_key: (i64::MIN, i64::MIN), eqc: [[0.; 5]; 2], env: 0., hb: [Vec::new(), Vec::new()], hw: 0, hph: [0.; 7],
+            eq: [[0.; 4]; 8], eq_key: [i64::MIN; 10], eqc: [[0.; 5]; 4], env: 0., hb: [Vec::new(), Vec::new()], hw: 0, hph: [0.; 7],
             fbuf: [Vec::new(), Vec::new()], fw: 0, fph: 0., ap: [0.; 12], pph: 0., pz: [0.; 2], pa: [0.; 2],
             verb: None, verb_fresh: false, vp: VerbParams::default(), vl: [0.; BLOCK], vr: [0.; BLOCK] }
     }
@@ -306,6 +307,28 @@ fn shelf(f: f64, db: f64, fs: f64, high: bool) -> [f64; 5] {
     }
     [b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0]
 }
+/// RBJ bell biquad coefficients
+fn bell(f: f64, db: f64, q: f64, fs: f64) -> [f64; 5] {
+    let a = 10f64.powf(db / 40.); let w = TAU * f / fs; let (cs, sn) = (w.cos(), w.sin()); let al = sn / (2. * q);
+    let a0 = 1. + al / a;
+    [(1. + al * a) / a0, -2. * cs / a0, (1. - al * a) / a0, -2. * cs / a0, (1. - al / a) / a0]
+}
+/// The EQ's four bands from its knobs (in their own units), low to high.
+fn eq_coefs(v: &[f64; NP], fs: f64) -> [[f64; 5]; 4] {
+    let top = 0.45 * fs;
+    [shelf(v[EQ_LOWF].min(top), v[EQ_LOW], fs, false), bell(v[EQ_M1F].min(top), v[EQ_M1], v[EQ_M1Q], fs),
+     bell(v[EQ_M2F].min(top), v[EQ_M2], v[EQ_M2Q], fs), shelf(v[EQ_HIGHF].min(top), v[EQ_HIGH], fs, true)]
+}
+/// What the EQ does at `hz`, in dB: its curve, for the editor.
+pub fn eq_db(v: &[f64; NP], hz: f64, fs: f64) -> f64 {
+    let w = TAU * hz / fs;
+    let (c1, s1, c2, s2) = (w.cos(), w.sin(), (2. * w).cos(), (2. * w).sin());
+    eq_coefs(v, fs).iter().map(|c| {
+        let (nr, ni) = (c[0] + c[1] * c1 + c[2] * c2, c[1] * s1 + c[2] * s2);
+        let (dr, di) = (1. + c[3] * c1 + c[4] * c2, c[3] * s1 + c[4] * s2);
+        10. * ((nr * nr + ni * ni) / (dr * dr + di * di).max(1e-18)).log10()
+    }).sum()
+}
 #[inline]
 fn biquad(c: &[f64; 5], z: &mut [f64; 4], x: f64) -> f64 {
     let y = c[0] * x + c[1] * z[0] + c[2] * z[1] - c[3] * z[2] - c[4] * z[3];
@@ -410,7 +433,7 @@ impl WaveSynth {
             v.from = from; v.midi = m.midi; v.t0 = m.at; v.sends = m.sends; v.key = m.key; v.age = frame; v.amp = m.amp;
             v.vel = m.vel.clamp(0., 1.); v.glide_t = gt; v.off_at = m.at + m.hold.max(cp.val[P_GATE]) * fs;
             self.slots[si].last = Some(m.midi);
-            if cp.mode == 1 || !held { for o in &mut v.osc { o.env.st = 1; o.fenv.st = 1; } for e in &mut v.envs { e.st = 1; } }
+            if cp.mode == 1 || !held { for o in &mut v.osc { o.env.st = 1; o.fenv.st = 1; } for e in &mut v.envs { e.st = 1; } v.aenv.st = 1; }
             v.released = false;
             return;
         } }
@@ -435,6 +458,7 @@ impl WaveSynth {
             for j in 0..8 { o.ph[j] = ph + if j > 0 { r[1 + i * 7 + j - 1] } else { 0. }; }
         }
         for e in &mut v.envs { *e = Env { st: 1, lv: 0. }; }
+        v.aenv = Env { st: 1, lv: 0. };
         for i in 0..WAVE_LFOS { v.lfo[i] = LfoState { ph: 0., held: r[22 + i * 2], prev: r[23 + i * 2] }; }
         v.sub_ph = 0.;
     }
@@ -527,6 +551,15 @@ impl WaveSynth {
             let params = wave_params();
             for &d in &cp.modded { v.vals[d as usize] = wave_denorm(&params[d as usize], v.vals[d as usize]); }
         }
+        // the global envelope stands in for the oscillators' own: they open at once and stay open under it
+        if cp.amp_on {
+            for i in 0..WAVE_OSCS {
+                let b = i * OSC_N;
+                v.vals[b + O_A] = 0.; v.vals[b + O_S] = 1.;
+                let e = &mut v.osc[i].env;
+                if e.st >= 2 { *e = Env { st: 3, lv: 1. }; }
+            }
+        }
         for i in 0..WAVE_LFOS {
             let nph = v.lfo[i].ph + lfo_rate(&v.vals, i) * n as f64 / fs;
             if nph >= 1. { v.lfo[i].prev = v.lfo[i].held; v.lfo[i].held = self.rng.next(); }
@@ -548,7 +581,8 @@ impl WaveSynth {
         if sub_l > 0. || nz_l > 0. {
             let sinc = hz(midi + 12. * v.vals[P_SUBOCT]) / fs;
             let ca = 1. - (-TAU * (0.45 * fs).min(200. * 2f64.powf(v.vals[P_COLOR] * 7.)) / fs).exp();
-            let q0 = v.envs[0].lv; let q1 = env_skip(&mut v.envs[0], &c0, s1, n); let dq = (q1 - q0) / n as f64;
+            let q0 = v.envs[0].lv; let q1 = env_skip(&mut v.envs[0], &c0, s1, n);
+            let (q0, dq) = if cp.amp_on { (1., 0.) } else { (q0, (q1 - q0) / n as f64) };
             let rng = &mut self.rng;
             for k in 0..n {
                 let e = q0 + dq * (k + 1) as f64;
@@ -560,6 +594,14 @@ impl WaveSynth {
         } else { env_skip(&mut v.envs[0], &c0, s1, n); }
         v.sub_ph = sp; v.nz = nz;
         if (sub_l > 0. || nz_l > 0.) && v.envs[0].st != 0 { alive = true; }
+        if cp.amp_on {
+            let (a, d, su, r) = (v.vals[P_AMP0], v.vals[P_AMP0 + 1], v.vals[P_AMP0 + 2], v.vals[P_AMP0 + 3]);
+            env_coefs(&mut v.aec, a, d, r, fs);
+            let c = v.aec;
+            let q0 = v.aenv.lv; let q1 = env_skip(&mut v.aenv, &c, su, n); let dq = (q1 - q0) / n as f64;
+            for k in 0..n { let e = q0 + dq * (k + 1) as f64; self.sc.mix_l[k] *= e; self.sc.mix_r[k] *= e; }
+            alive = v.aenv.st != 0;
+        }
         // the voice's level, the room's distance darkening and its place in the stereo field
         let amp = v.amp * v.vals[P_VOL] * 0.25;
         let pa = (v.pan.clamp(-1., 1.) + 1.) * PI / 4.;
@@ -599,6 +641,7 @@ fn release(v: &mut Voice) {
     v.released = true;
     for o in &mut v.osc { if o.env.st != 0 { o.env.st = 4; } if o.fenv.st != 0 { o.fenv.st = 4; } }
     for e in &mut v.envs { if e.st != 0 { e.st = 4; } }
+    if v.aenv.st != 0 { v.aenv.st = 4; }
 }
 /// the voice's pitch now, partway along its glide
 fn pitch(v: &Voice, at: f64, fs: f64) -> f64 {
@@ -749,7 +792,7 @@ fn osc(v: &mut Voice, cp: &CompiledPatch, sc: &mut Scratch, streams: &mut f64, u
 #[allow(clippy::too_many_arguments)]
 fn run_fx(cp: &CompiledPatch, v: &mut [f64; NP], mac: &[f64; WAVE_MACROS], st: &mut FxState, l: &mut [f32], r: &mut [f32], bpm: f64, fs: f64) {
     // FX knobs take the macros' routes (a rack is shared by every voice, so per-note sources do not reach it)
-    for i in P_FX0..NP { v[i] = cp.base[i]; }
+    for i in P_FX0..P_FX_END { v[i] = cp.base[i]; }
     for rt in &cp.routes {
         let r = rt;
         if r.s >= SRC_MAC0 && r.s < SRC_MAC0 + WAVE_MACROS && is_fx_param(r.d) {
@@ -759,7 +802,7 @@ fn run_fx(cp: &CompiledPatch, v: &mut [f64; NP], mac: &[f64; WAVE_MACROS], st: &
         }
     }
     let params = wave_params();
-    for i in P_FX0..NP { v[i] = wave_denorm(&params[i], v[i]); }
+    for i in P_FX0..P_FX_END { v[i] = wave_denorm(&params[i], v[i]); }
     for &k in &cp.fx_order {
         let k = k as usize;
         if !cp.fx_on[k] { continue; }
@@ -847,13 +890,15 @@ fn fx_delay(cp: &CompiledPatch, v: &[f64; NP], st: &mut FxState, l: &mut Buf, r:
     }
 }
 fn fx_eq(v: &[f64; NP], st: &mut FxState, l: &mut Buf, r: &mut Buf, fs: f64) {
-    let (lo, hi) = (v[EQ_LOW], v[EQ_HIGH]);
-    let key = ((lo * 100.).round() as i64, (hi * 100.).round() as i64);
-    if key != st.eq_key { st.eq_key = key; st.eqc = [shelf(200., lo, fs, false), shelf(4000., hi, fs, true)]; }
-    let [z0, z1, z2, z3] = &mut st.eq;
-    for s in 0..l.len() {
-        l[s] = biquad(&st.eqc[1], z2, biquad(&st.eqc[0], z0, l[s] as f64)) as f32;
-        r[s] = biquad(&st.eqc[1], z3, biquad(&st.eqc[0], z1, r[s] as f64)) as f32;
+    const GAINS: [usize; 4] = [EQ_LOW, EQ_M1, EQ_M2, EQ_HIGH];
+    let q = |x: f64| (x * 100.).round() as i64;
+    let key = [q(v[EQ_LOW]), q(v[EQ_M1]), q(v[EQ_M2]), q(v[EQ_HIGH]), q(v[EQ_LOWF]), q(v[EQ_M1F]), q(v[EQ_M2F]), q(v[EQ_HIGHF]), q(v[EQ_M1Q]), q(v[EQ_M2Q])];
+    if key != st.eq_key { st.eq_key = key; st.eqc = eq_coefs(v, fs); }
+    for b in 0..4 {
+        if v[GAINS[b]] == 0. { continue; }
+        let c = st.eqc[b];
+        let (zl, zr) = st.eq[2 * b..2 * b + 2].split_at_mut(1);
+        for s in 0..l.len() { l[s] = biquad(&c, &mut zl[0], l[s] as f64) as f32; r[s] = biquad(&c, &mut zr[0], r[s] as f64) as f32; }
     }
 }
 fn fx_comp(v: &[f64; NP], st: &mut FxState, l: &mut Buf, r: &mut Buf, fs: f64) {
