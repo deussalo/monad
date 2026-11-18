@@ -14,6 +14,10 @@ pub extern "system" fn Java_help_techmate_cogs_Native_midi(_env: JNIEnv, _c: JCl
     if let (Some(sh), Some(m)) = (SHARED.get(), midi::decode(st as u8, d1 as u8, d2 as u8)) { sh.midi(m) }
 }
 
+/// The activity came to the front: a moment the fast path may be had.
+#[no_mangle]
+pub extern "system" fn Java_help_techmate_cogs_Native_resumed(_env: JNIEnv, _c: JClass) { aaudio::RESUMED.store(true, std::sync::atomic::Ordering::Relaxed) }
+
 #[no_mangle]
 pub extern "system" fn Java_help_techmate_cogs_Native_status(mut env: JNIEnv, _c: JClass, text: JString, _connected: jboolean) {
     if let (Some(s), Ok(t)) = (STATUS.get(), env.get_string(&text)) { if let Ok(mut s) = s.lock() { *s = t.into() } }
@@ -97,26 +101,9 @@ fn android_main(app: AndroidApp) {
     let (sh, render) = play::start(world, sr);
     let _ = SHARED.set(sh.clone());
     if opts.stats || opts.probe { aaudio::log_stats(sh.clone()) }
-    let held: Arc<Mutex<Option<aaudio::Stream>>> = Arc::new(Mutex::new(None));
-    if opts.probe {
-        // again with the window up and the app in front, with nothing else of ours open; the real stream after that
-        drop(stream);
-        let (h, s, o, st) = (held.clone(), sh.clone(), opts.clone(), status.clone());
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(3));
-            aaudio::probe("late", &o);
-            log::info!("audio probe done");
-            match aaudio::open_best(&o, Some(sr as i32)).and_then(|x| x.start(render, s, o.bursts)) {
-                Some(x) => *h.lock().unwrap() = Some(x),
-                None => *st.lock().unwrap() = "Audio failed to open".into(),
-            }
-        });
-    } else {
-        match stream.and_then(|x| x.start(render, sh.clone(), opts.bursts)) {
-            Some(x) => *held.lock().unwrap() = Some(x),
-            None => *status.lock().unwrap() = "Audio failed to open".into(),
-        }
-    }
+    let st = status.clone();
+    let first = if opts.probe { drop(stream); None } else { stream };
+    let audio = aaudio::supervise(first, render, sh.clone(), opts, sr as i32, move || { if let Ok(mut s) = st.lock() { *s = "Audio failed to open".into() } });
     let connect = Box::new(move || call_activity(vm, act, "connectMidi", "()V", &[]));
     let open_file: Box<dyn Fn()> = Box::new(move || call_activity(vm, act, "openFile", "()V", &[]));
     let save_file: Box<dyn Fn(&str, &str)> = Box::new(move |name, text| {
@@ -126,7 +113,9 @@ fn android_main(app: AndroidApp) {
         let act = unsafe { JObject::from_raw(act as jni::sys::jobject) };
         if let Err(e) = env.call_method(&act, "saveFile", "(Ljava/lang/String;Ljava/lang/String;)V", &[(&n).into(), (&t).into()]) { log::error!("saveFile: {e}") }
     });
+    let sh_end = sh.clone();
     let opts = eframe::NativeOptions { android_app: Some(app), ..Default::default() };
     let _ = eframe::run_native("cogs", opts, Box::new(move |_cc| { let mut a = ui::App::new(sh, status, connect); a.data = data; a.open_file = Some(open_file); a.save_file = Some(save_file); Ok(Box::new(a)) }));
-    drop(held);
+    sh_end.running.store(false, std::sync::atomic::Ordering::Relaxed);
+    let _ = audio.join();
 }

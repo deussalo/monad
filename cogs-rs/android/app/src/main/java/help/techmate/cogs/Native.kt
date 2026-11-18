@@ -4,6 +4,8 @@ package help.techmate.cogs
 object Native {
     @JvmStatic external fun midi(status: Int, d1: Int, d2: Int)
     @JvmStatic external fun status(text: String, connected: Boolean)
+    /** The activity came to the front. */
+    @JvmStatic external fun resumed()
     /** A file the user picked to open, as text (null: cancelled or unreadable, with why). */
     @JvmStatic external fun fileText(text: String?, error: String?)
 }

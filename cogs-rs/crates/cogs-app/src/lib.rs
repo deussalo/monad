@@ -3,6 +3,7 @@
 //! it never waits on.
 pub mod midi;
 pub mod play;
+pub mod out;
 #[cfg(feature = "gui")]
 pub mod rec;
 #[cfg(feature = "gui")]
