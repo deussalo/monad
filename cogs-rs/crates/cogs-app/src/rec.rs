@@ -6,8 +6,7 @@ use cogs_sim::{scale_ix, scale_note, Dot, World, SCALES};
 use std::collections::HashMap;
 use std::f64::consts::{PI, TAU};
 
-#[derive(Clone, Copy, Debug)]
-pub struct RecEv { pub on: bool, pub note: u8, pub vel: u8, pub at: f64 }
+pub use crate::play::RecEv;
 
 const MIN_LEN: f64 = 1. / 16.;
 const TOP_RANGE: f64 = 3.;

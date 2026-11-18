@@ -929,11 +929,6 @@ impl Stage {
             if ui.button("open file").clicked() {
                 self.out.push(StageOut::OpenFile);
             }
-            // the app's own panel: shipped worlds, the keyboard, audio readouts
-            if ui.button("worlds & audio").clicked() {
-                self.sheet = None;
-                self.out.push(StageOut::TogglePanel);
-            }
         });
         if let Some(m) = &self.file_msg {
             ui.label(RichText::new(m).color(DIM));

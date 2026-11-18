@@ -45,7 +45,14 @@ impl App {
     }
     fn load(&mut self, i: usize) {
         let Ok(nw) = World::from_str(crate::WORLDS[i].1) else { return };
-        if let Ok(mut w) = self.sh.world.lock() { let paused = w.clock.paused; *w = nw; w.set_paused(paused); self.stage.loaded(&w); }
+        let mut nw = nw;
+        if let Ok(mut w) = self.sh.world.lock() {
+            // the new world's voices start their versions past the old ones', so the sync thread recompiles every
+            // patch even where a part id is reused
+            let base = w.pads.iter().map(|o| o.voice.ver).chain(w.readers.iter().map(|o| o.voice.ver)).chain(w.pits.iter().map(|o| o.voice.ver)).max().unwrap_or(0).wrapping_add(1);
+            for v in nw.pads.iter_mut().map(|o| &mut o.voice).chain(nw.readers.iter_mut().map(|o| &mut o.voice)).chain(nw.pits.iter_mut().map(|o| &mut o.voice)) { v.ver = v.ver.wrapping_add(base) }
+            let paused = w.clock.paused; *w = nw; w.set_paused(paused); self.stage.loaded(&w);
+        }
         self.world_ix = i; self.fitted = false; self.sh.midi_part.store(0, Relaxed); self.editor = None;
         self.save_at = Some(0.0);
     }
@@ -101,16 +108,36 @@ impl eframe::App for App {
         let io = StageIo { heard: self.sh.heard(), safe_top: 28.0, safe_bottom: 16.0, busy: self.panel || self.editor.is_some(), recording: self.rec.is_some(), can_record: self.can_record,
             midi_label: Some(if connected { "keyboard" } else { "MIDI" }), midi_connected: connected };
         let mut outs = Vec::new();
+        let mut load_req = None;
         crate::wave_ui::strip_foreign(&ctx, &mut self.foreign);
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
             if let Ok(mut w) = self.sh.world.lock() {
                 if !self.fitted { self.stage.fit_now(&mut w, ui.max_rect().size(), &io); self.fitted = true }
-                outs = self.stage.show(ui, &mut w, &io);
+                // the app's rows in the stage's panel: the keyboard, the shipped worlds, audio readouts
+                let (sh, status, ix) = (self.sh.clone(), self.status.clone(), self.world_ix);
+                let mut connect = false;
+                let load = &mut load_req;
+                outs = self.stage.show_with(ui, &mut w, &io, &mut |ui, _w| {
+                    let m = &sh.meters;
+                    ui.label(egui::RichText::new(status.lock().map(|s| s.clone()).unwrap_or_default()).size(12.0));
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.add_sized([150.0, 40.0], egui::Button::new("connect keyboard")).clicked() { connect = true }
+                        for (i, (name, _)) in crate::WORLDS.iter().enumerate() {
+                            if ui.add_sized([0.0, 40.0], egui::Button::new(*name).selected(i == ix)).clicked() { *load = Some(i) }
+                        }
+                    });
+                    let sr = m.sample_rate.load(Relaxed).max(1) as f32;
+                    ui.label(egui::RichText::new(format!("audio {} Hz · buffer {:.1} ms · out {:.1} ms · glitches {} · busy {}% · keys {} · notes {}",
+                        sr as u32, m.buffer.load(Relaxed) as f32 / sr * 1000.0, m.latency_us.load(Relaxed) as f32 / 1000.0, m.xruns.load(Relaxed),
+                        m.busy.load(Relaxed), m.notes.load(Relaxed), m.events.load(Relaxed))).size(11.0));
+                });
+                if connect { (self.connect)() }
                 if let Some(p) = Self::keyboard_part(&w, self.stage.sel) { self.sh.midi_part.store(p, Relaxed) }
                 self.can_record = rec::target(&w, self.stage.sel).map_or(false, |(_, r)| r.is_some());
                 if let Some(r) = &self.rec { self.sh.midi_part.store(r.reader, Relaxed) }
             }
         });
+        if let Some(i) = load_req { self.load(i) }
         for o in outs {
             match o {
                 StageOut::ConnectMidi => (self.connect)(),
