@@ -100,8 +100,20 @@ pub struct Render {
 const MIDI_KEY: u32 = 0x4000_0000;
 
 /// Make the threads' plumbing and the engine (slow: wavetables and buffers; call it off the audio thread), and start
-/// the sync thread. `latency` reads the platform's output latency in seconds, for what is heard now.
+/// the sync thread.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn start(world: World, sr: f32) -> (Arc<Shared>, Render) {
+    let (sh, render, mut sync) = parts(world, sr);
+    let s2 = sh.clone();
+    std::thread::Builder::new().name("cogs-sync".into()).spawn(move || {
+        while s2.running.load(Relaxed) { sync.step(&s2); std::thread::sleep(std::time::Duration::from_millis(20)); }
+    }).ok();
+    (sh, render)
+}
+
+/// The plumbing, the engine and the sync step, without a thread: where there are no threads (the web's audio
+/// worklet) the audio side calls `Sync::step` itself every 20 ms or so.
+pub fn parts(world: World, sr: f32) -> (Arc<Shared>, Render, Sync) {
     let (mp, mc) = RingBuffer::new(1024);
     let (cp, cc) = RingBuffer::new(4096);
     let (dp, dc) = RingBuffer::new(256);
@@ -110,11 +122,9 @@ pub fn start(world: World, sr: f32) -> (Arc<Shared>, Render) {
         velcurve: AtomicU32::new((velcurve as f32).to_bits()), midi_tx: Mutex::new(mp), running: AtomicBool::new(true) });
     // Room for the busiest shipped world: every field with its reverb, and plenty of synth racks.
     let engine = Engine::with_config(sr, cogs_dsp::EngineConfig { parts: 96, rack_delays: 24, rack_verbs: 12, field_verbs: 8, modal_voices: 64, drum_voices: 64 });
-    let s2 = sh.clone();
-    std::thread::Builder::new().name("cogs-sync".into()).spawn(move || sync(s2, cp, dc, sr as f64)).ok();
     let render = Render { sh: sh.clone(), engine, midi: mc, ctl: cc, dead: dp, parts: HashMap::with_capacity(512), sr: sr as f64, owed: 0., held: [0; 128],
         sustain: false, sustained: [false; 128], listen: Listen::default(), velcurve };
-    (sh, render)
+    (sh, render, Sync::new(cp, dc))
 }
 
 /// The patch a wave voice means. A save from the HTML build carries the whole patch; a new part carries only its preset.
@@ -140,14 +150,34 @@ pub fn wave_patch(raw: &serde_json::Map<String, Value>) -> WavePatch {
 fn num(j: &Value, k: &str) -> f64 { j.get(k).and_then(|v| v.as_f64()).unwrap_or(0.) }
 fn num_m(j: &serde_json::Map<String, Value>, k: &str) -> f64 { j.get(k).and_then(|v| v.as_f64()).unwrap_or(0.) }
 
-/// The sync thread: every 20 ms, what changed in the world goes to the audio thread, ready to use.
-fn sync(sh: Arc<Shared>, mut tx: Producer<Ctl>, mut dead: Consumer<Arc<CompiledPatch>>, sr: f64) {
-    let mut vers: HashMap<u32, (u32, VoiceKind)> = HashMap::new();
-    let mut compiled: HashMap<u32, Arc<CompiledPatch>> = HashMap::new();
-    let (mut space, mut climax, mut master, mut bpm, mut listen_e) = (String::new(), String::new(), f64::NAN, f64::NAN, f32::NAN);
-    let mut fields: HashMap<i32, String> = HashMap::new();
-    let mut motions: HashMap<(u32, u8), (u64, f64, f64, f64, f64, f64)> = HashMap::new();
-    while sh.running.load(Relaxed) {
+/// The sync step: what changed in the world since the last step goes to the audio thread, ready to use. On a thread
+/// every 20 ms (`start`), or called by the audio side where there are no threads.
+pub struct Sync {
+    tx: Producer<Ctl>,
+    dead: Consumer<Arc<CompiledPatch>>,
+    vers: HashMap<u32, (u32, VoiceKind)>,
+    compiled: HashMap<u32, Arc<CompiledPatch>>,
+    space: String, climax: String, master: f64, bpm: f64, listen_e: f32,
+    fields: HashMap<i32, String>,
+    motions: HashMap<(u32, u8), (u64, f64, f64, f64, f64, f64)>,
+    /// what did not fit in the ring last step
+    backlog: std::collections::VecDeque<Ctl>,
+}
+impl Sync {
+    fn new(tx: Producer<Ctl>, dead: Consumer<Arc<CompiledPatch>>) -> Self {
+        Sync { tx, dead, vers: HashMap::new(), compiled: HashMap::new(), space: String::new(), climax: String::new(), master: f64::NAN, bpm: f64::NAN,
+            listen_e: f32::NAN, fields: HashMap::new(), motions: HashMap::new(), backlog: Default::default() }
+    }
+    /// Forget what was sent, so the next step sends everything again (a world replaced whole, whose voices' `ver`
+    /// counts start over).
+    pub fn forget(&mut self) {
+        self.vers.clear(); self.space.clear(); self.climax.clear(); self.master = f64::NAN; self.bpm = f64::NAN; self.listen_e = f32::NAN;
+        self.fields.clear(); self.motions.clear();
+    }
+    pub fn step(&mut self, sh: &Shared) {
+        let Sync { tx, dead, vers, compiled, space, climax, master, bpm, listen_e, fields, motions, backlog } = self;
+        let (vers, compiled, space, climax, master, bpm, listen_e, fields, motions) = (vers, compiled, space, climax, master, bpm, listen_e, fields, motions);
+        {
         while dead.pop().is_ok() {}
         // Copy what changed under the lock; compile after letting go.
         let mut voices: Vec<(u32, VoiceKind, serde_json::Map<String, Value>, f64, f64, Option<(bool, f64, f64, f64)>)> = Vec::new();
@@ -170,11 +200,11 @@ fn sync(sh: Arc<Shared>, mut tx: Producer<Ctl>, mut dead: Consumer<Arc<CompiledP
                     cmds.push(Ctl::Prep(s.id, Prep::Str { bar: s.kind == "bar", decay: s.decay, damp: s.damp, hard: s.hard, level: s.level as f32, vel_sense: s.vel_sense as f32 })) }
             }
             let sp = serde_json::to_string(&w.space).unwrap_or_default();
-            if sp != space { cmds.push(Ctl::Cmd(Cmd::Space(cogs_dsp::SpaceParams::from_json(&Value::Object(w.space.clone()))))); space = sp }
+            if sp != *space { cmds.push(Ctl::Cmd(Cmd::Space(cogs_dsp::SpaceParams::from_json(&Value::Object(w.space.clone()))))); *space = sp }
             let cl = serde_json::to_string(&w.climax).unwrap_or_default();
-            if cl != climax { cmds.push(Ctl::Cmd(Cmd::Climax(ClimaxParams::from_json(&Value::Object(w.climax.clone()))))); climax = cl }
-            if w.s.master != master { master = w.s.master; cmds.push(Ctl::Cmd(Cmd::Master { level: master as f32 })) }
-            if w.s.bpm != bpm { bpm = w.s.bpm; cmds.push(Ctl::Cmd(Cmd::Tempo { bpm: bpm as f32 })) }
+            if cl != *climax { cmds.push(Ctl::Cmd(Cmd::Climax(ClimaxParams::from_json(&Value::Object(w.climax.clone()))))); *climax = cl }
+            if w.s.master != *master { *master = w.s.master; cmds.push(Ctl::Cmd(Cmd::Master { level: *master as f32 })) }
+            if w.s.bpm != *bpm { *bpm = w.s.bpm; cmds.push(Ctl::Cmd(Cmd::Tempo { bpm: *bpm as f32 })) }
             for f in &w.fields {
                 if f.slot < 0 { continue }
                 let j = cogs_sim::field::field_out(f); let s = j.to_string();
@@ -193,7 +223,7 @@ fn sync(sh: Arc<Shared>, mut tx: Producer<Ctl>, mut dead: Consumer<Arc<CompiledP
             });
             motions.retain(|k, _| { let keep = seen.contains(k); if !keep { cmds.push(Ctl::Motion(k.0, k.1, None)) } keep });
         }
-        if let Ok(l) = sh.listen.lock() { if l.e != listen_e { listen_e = l.e; cmds.push(Ctl::Cmd(Cmd::Listen { e: l.e })) } }
+        if let Ok(l) = sh.listen.lock() { if l.e != *listen_e { *listen_e = l.e; cmds.push(Ctl::Cmd(Cmd::Listen { e: l.e })) } }
         let gone: Vec<u32> = vers.keys().copied().filter(|id| !present.contains(id)).collect();
         for id in gone { vers.remove(&id); compiled.remove(&id); cmds.push(Ctl::Remove(id)) }
         for (id, kind, raw, level, vs, _) in voices {
@@ -210,9 +240,11 @@ fn sync(sh: Arc<Shared>, mut tx: Producer<Ctl>, mut dead: Consumer<Arc<CompiledP
                 _ => if let Some(d) = DrumVoice::from_json(&j) { cmds.push(Ctl::Prep(id, Prep::Drum { voice: d, level, vel_sense })) },
             }
         }
-        for c in cmds { let mut c = c; loop { match tx.push(c) { Ok(()) => break, Err(rtrb::PushError::Full(back)) => { c = back; std::thread::sleep(std::time::Duration::from_millis(2)) } } } }
-        let _ = sr;
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        backlog.extend(cmds);
+        while let Some(c) = backlog.pop_front() {
+            if let Err(rtrb::PushError::Full(back)) = tx.push(c) { backlog.push_front(back); break }
+        }
+        }
     }
 }
 
@@ -279,6 +311,9 @@ impl Render {
         self.held[note as usize] = 0; self.sustained[note as usize] = false;
         self.engine.command(Cmd::Off { at, key: k });
     }
+
+    /// Voices sounding now, every kind.
+    pub fn voices(&self) -> usize { let s = self.engine.stats(); s.wave_voices + s.modal_voices + s.drum_voices }
 
     pub fn block(&mut self, l: &mut [f32], r: &mut [f32], latency: f64) {
         let n = l.len();

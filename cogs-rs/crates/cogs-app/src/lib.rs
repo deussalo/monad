@@ -3,10 +3,15 @@
 //! it never waits on.
 pub mod midi;
 pub mod play;
+#[cfg(feature = "gui")]
 pub mod stage;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "gui", target_os = "android"))]
 pub mod ui;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "gui", target_arch = "wasm32"))]
+pub mod web;
+/// The bridge between the web page's UI and its audio worklet: the messages both sides speak.
+pub mod link;
+#[cfg(all(feature = "gui", target_os = "android"))]
 mod android;
 
 /// The worlds that ship with the app.

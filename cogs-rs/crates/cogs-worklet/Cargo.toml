@@ -1,0 +1,12 @@
+[package]
+name = "cogs-worklet"
+edition.workspace = true
+version.workspace = true
+
+# The web build's sound: the machine and the engine, for an AudioWorklet. A bare wasm module (no wasm-bindgen: the
+# worklet scope has no TextDecoder and the like), driven by web/worklet.js through the exports in lib.rs.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+cogs-app = { path = "../cogs-app", default-features = false }
