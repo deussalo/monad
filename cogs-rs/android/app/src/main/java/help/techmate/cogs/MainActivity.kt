@@ -29,6 +29,7 @@ import kotlin.math.roundToInt
 class MainActivity : NativeActivity(), MidiHub.Listener {
     private lateinit var hub: MidiHub
     private var picker = false
+    private var hadFocus = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         System.loadLibrary("cogs")
@@ -60,11 +61,16 @@ class MainActivity : NativeActivity(), MidiHub.Listener {
     override fun onPause() {
         Native.lifecycle(2)
         // leaving, not just a file picker of ours in front: the sound goes on under a foreground service
-        if (!picker && !isFinishing) PlaybackService.left(this)
+        if (hadFocus && !picker && !isFinishing) PlaybackService.left(this)
         super.onPause()
     }
     @Deprecated("Deprecated in Java")
     override fun startActivityForResult(intent: Intent?, requestCode: Int) { picker = true; super.startActivityForResult(intent, requestCode) }
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // the first time the user can actually see the app: until then it makes no sound and starts no service
+        if (hasFocus && !hadFocus) { hadFocus = true; Native.lifecycle(5) }
+    }
     override fun onStart() { super.onStart(); Native.lifecycle(3) }
     override fun onStop() { Native.lifecycle(4); super.onStop() }
 

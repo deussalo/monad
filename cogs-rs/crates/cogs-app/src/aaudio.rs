@@ -44,6 +44,9 @@
 //! worse, so from pause until two seconds after resume the stream buffer is at its deepest and the ring holds 150 ms,
 //! rendered in bursts so the thread wakes rarely. Coming back, the ring plays down to its normal depth by itself:
 //! nothing is skipped or repeated. Out of sight and paused, the stream is closed and everything idles until play or return.
+//!
+//! Nothing sounds until the window has had focus once, so a launch nobody can see (behind the lock screen) stays silent:
+//! the stream waits briefly for it, then closes and the audio idles until the window does get focus.
 use crate::out::{Handoff, Ladder, Move, Out, Source};
 use crate::play::{self, Render, Shared};
 use rtrb::{Consumer, Producer, RingBuffer};
@@ -625,9 +628,14 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
             if s.begin() { log::info!("audio started at {:.2} s: buffer {} frames ({:.1} ms) on {}", since(), s.info.buffer, s.info.buffer as f64 * 1000. / s.info.rate.max(1) as f64, s.info.line()); Ok(s) }
             else { Err(s.take_live().expect("the machine was just put here")) }
         };
+        // the first sound waits for the window (a normal launch has it within moments)
+        let seen = || o.probe || FOCUSED.load(Relaxed);
+        while !seen() && since() < 1.5 && sh.running.load(Relaxed) { std::thread::park_timeout(std::time::Duration::from_millis(50)) }
         let mut running: Option<Stream> = None;
-        if let Some(s) = cur.take() { match start(s, live.take().unwrap()) { Ok(s) => running = Some(s), Err(l) => live = Some(l) } }
-        if running.is_none() { on_fail() }
+        if seen() {
+            if let Some(s) = cur.take() { match start(s, live.take().unwrap()) { Ok(s) => running = Some(s), Err(l) => live = Some(l) } }
+            if running.is_none() { on_fail() }
+        } else { drop(cur.take()); log::info!("audio: no window focus yet, staying silent") }
         // when to try for the fast path again, seconds after launch
         let earliest = o.delay_ms.map_or(0., |d| d as f64 / 1000.);
         let mut tries: Vec<f64> = o.delay_ms.iter().map(|d| *d as f64 / 1000.).chain([1., 2., 4., 8.].into_iter().filter(|x| *x >= earliest)).collect();
@@ -651,7 +659,7 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
             let visible = VISIBLE.load(Relaxed);
             if sh.meters.peak_milli.load(Relaxed) > 0 { quiet_at = t }
             // park when out of sight and paused, once the tail has rung out (at once for Stop); wake on play or return
-            let park = !visible && paused && (stopping || t - quiet_at > 0.3 || t - paused_at > 5.);
+            let park = !seen() || !visible && paused && (stopping || t - quiet_at > 0.3 || t - paused_at > 5.);
             if park && !parked {
                 if let Some(s) = running.take() {
                     if stopping { s.stats.mute.store(true, Relaxed); std::thread::sleep(std::time::Duration::from_millis(30)) }
@@ -660,7 +668,7 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
                 parked = true; sh.idle.store(true, Relaxed);
                 if let Some((_, f, _)) = &worker { f.parked.store(true, Relaxed) }
                 log::info!("audio parked at {t:.2} s");
-            } else if parked && (visible || !paused) {
+            } else if parked && seen() && (visible || !paused) {
                 parked = false; stopping = false; sh.idle.store(false, Relaxed); reopen_at = 0.;
                 log::info!("audio waking at {t:.2} s");
             }
@@ -759,23 +767,25 @@ impl Tune {
 static RESUMED: AtomicBool = AtomicBool::new(false);
 static AWAY: AtomicBool = AtomicBool::new(false);
 static VISIBLE: AtomicBool = AtomicBool::new(true);
+static FOCUSED: AtomicBool = AtomicBool::new(false);
 static CONTROL: AtomicI32 = AtomicI32::new(0);
 static WAKER: std::sync::Mutex<Option<std::thread::Thread>> = std::sync::Mutex::new(None);
 fn wake_supervisor() { if let Some(t) = WAKER.lock().ok().and_then(|w| w.clone()) { t.unpark() } }
 /// The notification's and media session's buttons: 1 play, 2 pause, 3 stop.
 pub fn control(what: i32) { CONTROL.store(what, Relaxed); wake_supervisor() }
-/// The activity's lifecycle: 1 resume, 2 pause, 3 start, 4 stop.
+/// The activity's lifecycle: 1 resume, 2 pause, 3 start, 4 stop, 5 the window has focus for the first time.
 pub fn lifecycle(what: i32) {
     match what {
         1 => { AWAY.store(false, Relaxed); RESUMED.store(true, Relaxed) }
         2 => AWAY.store(true, Relaxed),
         3 => VISIBLE.store(true, Relaxed),
         4 => VISIBLE.store(false, Relaxed),
+        5 => FOCUSED.store(true, Relaxed),
         _ => {}
     }
     wake_supervisor();
     let x = CURRENT.lock().ok().and_then(|c| c.clone()).map_or(0, |s| s.xruns.load(Relaxed));
-    log::info!("audio lifecycle: {} (xruns so far {x})", ["?", "resume", "pause", "start", "stop"][what.clamp(0, 4) as usize]);
+    log::info!("audio lifecycle: {} (xruns so far {x})", ["?", "resume", "pause", "start", "stop", "first window focus"][what.clamp(0, 5) as usize]);
 }
 
 /// Every variant, opened and run silently for a moment; one log line each.

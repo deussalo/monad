@@ -12,10 +12,11 @@ static STATUS: OnceLock<Arc<Mutex<String>>> = OnceLock::new();
 
 #[no_mangle]
 pub extern "system" fn Java_help_techmate_cogs_Native_midi(_env: JNIEnv, _c: JClass, st: jint, d1: jint, d2: jint) {
-    if let (Ok(g), Some(m)) = (SHARED.lock(), midi::decode(st as u8, d1 as u8, d2 as u8)) { if let Some(sh) = g.as_ref() { sh.midi(m) } }
+    // parked, nothing would read it until the sound comes back, and it would all play at that moment
+    if let (Ok(g), Some(m)) = (SHARED.lock(), midi::decode(st as u8, d1 as u8, d2 as u8)) { if let Some(sh) = g.as_ref().filter(|s| !s.idle.load(Relaxed)) { sh.midi(m) } }
 }
 
-/// The activity's lifecycle (1 resume, 2 pause, 3 start, 4 stop), for the audio supervisor.
+/// The activity's lifecycle (1 resume, 2 pause, 3 start, 4 stop, 5 first window focus), for the audio supervisor.
 #[no_mangle]
 pub extern "system" fn Java_help_techmate_cogs_Native_lifecycle(_env: JNIEnv, _c: JClass, what: jint) { aaudio::lifecycle(what) }
 

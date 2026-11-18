@@ -4,7 +4,7 @@ package help.techmate.cogs
 object Native {
     @JvmStatic external fun midi(status: Int, d1: Int, d2: Int)
     @JvmStatic external fun status(text: String, connected: Boolean)
-    /** The activity's lifecycle: 1 resume, 2 pause, 3 start, 4 stop. */
+    /** The activity's lifecycle: 1 resume, 2 pause, 3 start, 4 stop, 5 first window focus. */
     @JvmStatic external fun lifecycle(what: Int)
     /** The machine is running (not paused). */
     @JvmStatic external fun playing(): Boolean
