@@ -25,6 +25,11 @@ pub struct Sheet {
     /// The grab being dragged: start y and how far.
     drag: Option<(f64, f64)>,
 }
+impl Sheet {
+    pub(super) fn dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+}
 
 /// Who a finger in a sheet belongs to.
 #[derive(Clone, Copy, PartialEq)]
@@ -53,6 +58,9 @@ const GRAB_H: f64 = 28.0;
 /// The notes sheet's two rows of tools.
 const HEAD_H: f64 = 96.0;
 const CHIPS_H: f64 = 40.0;
+/// The toolbars' small words, and what a tool that can't act now looks like: dimmed, still legible.
+const CAPTION: Color32 = Color32::from_rgb(0x9a, 0x9a, 0x9a);
+const DISABLED: Color32 = Color32::from_rgb(0x5c, 0x5c, 0x5c);
 
 /// The notes sheet's popovers.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -134,6 +142,8 @@ impl Stage {
     }
     pub fn close_sheet(&mut self) {
         self.sheet = None;
+        self.pop = None;
+        self.pop_rect = None;
     }
     pub fn sheet_open(&self) -> bool {
         self.sheet.as_ref().map_or(false, |s| !s.min)
@@ -144,7 +154,8 @@ impl Stage {
     pub(super) fn sheet_top(&self) -> Option<f64> {
         let s = self.sheet.as_ref()?;
         let full = match s.kind {
-            SheetKind::Notes => (0.14 * self.ch).max(self.safe_top),
+            // the roll takes the whole height: nothing useful could show in a strip above it
+            SheetKind::Notes => self.safe_top + 4.0,
             SheetKind::Panel => (0.28 * self.ch).max(self.safe_top + 120.0),
         };
         let strip = self.ch - self.strip_h(s.kind);
@@ -312,7 +323,11 @@ impl Stage {
 
     // ---------- drawing the sheet and its widgets ----------
     pub(super) fn show_sheet(&mut self, ui: &mut egui::Ui, w: &mut World, extra: &mut dyn FnMut(&mut egui::Ui, &mut World)) {
-        let Some(kind) = self.sheet.as_ref().map(|s| s.kind) else { return };
+        let Some(kind) = self.sheet.as_ref().map(|s| s.kind) else {
+            self.pop = None;
+            self.pop_rect = None;
+            return;
+        };
         if kind == SheetKind::Notes {
             match self.sel {
                 Some(Sel::Cog(c)) if w.cog(c).map_or(false, |c| c.track.is_some()) => {
@@ -340,7 +355,7 @@ impl Stage {
         let o = self.rect.min;
         let p = ui.painter().clone();
         if !min {
-            p.rect_filled(Rect::from_min_max(o, self.scr((self.cw, top))), 0.0, Color32::from_black_alpha(90));
+            p.rect_filled(Rect::from_min_max(o, self.scr((self.cw, top))), 0.0, Color32::from_black_alpha(if kind == SheetKind::Panel { 40 } else { 90 }));
         }
         let sheet = Rect::from_min_max(self.scr((0.0, top)), self.scr((self.cw, self.ch)));
         let round = if kind == SheetKind::Notes { 12 } else { 0 };
@@ -452,7 +467,7 @@ impl Stage {
             ui.painter().rect_filled(sr.shrink(2.0), 8.0, LINE);
         }
         ui.painter().text(sr.center() - vec2(0.0, 6.0), Align2::CENTER_CENTER, SNAPS[snap].3, FontId::proportional(15.0), HOT);
-        ui.painter().text(sr.center() + vec2(0.0, 11.0), Align2::CENTER_CENTER, "snap", FontId::proportional(10.0), DIM);
+        ui.painter().text(sr.center() + vec2(0.0, 13.0), Align2::CENTER_CENTER, "snap", FontId::proportional(11.0), CAPTION);
         if resp.clicked() {
             self.toggle_pop(Pop::Snap, sr);
         }
@@ -474,7 +489,7 @@ impl Stage {
                 Tool::Rec => "record",
                 _ => "more",
             };
-            ui.painter().text(r.center() + vec2(0.0, 13.0), Align2::CENTER_CENTER, cap, FontId::proportional(10.0), if *on { HOT } else { DIM });
+            ui.painter().text(r.center() + vec2(0.0, 13.0), Align2::CENTER_CENTER, cap, FontId::proportional(11.0), if *on { HOT } else { CAPTION });
             if resp.clicked() {
                 self.buzz(6);
                 match tool {
@@ -503,7 +518,8 @@ impl Stage {
         for (i, (tool, enabled)) in row2.iter().enumerate() {
             let r = Rect::from_min_size(self.scr((left + i as f64 * bw2, y + 48.0)), vec2(bw2 as f32, 44.0));
             let resp = ui.interact(r, ui.scope_id().with(("edit", i)), egui::Sense::click());
-            self.paint_tool(ui.painter(), *tool, r, false, *enabled);
+            self.paint_tool(ui.painter(), *tool, r.translate(vec2(0.0, -6.0)), false, *enabled);
+            self.tool_caption(ui.painter(), *tool, r, *enabled);
             if resp.clicked() && *enabled {
                 self.buzz(6);
                 if let Some(rl) = &mut self.roll {
@@ -523,7 +539,8 @@ impl Stage {
         for (j, (tool, enabled)) in right.iter().enumerate() {
             let r = Rect::from_min_size(self.scr((left + width - bw2 * (3 - j) as f64, y + 48.0)), vec2(bw2 as f32, 44.0));
             let resp = ui.interact(r, ui.scope_id().with(("right", j)), egui::Sense::click());
-            self.paint_tool(ui.painter(), *tool, r, false, *enabled);
+            self.paint_tool(ui.painter(), *tool, r.translate(vec2(0.0, -6.0)), false, *enabled);
+            self.tool_caption(ui.painter(), *tool, r, *enabled);
             if resp.clicked() && *enabled {
                 self.buzz(6);
                 match tool {
@@ -539,8 +556,21 @@ impl Stage {
         changed
     }
 
+    fn tool_caption(&self, p: &egui::Painter, tool: Tool, r: Rect, enabled: bool) {
+        let cap = match tool {
+            Tool::Dup => "clone",
+            Tool::Copy => "copy",
+            Tool::Paste => "paste",
+            Tool::Delete => "delete",
+            Tool::Undo => "undo",
+            Tool::Redo => "redo",
+            _ => "close",
+        };
+        p.text(r.center() + vec2(0.0, 13.0), Align2::CENTER_CENTER, cap, FontId::proportional(11.0), if enabled { CAPTION } else { DISABLED });
+    }
+
     fn paint_tool(&mut self, p: &egui::Painter, tool: Tool, r: Rect, on: bool, enabled: bool) {
-        let ink = if !enabled { alpha(FAINT, 1.0) } else if on { HOT } else { FG };
+        let ink = if !enabled { DISABLED } else if on { HOT } else { FG };
         let c = r.center();
         let ir = Rect::from_center_size(c, vec2(20.0, 20.0));
         let stroke = Stroke::new(1.6, ink);
@@ -837,7 +867,7 @@ impl Stage {
         if min {
             return;
         }
-        let area = Rect::from_min_max(self.scr((6.0, top + GRAB_H)), self.scr((self.cw - 6.0, self.ch - INTERACTION_H as f64 - self.safe_bot)));
+        let area = Rect::from_min_max(self.scr((16.0, top + GRAB_H)), self.scr((self.cw - 16.0, self.ch - INTERACTION_H as f64 - self.safe_bot)));
         let mut cui = ui.new_child(egui::UiBuilder::new().max_rect(area));
         egui::ScrollArea::vertical().id_salt("panel").max_height(area.height()).show(&mut cui, |ui| {
             ui.set_width(area.width() - 4.0);
@@ -848,10 +878,14 @@ impl Stage {
         let mut changed = false;
         let mut structural = false;
         ui.style_mut().spacing.slider_width = (ui.available_width() - 190.0).max(100.0);
-        legend(ui, "transport");
         ui.horizontal_wrapped(|ui| {
             if ui.button("close").clicked() {
-                self.sheet = None;
+                self.close_sheet();
+            }
+            if ui.button(if w.clock.paused { "play" } else { "pause" }).clicked() {
+                let p = !w.clock.paused;
+                let from_start = w.set_paused(p);
+                self.out.push(StageOut::Paused { paused: p, from_start });
             }
             if ui.add_enabled(self.edits.can_undo(), egui::Button::new("undo")).clicked() {
                 self.undo(w);
@@ -859,39 +893,17 @@ impl Stage {
             if ui.add_enabled(self.edits.can_redo(), egui::Button::new("redo")).clicked() {
                 self.redo(w);
             }
-            if ui.button(if w.clock.paused { "play" } else { "pause" }).clicked() {
-                let p = !w.clock.paused;
-                let from_start = w.set_paused(p);
-                self.out.push(StageOut::Paused { paused: p, from_start });
-            }
-            if ui.button("del").clicked() {
-                self.remove_sel(w);
-            }
-            if ui.button("demo").clicked() {
-                let paused = w.clock.paused;
-                *w = World::demo();
-                w.set_paused(paused);
-                self.loaded(w);
-                self.fly_fit(w);
-                self.out.push(StageOut::Changed);
-            }
-            if ui.button("clear").clicked() {
-                let mut j = w.serialize();
-                for k in ["cogs", "arms", "pads", "readers", "belts", "strings", "cams", "pits", "probes", "fields"] {
-                    j[k] = serde_json::json!([]);
-                }
-                if w.reload(&j).is_ok() {
-                    self.loaded(w);
-                    self.out.push(StageOut::Changed);
-                }
-            }
         });
-        // the app's own rows (worlds, keyboard, audio)
+        // the app's own rows (keyboard, worlds, audio)
+        legend(ui, "keyboard and worlds");
         extra(ui, w);
         legend(ui, &self.sel_title(w));
         let (c, s) = self.inspector(ui, w);
         changed |= c;
         structural |= s;
+        if self.sel.is_some() && ui.add(egui::Button::new(RichText::new("delete this part").color(BAD))).clicked() {
+            self.remove_sel(w);
+        }
         legend(ui, "room");
         egui::Grid::new("room").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
             changed |= choice_row(ui, "mode", &Key::Space("mode"), w, &VERB_MODES);
@@ -933,6 +945,28 @@ impl Stage {
         if let Some(m) = &self.file_msg {
             ui.label(RichText::new(m).color(DIM));
         }
+        // what throws the machine away asks twice
+        legend(ui, "start over");
+        ui.horizontal_wrapped(|ui| {
+            if self.confirm_button(ui, "demo", "load the demo", "tap again: replace this machine") {
+                let paused = w.clock.paused;
+                *w = World::demo();
+                w.set_paused(paused);
+                self.loaded(w);
+                self.fly_fit(w);
+                self.out.push(StageOut::Changed);
+            }
+            if self.confirm_button(ui, "clear", "clear the machine", "tap again: remove every part") {
+                let mut j = w.serialize();
+                for k in ["cogs", "arms", "pads", "readers", "belts", "strings", "cams", "pits", "probes", "fields"] {
+                    j[k] = serde_json::json!([]);
+                }
+                if w.reload(&j).is_ok() {
+                    self.loaded(w);
+                    self.out.push(StageOut::Changed);
+                }
+            }
+        });
         egui::CollapsingHeader::new(RichText::new("advanced").color(DIM)).id_salt("advanced").show(ui, |ui| {
             legend(ui, "world");
             egui::Grid::new("world-s").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
@@ -992,6 +1026,22 @@ impl Stage {
         if changed || structural {
             self.changed(w, structural);
         }
+    }
+
+    /// A button that acts on its second tap within 3 s; the first turns it red and says so.
+    fn confirm_button(&mut self, ui: &mut egui::Ui, id: &'static str, label: &str, again: &str) -> bool {
+        let armed = self.confirm.map_or(false, |(k, t)| k == id && self.now - t < 3.0);
+        let text = if armed { RichText::new(again).color(BAD) } else { RichText::new(label) };
+        if !ui.button(text).clicked() {
+            return false;
+        }
+        if armed {
+            self.confirm = None;
+            return true;
+        }
+        self.confirm = Some((id, self.now));
+        self.buzz(10);
+        false
     }
 
     fn sel_title(&self, w: &World) -> String {

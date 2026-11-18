@@ -918,6 +918,19 @@ impl Roll {
             kp.rect_filled(Rect::from_min_size(xy(r.min.x as f64, y + rh - 1.0), vec2(LABEL as f32, 1.0)), 0.0, FAINT);
         }
         let _ = now;
+        // the whole disc at a glance when the strip is wider than the box: what is in view, and the readers
+        if g.w() > r.width() as f64 {
+            let x0 = r.min.x as f64 + LABEL;
+            let bw = r.width() as f64 - LABEL;
+            let band = Rect::from_min_size(xy(x0, r.min.y as f64), vec2(bw as f32, 5.0));
+            p.rect_filled(band, 0.0, alpha(BG, 0.9));
+            let (u0, u1) = (self.sx / gw, ((self.sx + bw) / gw).min(1.0));
+            p.rect_filled(Rect::from_min_max(xy(x0 + u0 * bw, r.min.y as f64 + 1.0), xy(x0 + u1 * bw, r.min.y as f64 + 4.0)), 1.0, DIM);
+            for (_, u) in Roll::playheads(w, ci) {
+                let x = x0 + u * bw;
+                p.line_segment([xy(x, r.min.y as f64), xy(x, r.min.y as f64 + 5.0)], Stroke::new(2.0, READ));
+            }
+        }
         if g.lane {
             self.draw_lane(base, w, c, g);
         }

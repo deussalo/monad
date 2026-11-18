@@ -65,7 +65,10 @@ fn main() {
     if args.iter().any(|a| a == "--paused") {
         w.set_paused(true);
     }
-    let io = StageIo { heard: t_end, safe_top: 0.0, safe_bottom: 0.0, ..Default::default() };
+    // --safe TOP,BOTTOM: the phone's insets in points (the Moto G57: 47,48 at ppp 2.5)
+    let (safe_top, safe_bottom) = arg(&args, "--safe").map(pair).unwrap_or((0.0, 0.0));
+    let io = StageIo { heard: t_end, safe_top, safe_bottom, ..Default::default() };
+    let old_rows = args.iter().any(|a| a == "--old-rows");
     let mut stage = Stage::new();
     match arg(&args, "--zoom") {
         Some(z) => {
@@ -161,6 +164,11 @@ fn main() {
                 frames.push(vec![touch(2, TouchPhase::End, cx + d1 / 2.0, cy), touch(1, TouchPhase::End, cx - d1 / 2.0, cy)]);
                 frames.extend(std::iter::repeat_with(Vec::new).take(5));
             }
+            // the Android Back button, through Stage::back
+            "back" => {
+                frames.push(vec![Event::Text("__back".into())]);
+                frames.extend(std::iter::repeat_with(Vec::new).take(3));
+            }
             "wait" => frames.extend(std::iter::repeat_with(Vec::new).take(parts.next().unwrap().parse().unwrap())),
             o => panic!("unknown op {o}"),
         }
@@ -181,6 +189,10 @@ fn main() {
     for (k, events) in frames.into_iter().enumerate() {
         // as egui-winit does on a phone: the first finger is also the pointer, so widgets take it
         let mut events = events;
+        if events.iter().any(|e| matches!(e, Event::Text(t) if t == "__back")) {
+            events.clear();
+            eprintln!("frame {k}: back -> {}", stage.back(&mut w));
+        }
         let mut sim = Vec::new();
         for e in &events {
             if let Event::Touch { id: TouchId(1), phase, pos, .. } = e {
@@ -199,7 +211,18 @@ fn main() {
         let mut outs = Vec::new();
         let full = ctx.run_ui(raw, |ui| {
             if editor.is_some() { cogs::wave_ui::strip_foreign(ui.ctx(), &mut foreign); }
-            outs = stage.show(ui, &mut w, &io);
+            // rows like the app's in the panel (ui.rs); --old-rows sizes the chips as ui.rs did at b11f9b2
+            outs = stage.show_with(ui, &mut w, &io, &mut |ui, _w| {
+                ui.label(egui::RichText::new("No keyboard · tap Connect").size(12.0));
+                ui.horizontal_wrapped(|ui| {
+                    let _ = ui.add_sized([150.0, 40.0], egui::Button::new("connect keyboard"));
+                    for (i, (name, _)) in cogs::WORLDS.iter().enumerate() {
+                        let b = egui::Button::new(*name).selected(i == 0);
+                        let _ = if old_rows { ui.add_sized([0.0, 40.0], b) } else { ui.add(b.min_size(vec2(0.0, 40.0))) };
+                    }
+                });
+                ui.label(egui::RichText::new("audio 48000 Hz · buffer 40.0 ms · out 113.0 ms · glitches 0 · busy 11% · keys 0 · notes 38250").size(11.0));
+            });
             if let Some(e) = editor.as_mut() { let ctx = ui.ctx().clone(); let _ = e.show_in(&ctx, &mut |f| f(&mut w)); }
         });
         for o in outs {

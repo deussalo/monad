@@ -6,6 +6,8 @@ object Native {
     @JvmStatic external fun status(text: String, connected: Boolean)
     /** The activity came to the front. */
     @JvmStatic external fun resumed()
+    /** The window's top and bottom insets in pixels: cutout, status bar, navigation bar. */
+    @JvmStatic external fun insets(top: Int, bottom: Int)
     /** A file the user picked to open, as text (null: cancelled or unreadable, with why). */
     @JvmStatic external fun fileText(text: String?, error: String?)
 }

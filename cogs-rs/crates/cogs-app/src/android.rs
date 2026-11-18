@@ -23,6 +23,13 @@ pub extern "system" fn Java_help_techmate_cogs_Native_status(mut env: JNIEnv, _c
     if let (Some(s), Ok(t)) = (STATUS.get(), env.get_string(&text)) { if let Ok(mut s) = s.lock() { *s = t.into() } }
 }
 
+/// The window's insets in pixels, from the activity, whenever they change.
+#[no_mangle]
+pub extern "system" fn Java_help_techmate_cogs_Native_insets(_env: JNIEnv, _c: JClass, top: jint, bottom: jint) {
+    ui::SAFE_PX[0].store(top.max(0) as u32, Relaxed);
+    ui::SAFE_PX[1].store(bottom.max(0) as u32, Relaxed);
+}
+
 /// A picked file's text (or why there is none), for the UI to open.
 #[no_mangle]
 pub extern "system" fn Java_help_techmate_cogs_Native_fileText(mut env: JNIEnv, _c: JClass, text: JString, error: JString) {
@@ -105,6 +112,7 @@ fn android_main(app: AndroidApp) {
     let first = if opts.probe { drop(stream); None } else { stream };
     let audio = aaudio::supervise(first, render, sh.clone(), opts, sr as i32, move || { if let Ok(mut s) = st.lock() { *s = "Audio failed to open".into() } });
     let connect = Box::new(move || call_activity(vm, act, "connectMidi", "()V", &[]));
+    let leave: Box<dyn Fn()> = Box::new(move || call_activity(vm, act, "leaveApp", "()V", &[]));
     let open_file: Box<dyn Fn()> = Box::new(move || call_activity(vm, act, "openFile", "()V", &[]));
     let save_file: Box<dyn Fn(&str, &str)> = Box::new(move |name, text| {
         let Ok(jvm) = (unsafe { JavaVM::from_raw(vm as *mut _) }) else { return };
@@ -115,7 +123,7 @@ fn android_main(app: AndroidApp) {
     });
     let sh_end = sh.clone();
     let opts = eframe::NativeOptions { android_app: Some(app), ..Default::default() };
-    let _ = eframe::run_native("cogs", opts, Box::new(move |_cc| { let mut a = ui::App::new(sh, status, connect); a.data = data; a.open_file = Some(open_file); a.save_file = Some(save_file); Ok(Box::new(a)) }));
+    let _ = eframe::run_native("cogs", opts, Box::new(move |_cc| { let mut a = ui::App::new(sh, status, connect); a.data = data; a.open_file = Some(open_file); a.save_file = Some(save_file); a.leave = Some(leave); Ok(Box::new(a)) }));
     sh_end.running.store(false, std::sync::atomic::Ordering::Relaxed);
     let _ = audio.join();
 }

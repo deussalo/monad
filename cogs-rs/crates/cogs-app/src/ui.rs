@@ -14,6 +14,9 @@ use std::sync::{atomic::Ordering::Relaxed, Arc, Mutex};
 /// A file the platform picked for opening: its text, or why not (empty: cancelled).
 pub static FILE_IN: Mutex<Option<Result<String, String>>> = Mutex::new(None);
 
+/// The window's real insets in pixels, top and bottom (cutout, status and navigation bars), set by the activity.
+pub static SAFE_PX: [std::sync::atomic::AtomicU32; 2] = [std::sync::atomic::AtomicU32::new(0), std::sync::atomic::AtomicU32::new(0)];
+
 pub struct App {
     pub sh: Arc<Shared>,
     pub status: Arc<Mutex<String>>,
@@ -34,11 +37,13 @@ pub struct App {
     offs: Vec<(u32, f64)>,
     pub open_file: Option<Box<dyn Fn()>>,
     pub save_file: Option<Box<dyn Fn(&str, &str)>>,
+    /// Back with nothing left to close: send the app to the background.
+    pub leave: Option<Box<dyn Fn()>>,
 }
 
 impl App {
     pub fn new(sh: Arc<Shared>, status: Arc<Mutex<String>>, connect: Box<dyn Fn()>) -> Self {
-        App { sh, status, connect, stage: Stage::new(), panel: false, world_ix: 0, fitted: false, note: None, editor: None, data: None, save_at: None, rec: None, can_record: false, foreign: Default::default(), offs: Vec::new(), open_file: None, save_file: None }
+        App { sh, status, connect, stage: Stage::new(), panel: false, world_ix: 0, fitted: false, note: None, editor: None, data: None, save_at: None, rec: None, can_record: false, foreign: Default::default(), offs: Vec::new(), open_file: None, save_file: None, leave: None }
     }
     /// The part a selection plays from the keyboard: a reader, pad or box; a plate means its reader.
     fn keyboard_part(w: &World, sel: Option<Sel>) -> Option<u32> {
@@ -109,7 +114,9 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         if ctx.pixels_per_point() < 2.0 { ctx.set_pixels_per_point(2.5) }
         let connected = self.status.lock().map(|s| s.starts_with("Playing from")).unwrap_or(false);
-        let io = StageIo { heard: self.sh.heard(), safe_top: 28.0, safe_bottom: 16.0, busy: self.panel || self.editor.is_some(), recording: self.rec.is_some(), can_record: self.can_record,
+        let ppp = ctx.pixels_per_point();
+        let inset = |i: usize, least: f32| (SAFE_PX[i].load(Relaxed) as f32 / ppp).max(least);
+        let io = StageIo { heard: self.sh.heard(), safe_top: inset(0, 28.0), safe_bottom: inset(1, 16.0), busy: self.panel || self.editor.is_some(), recording: self.rec.is_some(), can_record: self.can_record,
             midi_label: Some(if connected { "keyboard" } else { "MIDI" }), midi_connected: connected };
         let mut outs = Vec::new();
         let mut load_req = None;
@@ -127,7 +134,7 @@ impl eframe::App for App {
                     ui.horizontal_wrapped(|ui| {
                         if ui.add_sized([150.0, 40.0], egui::Button::new("connect keyboard")).clicked() { connect = true }
                         for (i, (name, _)) in crate::WORLDS.iter().enumerate() {
-                            if ui.add_sized([0.0, 40.0], egui::Button::new(*name).selected(i == ix)).clicked() { *load = Some(i) }
+                            if ui.add(egui::Button::new(*name).selected(i == ix).min_size(egui::vec2(0.0, 40.0))).clicked() { *load = Some(i) }
                         }
                     });
                     let sr = m.sample_rate.load(Relaxed).max(1) as f32;
@@ -192,7 +199,15 @@ impl eframe::App for App {
         self.offs.retain(|&(key, at)| if now >= at { sh.midi(Midi::Release { key }); false } else { true });
         if !self.offs.is_empty() { ctx.request_repaint() }
         if self.panel { self.panel_ui(&ctx) }
+        // Android's Back closes what is open, the editor first
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::BrowserBack)) {
+            let closed = if self.editor.is_some() { self.editor = None; true }
+                else if self.panel { self.panel = false; true }
+                else { self.sh.world.lock().map(|mut w| self.stage.back(&mut w)).unwrap_or(true) };
+            if !closed { if let Some(f) = &self.leave { f() } }
+        }
         if let Some(ed) = self.editor.as_mut() {
+            ed.safe_bottom = io.safe_bottom;
             let ver0 = self.sh.world.lock().ok().and_then(|w| w.voice(ed.part).map(|v| v.ver));
             let outs = ed.show(&ctx, &self.sh.world);
             let ver1 = self.sh.world.lock().ok().and_then(|w| w.voice(ed.part).map(|v| v.ver));
