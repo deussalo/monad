@@ -227,7 +227,7 @@ impl Info {
 #[derive(Default)]
 struct Stats {
     callbacks: AtomicU64, frames: AtomicU64, in_cpu_ns: AtomicU64, in_wall_ns: AtomicU64, thread_cpu_ns: AtomicU64,
-    min_frames: AtomicU32, max_frames: AtomicU32, worst_pct: AtomicU32, worst_us: AtomicU32, ahead_us: AtomicU32, xruns: AtomicI32, buffer: AtomicI32, want: AtomicI32, hold: AtomicBool, pad: AtomicU64, dead: AtomicBool, cores: AtomicU32, mute: AtomicBool,
+    min_frames: AtomicU32, max_frames: AtomicU32, worst_pct: AtomicU32, worst_us: AtomicU32, ahead_us: AtomicU32, xruns: AtomicI32, buffer: AtomicI32, want: AtomicI32, hold: AtomicBool, pad: AtomicU64, dead: AtomicBool, cores: AtomicU32, mute: AtomicBool, mark_ns: AtomicU64,
 }
 static CURRENT: std::sync::Mutex<Option<Arc<Stats>>> = std::sync::Mutex::new(None);
 
@@ -402,7 +402,7 @@ pub fn bench() {
 }
 
 struct Cb {
-    out: Out<Live>, stats: Arc<Stats>, gain: f32, written: i64, sr: f64, format: i32, channels: usize,
+    out: Out<Live>, stats: Arc<Stats>, gain: f32, mark: Option<i64>, written: i64, sr: f64, format: i32, channels: usize,
     burst: i32, capacity: i32, buffer: i32, xruns: i32, win_wall: u64, win_cpu: u64, win_peak: u32,
 }
 
@@ -437,6 +437,9 @@ extern "C" fn on_data(s: S, user: *mut c_void, data: *mut c_void, frames: i32) -
         c.out.render(n, ahead, wall0, |i, l, r| for k in 0..ch { out[i * ch + k] = gain(if k % 2 == 0 { l } else { r }) });
     }
     c.gain = g;
+    // the frame where a hand-over met this stream: when it reaches the speaker, by this stream's own clock
+    if let Some(i) = c.out.mark { c.mark = Some(c.written + i as i64) }
+    if let (Some(m), true, true) = (c.mark, pos > 0, ts > 0) { c.stats.mark_ns.store((ts as f64 + (m - pos) as f64 / c.sr * 1e9).max(0.) as u64, Relaxed) }
     c.written += n as i64;
     c.out.latency = ahead + n as f64 / c.sr;
     let st = &c.stats;
@@ -520,7 +523,7 @@ impl Drop for Stream { fn drop(&mut self) { self.close() } }
 fn open(spec: &Spec) -> Result<Stream, String> { open_at(spec, 48000.) }
 fn open_at(spec: &Spec, sr_guess: f64) -> Result<Stream, String> {
     let stats = Arc::new(Stats::default());
-    let mut cb = Box::new(Cb { out: Out::new(sr_guess), stats: stats.clone(), gain: 1., written: 0, sr: sr_guess, format: 0, channels: 2,
+    let mut cb = Box::new(Cb { out: Out::new(sr_guess), stats: stats.clone(), gain: 1., mark: None, written: 0, sr: sr_guess, format: 0, channels: 2,
         burst: 0, capacity: 0, buffer: 0, xruns: 0, win_wall: 0, win_cpu: 0, win_peak: 0 });
     unsafe {
         let mut b: B = std::ptr::null_mut();
@@ -626,10 +629,10 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
         if let Some(s) = cur.take() { match start(s, live.take().unwrap()) { Ok(s) => running = Some(s), Err(l) => live = Some(l) } }
         if running.is_none() { on_fail() }
         // when to try for the fast path again, seconds after launch
-        let mut tries: Vec<f64> = o.delay_ms.iter().map(|d| *d as f64 / 1000.).chain([1., 2., 4., 8.]).collect();
+        let earliest = o.delay_ms.map_or(0., |d| d as f64 / 1000.);
+        let mut tries: Vec<f64> = o.delay_ms.iter().map(|d| *d as f64 / 1000.).chain([1., 2., 4., 8.].into_iter().filter(|x| *x >= earliest)).collect();
         tries.sort_by(f64::total_cmp); tries.dedup();
         let (mut reopen_at, mut settle_until) = (0f64, 0f64);
-        let earliest = o.delay_ms.map_or(0., |d| d as f64 / 1000.);
         // after a clean stretch the buffers come back down, a step at a time; a glitch soon after a step makes that the floor
         let mut tune = Tune::default();
         // out of sight and paused: the stream closed, everything idle
@@ -668,7 +671,7 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
                 if t < reopen_at { continue }
                 reopen_at = t + 0.5;
                 if let (Some(s), Some(l)) = (open_best(&o, Some(rate)), live.take()) {
-                    match start(s, l) { Ok(s) => { running = Some(s); deep = false; tries = vec![t + 1., t + 2., t + 4.] } Err(l) => live = Some(l) }
+                    match start(s, l) { Ok(s) => { running = Some(s); deep = false; tries = [t + 1., t + 2., t + 4.].map(|x| x.max(earliest)).to_vec() } Err(l) => live = Some(l) }
                 }
                 continue;
             }
@@ -710,6 +713,9 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
             // the old stream plays out what it has queued, then goes
             let wait = end.saturating_sub(now(libc::CLOCK_MONOTONIC)) / 1_000_000 + 80;
             std::thread::sleep(std::time::Duration::from_millis(wait.min(1000)));
+            // how well the two met, by the streams' own clocks: 0 is the new stream starting exactly as the old one's fade does
+            let (a, b) = (old.stats.mark_ns.load(Relaxed), running.as_ref().map_or(0, |s| s.stats.mark_ns.load(Relaxed)));
+            if a > 0 && b > 0 { log::info!("audio hand-over met {:+.1} ms from the planned moment (plus means a gap, minus an overlap)", (b as f64 + 5e6 - a as f64) / 1e6) }
             drop(old);
         }
         drop(running);

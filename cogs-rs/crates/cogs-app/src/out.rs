@@ -42,15 +42,19 @@ pub struct Out<T> {
     pub latency: f64,
     /// The silence the last take-over waited, frames.
     pub last_pad: u64,
+    /// Within the last `render`: where this output's last frame went (handing over), or its first (taking over).
+    pub mark: Option<usize>,
+    joining: bool,
     sr: f64, l: Vec<f32>, r: Vec<f32>, fade: usize, fade_in: usize, fade_out: usize, pad: u64,
 }
 impl<T: Source> Out<T> {
     pub fn new(sr: f64) -> Self {
-        Out { src: None, handoff: Arc::new(Handoff::new()), incoming: None, latency: 0.02, last_pad: 0, sr, l: vec![0.; MAX_BLOCK], r: vec![0.; MAX_BLOCK],
+        Out { src: None, handoff: Arc::new(Handoff::new()), incoming: None, latency: 0.02, last_pad: 0, mark: None, joining: false, sr, l: vec![0.; MAX_BLOCK], r: vec![0.; MAX_BLOCK],
             fade: (sr * FADE_S) as usize, fade_in: 0, fade_out: 0, pad: 0 }
     }
     /// Produce `n` frames into `sink(frame, left, right)`. `ahead`: seconds until the first of them reaches the speaker.
     pub fn render(&mut self, n: usize, ahead: f64, now_ns: u64, mut sink: impl FnMut(usize, f32, f32)) {
+        self.mark = None;
         if self.src.is_none() {
             if let Some((s, end)) = self.incoming.as_ref().and_then(|h| h.take()) {
                 // start where the old output's fade starts
@@ -58,7 +62,7 @@ impl<T: Source> Out<T> {
                 let target = end as f64 - self.fade as f64 / self.sr * 1e9;
                 self.pad = (((target - first) * 1e-9 * self.sr).max(0.)) as u64;
                 self.last_pad = self.pad;
-                self.src = Some(s); self.fade_in = self.fade; self.incoming = None;
+                self.src = Some(s); self.fade_in = self.fade; self.incoming = None; self.joining = true;
             }
         }
         let f = self.fade.max(1) as f32;
@@ -73,6 +77,7 @@ impl<T: Source> Out<T> {
             let Some(src) = self.src.as_mut() else { for k in i..n { sink(k, 0., 0.) } return };
             if self.fade_out == 0 && self.handoff.request.load(Acquire) { self.fade_out = self.fade.max(1) }
             let leaving = self.fade_out > 0;
+            if self.joining { self.joining = false; self.mark = Some(i) }
             let mut m = (n - i).min(MAX_BLOCK);
             if leaving { m = m.min(self.fade_out) }
             src.block(&mut self.l[..m], &mut self.r[..m], self.latency);
@@ -85,6 +90,7 @@ impl<T: Source> Out<T> {
             i += m;
             if leaving && self.fade_out == 0 {
                 let end = now_ns as f64 + (ahead + i as f64 / self.sr) * 1e9;
+                self.mark = Some(i);
                 if let Some(s) = self.src.take() { self.handoff.give(s, end as u64) }
             }
         }

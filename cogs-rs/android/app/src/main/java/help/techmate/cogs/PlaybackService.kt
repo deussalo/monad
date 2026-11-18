@@ -40,6 +40,7 @@ class PlaybackService : Service() {
     override fun onCreate() {
         super.onCreate()
         running = true
+        instance = this
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Playback", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
         session = MediaSession(this, "cogs").apply {
@@ -136,6 +137,7 @@ class PlaybackService : Service() {
 
     override fun onDestroy() {
         running = false
+        if (instance === this) instance = null
         noisy?.let { unregisterReceiver(it) }
         session?.release()
         wake?.let { if (it.isHeld) it.release() }
@@ -155,6 +157,10 @@ class PlaybackService : Service() {
         private const val CONTROL_PAUSE = 2
         private const val CONTROL_STOP = 3
         @Volatile private var running = false
+        private var instance: PlaybackService? = null
+
+        /** The activity is gone, and the sound engine with it: nothing is left for the service to keep. Main thread. */
+        fun activityGone() { instance?.stopAll() }
 
         /** The app is leaving the screen: if the machine plays, keep it playing. Called while it is still visible. */
         fun left(c: Context) {

@@ -48,7 +48,7 @@ class MainActivity : NativeActivity(), MidiHub.Listener {
         if (hub.savedAddress != null && hasBtPermissions() && hub.bluetoothOn) hub.scan(auto = true)
     }
 
-    override fun onDestroy() { hub.stop(); super.onDestroy() }
+    override fun onDestroy() { hub.stop(); PlaybackService.activityGone(); super.onDestroy() }
     override fun onResume() { super.onResume(); picker = false; Native.lifecycle(1); PlaybackService.back(this) }
     override fun onPause() {
         Native.lifecycle(2)
