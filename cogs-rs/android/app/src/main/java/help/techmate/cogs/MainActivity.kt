@@ -1,0 +1,129 @@
+package help.techmate.cogs
+
+import android.Manifest
+import android.app.AlertDialog
+import android.app.NativeActivity
+import android.bluetooth.BluetoothAdapter
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.location.LocationManager
+import android.os.Build
+import android.os.Bundle
+import android.provider.Settings
+import android.view.View
+import android.view.ViewGroup
+import android.widget.ArrayAdapter
+import android.widget.LinearLayout
+import android.widget.ListView
+import android.widget.TextView
+import android.widget.Toast
+import kotlin.math.roundToInt
+
+/**
+ * The window, input, drawing and sound are Rust's (NativeActivity runs android_main in libcogs.so). This class only
+ * does what needs Java: Bluetooth permission, finding keyboards, and opening MIDI devices; their messages go to
+ * Rust through [Native.midi]. Rust calls [connectMidi] when the Connect button is tapped.
+ */
+class MainActivity : NativeActivity(), MidiHub.Listener {
+    private lateinit var hub: MidiHub
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        System.loadLibrary("cogs")
+        super.onCreate(savedInstanceState)
+        hub = MidiHub(this, { NativeSink() }, this)
+        hub.start()
+        if (hub.savedAddress != null && hasBtPermissions() && hub.bluetoothOn) hub.scan(auto = true)
+    }
+
+    override fun onDestroy() { hub.stop(); super.onDestroy() }
+
+    /** Called from Rust, on its thread. */
+    @Suppress("unused")
+    fun connectMidi() = runOnUiThread { connectFlow() }
+
+    override fun onStatus(text: String, connected: Boolean) = Native.status(text, connected)
+
+    private var scanAdapter: ArrayAdapter<String>? = null
+    private var scanItems: List<MidiHub.Found> = emptyList()
+    private var scanDialog: AlertDialog? = null
+    private var scanTitle: TextView? = null
+
+    override fun onFound(found: List<MidiHub.Found>) {
+        scanItems = found
+        scanAdapter?.let { a -> a.clear(); a.addAll(found.map { (if (it.isMidi) "♪  " else "     ") + it.name + if (it.isMidi) "   · Bluetooth MIDI" else "" }) }
+    }
+
+    override fun onScanning(scanning: Boolean) {
+        scanTitle?.text = if (scanning) "Looking for keyboards…" else if (scanItems.isEmpty()) "Nothing found. Is the keyboard in Bluetooth mode?" else "Tap your keyboard"
+    }
+
+    private fun btPermissions(): Array<String> =
+        if (Build.VERSION.SDK_INT >= 31) arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+        else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+
+    private fun hasBtPermissions() = btPermissions().all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+
+    @android.annotation.SuppressLint("MissingPermission") // checked by hasBtPermissions() first
+    private fun connectFlow() {
+        if (!hub.midiSupported) { toast("This phone has no MIDI support"); return }
+        if (!hub.hasBluetooth) { toast("This phone has no Bluetooth"); return }
+        if (!hasBtPermissions()) { requestPermissions(btPermissions(), 1); return }
+        if (!hub.bluetoothOn) {
+            @Suppress("DEPRECATION")
+            runCatching { startActivityForResult(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), 2) }.onFailure { toast("Turn Bluetooth on, then tap Connect") }
+            return
+        }
+        if (Build.VERSION.SDK_INT < 31 && !locationOn()) {
+            AlertDialog.Builder(this).setTitle("Location is off")
+                .setMessage("Android ${Build.VERSION.RELEASE} only finds Bluetooth keyboards with Location turned on. Nothing is tracked.")
+                .setPositiveButton("Open settings") { _, _ -> startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
+                .setNegativeButton("Cancel", null).show()
+            return
+        }
+        showScanDialog()
+    }
+
+    private fun locationOn(): Boolean {
+        val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        return if (Build.VERSION.SDK_INT >= 28) lm.isLocationEnabled
+        else lm.isProviderEnabled(LocationManager.GPS_PROVIDER) || lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        if (requestCode == 1) { if (hasBtPermissions()) connectFlow() else toast("Bluetooth permission is needed to find the keyboard") }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == 2 && hub.bluetoothOn) connectFlow()
+    }
+
+    private fun showScanDialog() {
+        val adapter = object : ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, ArrayList()) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
+                (super.getView(position, convertView, parent) as TextView).apply { textSize = 17f }
+        }
+        scanAdapter = adapter
+        val list = ListView(this).apply { this.adapter = adapter; minimumHeight = dp(200) }
+        val title = TextView(this).apply { textSize = 18f; setPadding(dp(20), dp(18), dp(20), dp(6)); text = "Looking for keyboards…" }
+        scanTitle = title
+        val hint = TextView(this).apply {
+            textSize = 13f; setPadding(dp(20), 0, dp(20), dp(8))
+            text = "Switch the keyboard on in Bluetooth mode. If it was paired to another phone or computer, unpair it there first. USB keyboards connect by themselves."
+        }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(title); addView(hint); addView(list) }
+        list.setOnItemClickListener { _, _, pos, _ -> scanItems.getOrNull(pos)?.let { hub.connect(it.device, it.name) }; scanDialog?.dismiss() }
+        val b = AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog).setView(box).setNegativeButton("Close", null)
+        if (hub.savedName != null) b.setNeutralButton("Forget ${hub.savedName}") { _, _ -> hub.forget() }
+        scanDialog = b.create().apply {
+            setOnDismissListener { scanAdapter = null; scanTitle = null; scanDialog = null; if (!hub.isConnecting) { hub.stopScan(); if (hub.connectedCount == 0) hub.scan(auto = true) } }
+            show()
+        }
+        hub.stopScan()
+        hub.scan()
+    }
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).roundToInt()
+    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
+}
