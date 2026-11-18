@@ -31,9 +31,30 @@ pub fn js_max(a: f64, b: f64) -> f64 {
 pub fn js_min(a: f64, b: f64) -> f64 {
     if a.is_nan() || b.is_nan() { f64::NAN } else if a < b { a } else { b }
 }
+/// `Math.hypot(x, y)` as V8 computes it (scaled, Kahan-summed), so distances match the JS to the last bit.
 #[inline]
 pub fn hypot(x: f64, y: f64) -> f64 {
-    x.hypot(y)
+    let (ax, ay) = (x.abs(), y.abs());
+    if ax == f64::INFINITY || ay == f64::INFINITY {
+        return f64::INFINITY;
+    }
+    if ax.is_nan() || ay.is_nan() {
+        return f64::NAN;
+    }
+    let max = if ax > ay { ax } else { ay };
+    if max == 0.0 {
+        return 0.0;
+    }
+    let mut sum = 0.0;
+    let mut comp = 0.0;
+    for v in [ax, ay] {
+        let n = v / max;
+        let summand = n * n - comp;
+        let pre = sum + summand;
+        comp = (pre - sum) - summand;
+        sum = pre;
+    }
+    sum.sqrt() * max
 }
 #[inline]
 pub fn hz(m: f64) -> f64 {

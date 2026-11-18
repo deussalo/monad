@@ -618,3 +618,41 @@ impl Resizer {
         w.solve();
     }
 }
+
+impl World {
+    /// stage.js armTip: an arm's tip as drawn.
+    pub fn arm_tip(&self, a: usize) -> (f64, f64) {
+        let arm = &self.arms[a];
+        let c = &self.cogs[arm.cog_ix];
+        let ang = self.render_th(arm.cog_ix) + arm.a;
+        let l = arm.r0 + arm.len;
+        (c.x + ang.cos() * l, c.y + ang.sin() * l)
+    }
+    /// An arm's bend as drawn at the heard time: the flex angle of its last strike, for the app to ease out.
+    pub fn arm_bend(&self, a: usize) -> (f64, f64) {
+        (self.arms[a].bend_t, self.arms[a].bend_a)
+    }
+    /// stage.js beltLines: a belt's two straight runs, [x1, y1, x2, y2] each (none when the cogs overlap).
+    pub fn belt_lines(&self, b: usize) -> Option<[[f64; 4]; 2]> {
+        let bt = &self.belts[b];
+        let (a, bb) = (&self.cogs[bt.a_ix], &self.cogs[bt.b_ix]);
+        let (ra, rb) = (a.radius() + 3.0, bb.radius() + 3.0);
+        let d = hypot(bb.x - a.x, bb.y - a.y);
+        let base = (bb.y - a.y).atan2(bb.x - a.x);
+        let cos_a = (if bt.cross { ra + rb } else { ra - rb }) / d;
+        if !(cos_a.abs() < 1.0) {
+            return None;
+        }
+        let al = cos_a.acos();
+        let run = |s: f64| {
+            let an = base + s * al;
+            let ab = if bt.cross { an + std::f64::consts::PI } else { an };
+            [a.x + ra * an.cos(), a.y + ra * an.sin(), bb.x + rb * ab.cos(), bb.y + rb * ab.sin()]
+        };
+        Some([run(1.0), run(-1.0)])
+    }
+    /// A cog's speed in rpm (signed: positive turns clockwise on screen).
+    pub fn rpm(&self, c: usize) -> f64 {
+        self.cogs[c].w * 60.0 / TAU
+    }
+}
