@@ -62,7 +62,8 @@ pub(crate) enum Btn {
 
 /// Two fingers on a part: the midpoint moves it, the spread sizes it. Never turns it.
 pub(crate) enum Grip {
-    Cog { id: u32, start: Vec<(u32, f64, f64)>, last: Option<(f64, f64)>, b: (f64, f64), n0: f64, raw: f64 },
+    /// `anchor`: the cog the resize keeps its mesh with, and snaps its ratio against.
+    Cog { id: u32, start: Vec<(u32, f64, f64)>, last: Option<(f64, f64)>, b: (f64, f64), n0: f64, raw: f64, anchor: Option<u32> },
     Field { id: u32, x: f64, y: f64, r: f64 },
     Pad { id: u32, x: f64, y: f64, r: f64 },
     Arm { id: u32, l: f64 },
@@ -1720,7 +1721,9 @@ impl Stage {
                 }
                 let stack: Vec<usize> = w.stack_at(c.x, c.y).collect();
                 let stuck = stack.iter().any(|&o| w.clashes(o, &stack));
+                let ci = w.cog_ix(*id)?;
                 Some(Grip::Cog {
+                    anchor: w.resizer(ci).anchor.map(|a| w.cogs[a].id),
                     id: *id, start: stack.iter().map(|&o| (w.cogs[o].id, w.cogs[o].x, w.cogs[o].y)).collect(),
                     last: if stuck { None } else { Some((0.0, 0.0)) }, b: (0.0, 0.0), n0: c.n, raw: c.n,
                 })
@@ -1756,7 +1759,7 @@ impl Stage {
     }
     fn grip_hold(&mut self, w: &mut World, g: &mut Grip, m: (f64, f64), k: f64) {
         match g {
-            Grip::Cog { id, start, last, b, n0, raw } => {
+            Grip::Cog { id, start, last, b, n0, raw, anchor } => {
                 let (dx, dy) = (m.0 + b.0, m.1 + b.1);
                 let ms: Vec<(usize, f64, f64)> = start.iter().filter_map(|c| w.cog_ix(c.0).map(|i| (i, c.1, c.2))).collect();
                 if self.scrap {
@@ -1785,6 +1788,7 @@ impl Stage {
                     *raw = rn;
                     let (px, py) = (w.cogs[ci].x, w.cogs[ci].y);
                     let grow = w.resizer(ci);
+                    *anchor = grow.anchor.map(|a| w.cogs[a].id);
                     w.set_teeth(&grow, rn);
                     let (ex, ey) = (w.cogs[ci].x - px, w.cogs[ci].y - py);
                     b.0 += ex;
@@ -1897,7 +1901,11 @@ impl Stage {
                     t.3 = r;
                     if let Some(ci) = w.cog_ix(id) {
                         let g = w.resizer(ci);
-                        w.set_teeth(&g, r);
+                        let anchor = g.anchor.map(|a| w.cogs[a].id);
+                        if w.set_teeth(&g, r) {
+                            let text = self.resize_text(w, id, anchor);
+                            self.say(text, false);
+                        }
                     }
                 }
                 return;

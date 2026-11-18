@@ -4,6 +4,9 @@
 use crate::model::*;
 use crate::world::World;
 
+/// The tooth ratios ratio snap allows against the cog it snaps to.
+pub const SNAP_RATIOS: [f64; 11] = [1.0 / 4.0, 1.0 / 3.0, 1.0 / 2.0, 2.0 / 3.0, 3.0 / 4.0, 1.0, 4.0 / 3.0, 3.0 / 2.0, 2.0, 3.0, 4.0];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Contact {
     Axle,
@@ -83,9 +86,31 @@ impl World {
         c.th - c.w * (self.clock.sim_t - self.clock.view)
     }
 
+    /// `solve_speeds`, keeping every plate where it is drawn. The sim runs ahead of the picture (`clock.sim_t` against
+    /// `clock.view`), and what is drawn is `th - w * lead`: a speed that changes (a plate pulled out of its train, a
+    /// neighbour resized) would swing the picture by its change times that lead, though nothing has turned. So `th`
+    /// takes the difference, and only running the machine ever rotates a plate.
+    pub fn solve(&mut self) {
+        let before: Vec<f64> = self.cogs.iter().map(|c| c.w).collect();
+        self.solve_speeds();
+        let lead = self.clock.sim_t - self.clock.view;
+        if lead == 0.0 || !lead.is_finite() {
+            return;
+        }
+        for (c, w0) in self.cogs.iter_mut().zip(before) {
+            let dw = c.w - w0;
+            if dw != 0.0 {
+                let th = c.th + dw * lead;
+                let k = (th / TAU).floor();
+                c.th = th - k * TAU;
+                c.turns += k;
+            }
+        }
+    }
+
     /// sim.js solve: seat readers, then give every cog its ratio to its train's root and its speed from the train's
     /// motor (or the hand on the speed knob); a train that overlaps, disagrees with itself or has two motors jams.
-    pub fn solve(&mut self) {
+    pub(crate) fn solve_speeds(&mut self) {
         self.relink();
         for r in &mut self.readers {
             if r.on.is_some() {
@@ -474,10 +499,9 @@ impl World {
     }
     /// Ratio snap (S.ratios): only tooth counts in a simple ratio to the anchor; the nearest to the pull wins.
     pub fn ratio_snap(&self, anchor: Option<usize>, n: f64, min: f64) -> f64 {
-        const SNAP: [f64; 11] = [1.0 / 4.0, 1.0 / 3.0, 1.0 / 2.0, 2.0 / 3.0, 3.0 / 4.0, 1.0, 4.0 / 3.0, 3.0 / 2.0, 2.0, 3.0, 4.0];
         let (true, Some(a)) = (self.s.ratios != 0.0, anchor) else { return n };
         let an = self.cogs[a].n;
-        let ok: Vec<f64> = SNAP.iter().map(|r| an * r).filter(|m| *m == m.trunc() && *m >= min && *m <= 240.0).collect();
+        let ok: Vec<f64> = SNAP_RATIOS.iter().map(|r| an * r).filter(|m| *m == m.trunc() && *m >= min && *m <= 240.0).collect();
         if ok.is_empty() {
             return n;
         }
@@ -494,24 +518,10 @@ impl World {
         self.solve();
         true
     }
-    /// stage.js retimed: run a change of speed so it takes effect where the cogs are drawn: each cog's phase moves by
-    /// its change of speed times the sim's lead over the picture.
+    /// Run a change that may alter speeds. `solve` keeps what is drawn in place by itself, so this only runs it; it is
+    /// kept as the name for "this change of speed takes effect where the cogs are drawn".
     pub fn retimed(&mut self, f: impl FnOnce(&mut World)) {
-        let w0: Vec<(u32, f64)> = self.cogs.iter().map(|c| (c.id, c.w)).collect();
         f(self);
-        let lead = self.clock.sim_t - self.clock.view;
-        if self.clock.paused || !(lead > 0.0 && lead < 1.0) {
-            return;
-        }
-        for c in &mut self.cogs {
-            let dw = c.w - w0.iter().find(|x| x.0 == c.id).map(|x| x.1).unwrap_or(c.w);
-            if dw != 0.0 {
-                let th = c.th + dw * lead;
-                let k = (th / TAU).floor();
-                c.th = th - k * TAU;
-                c.turns += k;
-            }
-        }
     }
 }
 

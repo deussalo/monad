@@ -851,6 +851,7 @@ impl Stage {
             }
         }
         self.draw_group(painter, w);
+        self.draw_ratio(painter, w);
         if let Some(c) = self.crank {
             self.draw_crank(painter, w, c);
         }
