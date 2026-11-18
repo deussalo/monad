@@ -272,6 +272,7 @@ dependencies = [
  "log",
  "ndk",
  "rtrb",
+ "serde_json",
  "winit",
 ]
 
