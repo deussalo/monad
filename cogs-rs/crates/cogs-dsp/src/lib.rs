@@ -152,7 +152,9 @@ impl Default for EngineConfig {
 
 /// What the engine is doing, for the UI's readouts.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Stats { pub wave_voices: usize, pub modal_voices: usize, pub drum_voices: usize, pub steals: u32, pub drops: u32, pub strikes: u32, pub peak: f32, pub reduction_db: f32 }
+pub struct Stats { pub wave_voices: usize, pub modal_voices: usize, pub drum_voices: usize, pub steals: u32, pub drops: u32, pub strikes: u32,
+    /// the last block's peak after the limiter, before the clip at full scale (over 1: clipped)
+    pub peak: f32, pub reduction_db: f32 }
 
 pub struct Engine {
     pub sample_rate: f32,
@@ -316,7 +318,8 @@ impl Engine {
         self.climax.run(ol, or);
         self.distant.process(ol, or);
         self.limiter.process(ol, or);
-        let mut pk = 0f32; for s in 0..n { pk = pk.max(ol[s].abs()).max(or[s].abs()); }
+        // the limiter lets peaks through; WebAudio's destination clips them at full scale, and so does this
+        let mut pk = 0f32; for s in 0..n { pk = pk.max(ol[s].abs()).max(or[s].abs()); ol[s] = ol[s].clamp(-1., 1.); or[s] = or[s].clamp(-1., 1.); }
         self.stats.peak = pk;
         self.frame += n as u64;
     }
