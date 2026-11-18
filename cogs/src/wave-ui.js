@@ -284,7 +284,7 @@ function waveEditor(f,owner,part){
   root.append(top,...(part?[part]:[]),stick,body);
   f.append(root);show(waveUi.tab);syncChips();
   waveModHooks.add(()=>{if(!root.isConnected)return false;for(const p of parts)if(p.path&&(p.dot||waveMod.at.has(p.path)))p.draw();return true});waveWatch(v);
-  // the bar sticks under the phone sheet's head, or at the panel's top
-  requestAnimationFrame(()=>{const head=document.querySelector('#sheet-top');stick.style.top=(head&&head.offsetParent?head.offsetHeight:0)+'px'});
+  // the bar sticks under the phone sheet's head when that is on top, or at the panel's top
+  requestAnimationFrame(()=>{const head=document.querySelector('#sheet-top');stick.style.top=(head&&head.offsetParent&&getComputedStyle(head).order==='0'?head.offsetHeight:0)+'px'});
   rows.push(redraw);
 }

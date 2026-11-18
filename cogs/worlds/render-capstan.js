@@ -2,7 +2,7 @@
 // worklets: an OfflineAudioContext stands in for the page's AudioContext, and rendering stops every 2048 frames so the
 // sim can schedule ahead, as its 15 ms timer would. Writes raw stereo floats (little endian, 48 kHz) and an event log.
 // node render-capstan.js <page.html> <out.f32> [fromBar] [bars] [bpm]; SOLO=<regex on an event's source> keeps only those parts
-const { chromium } = require(process.env.COGS_PW || '/srv/rig/rig/webapp/node_modules/.pnpm/playwright-core@1.64.0/node_modules/playwright-core');
+const { chromium } = require(process.env.COGS_PW || '/tmp/capstan/playwright-core');
 const fs = require('fs'), path = require('path');
 const [page_, out, from_ = '0', bars_ = '192', bpm_ = '119'] = process.argv.slice(2);
 const fromBar = +from_, bars = +bars_, bpm = +bpm_, RATE = 48000;

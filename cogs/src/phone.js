@@ -61,6 +61,8 @@ function placeRoll(c,f){
   // The disc's tuning as compact chips under the strip, not full-width form rows; each number gets − and + beside it.
   const fields=el('div',{className:'disc-fields'},...['root','octave','range','scale','steps'].map(k=>f.querySelector(`:scope>.row[data-k="${k}"]`)).filter(Boolean));
   roll.box.after(fields);
+  // Record from here too, so the notes can be watched landing in the roll.
+  const rec=el('button',{className:'roll-rec',onclick:recToggle});rec.dataset.roll='record';fields.append(rec);
   for(const sr of fields.querySelectorAll('[data-k="steps"],[data-k="octave"],[data-k="range"]')){const num=sr.querySelector('input[type=number]'),bump=d=>()=>{num.value=+num.value+d;num.dispatchEvent(new Event('input'));buzz(4)},k=sr.dataset.k;
     const box=el('div',{className:'stepper'},el('button',{textContent:'−',ariaLabel:k+' down',onclick:bump(-1)}),num,el('button',{textContent:'+',ariaLabel:k+' up',onclick:bump(1)}));
     sr.querySelector('input[type=range]').remove();sr.append(box)}
@@ -77,10 +79,17 @@ function syncRollBar(){
   for(const b of bar.querySelectorAll('button')){const off=b.dataset.roll==='velocity'?false:b.dataset.roll==='paste'?!rollClip.length:!some;if(b.disabled!==off)b.disabled=off}
 }
 function syncEditor(){syncRollBar();
+  {const b=document.querySelector('.roll-rec'),on=!!midi.rec,say=on?'stop recording':'record';if(b&&b.textContent!==say){b.textContent=say;b.ariaPressed=String(on)}}
   const mode=editorMode(),button=$('#edit-part'),start=$('#to-start'),busy=(panelShown()&&!sheetMin())||!!ui.carry;
   button.hidden=!mode||busy;$('#delete-part').hidden=!(sel||group.length)||busy;
   $('#copy-parts').hidden=!(group.length||sel&&sel.type!=='dot')||busy;$('#paste-parts').hidden=!partClip||busy;
   {const ct=shelfTop()-102+'px';if($('#clip-bar').style.top!==ct)$('#clip-bar').style.top=ct}
+  // The keyboard's two buttons: connect, always there, named for what is connected; record, for anything on a plate.
+  const rec=$('#rec-part'),keys=$('#midi-part'),recOn=!!midi.rec,canRec=recOn||!!recTarget();
+  keys.hidden=busy;rec.hidden=!canRec||busy;
+  if(rec.ariaPressed!==String(recOn)){rec.ariaPressed=String(recOn);rec.ariaLabel=recOn?'Stop recording':'Record onto the plate'}
+  {const on=String(midi.devices.size>0),say=[...midi.devices.values()].join(', ')||'MIDI',t=keys.lastChild;if(keys.ariaPressed!==on)keys.ariaPressed=on;if(t.textContent!==say)t.textContent=say}
+  $('#zero-part').hidden=!zeroable().length||busy;start.classList.toggle('on',clock.atStart);
   start.hidden=$('#history').hidden=busy;const top=shelfTop()-54+'px';if(start.style.top!==top)start.style.top=$('#part-bar').style.top=$('#history').style.top=top;
   const noUndo=!edits.past.length,noRedo=!edits.future.length;
   if($('#undo-all').disabled!==noUndo)$('#undo-all').disabled=$('#editor-undo').disabled=noUndo;
@@ -128,7 +137,7 @@ function mount(){
   for(const[kind,describe]of Object.entries(GESTURE_READOUT)){
     const make=G[kind];G[kind]=(...args)=>{const g=make(...args);g.readout=()=>describe(...args);return g};
   }
-  cv.addEventListener('pointerdown',()=>showInteraction(twist?.readout||gesture?.g.readout||(()=>`view zoom: ${Math.round(S.zoom*100)}%`),true));
+  cv.addEventListener('pointerdown',()=>showInteraction(grip?.readout||twist?.readout||gesture?.g.readout||(()=>`view zoom: ${Math.round(S.zoom*100)}%`),true));
   document.addEventListener('pointerdown',e=>{if(e.target===cv)return;const read=rollReadout(e)||controlReadout(e.target);if(read)showInteraction(read,true)});
   document.addEventListener('pointermove',e=>{if(e.buttons){const read=rollReadout(e);if(read)showInteraction(read,true)}});
   for(const type of ['input','change','click'])document.addEventListener(type,e=>{const read=controlReadout(e.target);if(read)showInteraction(read)});
@@ -137,9 +146,11 @@ function mount(){
   // Chrome can retarget the opening tap's click to the newly exposed scrim.
   $('#scrim').onclick=()=>{if(performance.now()-editorOpenedAt>200)togglePanel(false)};
   $('#editor-close').onclick=()=>togglePanel(false);
-  $('#delete-part').innerHTML=rx('Trash',22);$('#to-start').innerHTML=rx('TrackPrevious',22);
+  $('#delete-part').innerHTML=rx('Trash',22);$('#to-start').innerHTML=rx('TrackPrevious',22);$('#zero-part').innerHTML=rx('Zero',22);
   $('#editor-undo').innerHTML=rx('Reset',20);$('#editor-redo').innerHTML=rx('Reset',20,true);$('#editor-close').innerHTML=rx('Cross2',20);
   $('#copy-parts').innerHTML=rx('Copy',22);$('#paste-parts').innerHTML=rx('Clipboard',22);
+  $('#midi-part').innerHTML=BT_ICON;$('#midi-part').append(el('span',{textContent:'MIDI'}));$('#rec-part').innerHTML=rx('Record',22);
+  $('#midi-part').onclick=connectKeyboard;$('#rec-part').onclick=recToggle;
   $('#copy-parts').onclick=()=>{if(copyParts()){buzz(8);showInteraction(()=>`copy parts: ${group.length||1}`)}};
   // A finger has no hover: paste lands in the middle of the open stage, selected, ready to drag into place.
   $('#paste-parts').onclick=()=>{const h=ui.hover;ui.hover={x:CW/2,y:(safeTop+shelfTop())/2};pasteParts();ui.hover=h;buzz(8)};
@@ -149,7 +160,7 @@ function mount(){
   sheetDrag();
   const openEditor=openPartEditor;
   $('#edit-part').onpointerup=$('#edit-part').onclick=openEditor;
-  $('#delete-part').onclick=()=>removeSel();$('#to-start').onclick=()=>{toStart();buzz(10)};
+  $('#delete-part').onclick=()=>removeSel();$('#to-start').onclick=()=>{toStart();buzz(10)};$('#zero-part').onclick=()=>zeroSel();
 }
 // The shelf is a tray wider than the phone: each part has a slot at least SLOT_MIN wide, and a sideways drag scrolls
 // it (with a fling). A drag up off a slot carries that part in. It never changes, so it is painted once per size and

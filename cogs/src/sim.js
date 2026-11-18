@@ -93,7 +93,8 @@ const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],cams:[],pits:[],
 let simT=0,sel=null,group=[],marquee=null;
 const view={x:0,y:0};
 const stats={events:0,late:0,skipped:0,steps:0,stepsTick:0,log:[]};
-const clock={off:0,shift:0,audio:false,view:0,paused:false};
+// atStart: paused on the stage's start, by the reset button, with nothing played since. Plates turned now set their start.
+const clock={off:0,shift:0,audio:false,view:0,paused:false,atStart:false};
 
 const stackOf=c=>W.cogs.filter(o=>Math.hypot(o.x-c.x,o.y-c.y)<=S.coaxTol);
 const renderTh=c=>c.th-c.w*(simT-clock.view);
@@ -130,6 +131,8 @@ function placeSeated(r){
   const x1=c.x+ux*q.f0*R,y1=c.y+uy*q.f0*R,x2=c.x+ux*q.f1*R,y2=c.y+uy*q.f1*R;
   if(Math.abs(x1-r.x1)+Math.abs(y1-r.y1)+Math.abs(x2-r.x2)+Math.abs(y2-r.y2)>1e-7)Object.assign(r,{x1,y1,x2,y2});
 }
+// Nothing else turns with this cog: no other cog touches it and no belt holds it.
+const loose=c=>W.cogs.every(o=>o===c||!contact(c,o))&&W.belts.every(b=>b.a!==c&&b.b!==c);
 function solve(){
   for(const r of W.readers)if(r.on){if(!W.cogs.includes(r.on)||!r.on.track)r.on=null;else placeSeated(r)}
   const cs=W.cogs,adj=new Map(cs.map(c=>[c,[]]));
@@ -243,9 +246,19 @@ function resizer(c){
     }};
 }
 function interlock(c,partner){
-  const phi=Math.atan2(c.y-partner.y,c.x-partner.x),toothOnPartner=(phi-partner.th)*partner.n/TAU;
-  c.th=phi+Math.PI-(.5-toothOnPartner)*TAU/c.n;
+  const phi=Math.atan2(c.y-partner.y,c.x-partner.x),toothOnPartner=(phi-partner.th-(partner.tooth||0))*partner.n/TAU;
+  c.tooth=wrap(phi+Math.PI-(.5-toothOnPartner)*TAU/c.n-c.th);
 }
+// A plate's angle (th: its mark, its dots and arms) is its timing, and is only ever set by hand. Its teeth are drawn
+// at th+tooth, so a mesh sets the tooth offset and never the timing, and meshed plates can all stand at exactly 0.
+// Turn a plate to angle a as drawn; its teeth stay in the mesh. On the stage's start this is its new start.
+function setPhase(c,a){
+  const d=a-renderTh(c);c.th=a+c.w*(simT-clock.view);
+  if(!loose(c))c.tooth=wrap((c.tooth||0)-d);
+  if(clock.atStart)c.th0=wrap(a);
+}
+// A plate's 0, pointing exactly right: it stands there now, and starts there from here on.
+function zeroPlate(c){setPhase(c,0);c.th0=0}
 
 function hitWindow(c,arm,pad){
   const dx=pad.x-c.x,dy=pad.y-c.y,D=Math.hypot(dx,dy),rho=pad.r;
@@ -267,8 +280,10 @@ function armHit(p,t){
 function circleCross(c,R,a0,dt,seg){
   const a1=a0+c.w*dt,x0=c.x+Math.cos(a0)*R,y0=c.y+Math.sin(a0)*R,x1=c.x+Math.cos(a1)*R,y1=c.y+Math.sin(a1)*R;
   const ex=seg.x2-seg.x1,ey=seg.y2-seg.y1,s0=ex*(y0-seg.y1)-ey*(x0-seg.x1),s1=ex*(y1-seg.y1)-ey*(x1-seg.x1);
-  if(!(s0<0&&s1>=0||s0>0&&s1<=0))return null;
-  const f=s0/(s0-s1),qx=x0+(x1-x0)*f,qy=y0+(y1-y0)*f,L2=ex*ex+ey*ey,u=((qx-seg.x1)*ex+(qy-seg.y1)*ey)/L2;
+  // Half open: a dot lying exactly on the line, as one can at a perfect start, crosses as it leaves. So does one that
+  // ended the last step there, so it never sounds twice. The tolerance takes float noise for "exactly".
+  const on0=Math.abs(s0)<1e-9,on1=Math.abs(s1)<1e-9;if(on1||!(on0||s0<0&&s1>0||s0>0&&s1<0))return null;
+  const f=on0?0:s0/(s0-s1),qx=x0+(x1-x0)*f,qy=y0+(y1-y0)*f,L2=ex*ex+ey*ey,u=((qx-seg.x1)*ex+(qy-seg.y1)*ey)/L2;
   if(u<0||u>1)return null;
   const am=a0+c.w*dt*f;
   return {f,u,x:qx,y:qy,am,vn:Math.abs(c.w*R*(Math.sin(am)*ey+Math.cos(am)*ex))/Math.sqrt(L2)};
@@ -276,6 +291,7 @@ function circleCross(c,R,a0,dt,seg){
 function dotCross(c,dot,rd,dt){
   const hit=circleCross(c,ringR(c,dot.ring),c.th+dot.a,dt,rd);if(!hit)return;
   const t=simT+dt*hit.f,turn=c.turns+Math.floor((c.th+c.w*dt*hit.f)/TAU);
+  if(dot.skip>t)return; // being recorded, or just played by hand
   if(dot.p<1&&chance(c.id,dot.ring,dot.a,turn)>=dot.p)return;
   const midi=rd.tines?scaleNote(rd.combBase,rd.combScale,Math.min(rd.tines-1,Math.floor(hit.u*rd.tines))):ringNote(c.track,dot.ring);
   rd.hits++;rd.lastV=hit.vn;rd.lastMidi=voiceMidi(rd.voice,midi);dot.flash=rd.flash=t;
@@ -434,16 +450,20 @@ function syncClock(){
 }
 function setPaused(p){
   if(p===clock.paused)return;
-  clock.paused=p;if(!p)clock.off=nowSec()-clock.view;
+  clock.paused=p;
+  // Playing from the start, the first step is scheduled ahead like any other, so a dot on the line sounds on time.
+  if(!p){clock.off=nowSec()-clock.view+(clock.atStart?S.lookahead:0);clock.atStart=false}
 }
-// Each running train turns until its motor shows angle 0; its cogs move by their ratios, so meshes hold.
+// The reset button: stop, and put every plate on its stored start. The clock comes back to the picture, so the sim is
+// not ahead of what is drawn and nothing on the start is skipped when play resumes. The teeth stay where they are, so
+// every mesh holds whatever the plates have been through since. The balls are left as they are.
 function toStart(){
-  // a motor already at its start (within float noise either side of 0) stays put: wrap() can read that as 2π-ε,
-  // and a whole turn back would move every cog of a non-integer ratio to a different place
-  const back=m=>{const a=wrap(renderTh(m));return a>TAU-1e-6?a-TAU:a};
-  const by=new Map(W.cogs.filter(m=>m.motor&&m.w).map(m=>[m,-back(m)/m.w]));
-  for(const c of W.cogs){const dt=by.get(c.driver);if(dt!==undefined)c.th=wrap(c.th+c.w*dt);c.turns=0}
-  changed();
+  setPaused(true);clock.atStart=true;
+  if(ui.spin){ui.spin.c.scrub=null;ui.spin=null}
+  for(const c of W.cogs){c.tooth=wrap((c.tooth||0)+renderTh(c)-c.th0);c.turns=0}
+  simT=clock.view;
+  for(const c of W.cogs)c.th=c.th0;
+  changed(true);
 }
 
 
@@ -484,7 +504,8 @@ const ballStates=()=>new Map(W.pits.flatMap(p=>p.balls.map(b=>[p.id+':'+b.id,{bx
 function restore(s){
   const kept=sel&&{type:sel.type,id:sel.o.id};
   const j=JSON.parse(s.key);Object.assign(j.S,{zoom:S.zoom});j.view={...view};
-  for(const c of j.cogs){const p=s.phase.get(c.id);c.th=wrap(p.th+p.w*(simT-s.t))}
+  for(const c of j.cogs){const p=s.phase.get(c.id);const th=wrap(p.th+p.w*(simT-s.t));
+    if(clock.atStart){c.tooth=wrap(c.tooth+th-c.th0);c.th=c.th0}else c.th=th}
   const live=ballStates();
   for(const p of j.pits||[])for(const b of p.balls){const k=p.id+':'+b.id,st=live.get(k)||s.balls?.get(k);if(st)Object.assign(b,st)}
   reload(j);
@@ -495,7 +516,7 @@ addEventListener('pointerdown',()=>{edits.held=true},true);
 for(const type of ['pointerup','pointercancel'])addEventListener(type,()=>{edits.held=false;if(edits.pending)edits.commit()});
 function serialize(){
   return {S,SPACE,climax:CLIMAX,view,
-    cogs:W.cogs.map(c=>({id:c.id,x:c.x,y:c.y,n:c.n,motor:c.motor&&{...c.motor},layer:c.layer,th:wrap(c.th),
+    cogs:W.cogs.map(c=>({id:c.id,x:c.x,y:c.y,n:c.n,motor:c.motor&&{...c.motor},layer:c.layer,th:wrap(c.th),th0:wrap(c.th0),tooth:wrap(c.tooth||0),
       track:c.track&&{...c.track,dots:c.track.dots.map(d=>({ring:d.ring,a:d.a,p:d.p,v:d.v,len:d.len}))}})),
     arms:W.arms.map(a=>({id:a.id,cog:a.cog.id,a:a.a,r0:a.r0,len:a.len,flex:a.flex})),
     pads:W.pads.map(p=>({id:p.id,x:p.x,y:p.y,r:p.r,voice:p.voice})),
@@ -508,7 +529,10 @@ function serialize(){
 }
 // Every part is built and checked before any of the live world is replaced.
 function deserialize(j){
-  const cogs=j.cogs.map(c=>({...c,motor:c.motor?{rpm:+c.motor.rpm||0,revs:+c.motor.revs||0}:null,w:0,turns:0}));
+  const cogs=j.cogs.map(c=>({...c,motor:c.motor?{rpm:+c.motor.rpm||0,revs:+c.motor.revs||0}:null,w:0,turns:0,
+    // a save from before starts: the angle it was saved at is its start, and its teeth are its angle
+    th0:c.th0??c.th,tooth:c.tooth||0}));
+  if(cogs.some(c=>c.th!==c.th0))clock.atStart=false;
   const byId=new Map(cogs.map(c=>[c.id,c]));
   const cog=(id,who)=>{const c=byId.get(id);if(!c)throw new Error(`${who}: no cog ${id}`);return c};
   const importedVoice=o=>{

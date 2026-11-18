@@ -16,15 +16,21 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #dev input[type=range]{touch-action:none}
 #dev[hidden],#scrim[hidden]{display:none}
 #panel{max-width:440px;margin:0 auto;padding:6px}
-#part-bar{position:fixed;left:var(--space-2,8px);display:flex;gap:var(--space-2,8px)}
-#clip-bar{position:fixed;left:var(--space-2,8px);display:flex;gap:var(--space-2,8px)}
-#copy-parts[hidden],#paste-parts[hidden]{display:none}
-#history{position:fixed;left:50%;transform:translateX(-50%);display:flex;gap:var(--space-2,8px)}
+#part-bar{position:fixed;left:var(--space-2,8px);display:flex}
+/* Thumb reach: everything sits in the two rows over the shelf. What you use on a part is at the left edge, the transport and undo at the right. */
+#clip-bar{position:fixed;left:var(--space-2,8px);right:var(--space-2,8px);display:flex;gap:var(--space-2,8px);pointer-events:none}#clip-bar button{pointer-events:auto}
+#copy-parts[hidden],#paste-parts[hidden],#midi-part[hidden],#rec-part[hidden]{display:none}
+#clip-bar #midi-part{margin-left:auto;display:flex;align-items:center;gap:6px;padding:0 10px;color:var(--sel);background:var(--pad);border-radius:8px;font-size:13px;max-width:170px}
+#midi-part[hidden]{display:none!important}#midi-part span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#midi-part svg{flex:none}
+#clip-bar #midi-part[aria-pressed=true]{color:var(--bg);background:var(--sel)}#rec-part{color:var(--hot)!important}#rec-part[aria-pressed=true]{background:var(--pad);border-radius:8px}
+#dev .roll-rec{color:var(--hot);background:var(--pad);border-radius:8px;padding:0 14px}#dev .roll-rec[aria-pressed=true]{color:var(--bg);background:var(--hot)}
+#history{position:fixed;right:106px;display:flex}
 #history[hidden]{display:none}
 #history button:disabled{opacity:.3}
+#to-start.on{color:var(--hot)}
 #part-bar button,#to-start,#history button,#clip-bar button,#editor-head button{min-height:44px;min-width:44px;padding:0;border:0;background:none;display:grid;place-items:center;color:var(--fg)}
 #to-start{position:fixed;right:62px}
-#edit-part[hidden],#delete-part[hidden],#to-start[hidden],#editor-head{display:none}
+#edit-part[hidden],#delete-part[hidden],#zero-part[hidden],#to-start[hidden],#editor-head{display:none}
 /* The sheet's top: a grab bar and, for an editor, its head. Drag it down to tuck the sheet away to just this strip,
    up or tap to bring it back; drag down again from the strip to close. */
 #sheet-top{position:sticky;top:0;z-index:1;background:var(--bg);touch-action:none;cursor:grab}
@@ -35,6 +41,10 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #dev.dragging{transition:none}
 body.sheet-min #interaction{bottom:var(--peek,80px);border-bottom:1px solid var(--line)}
 #dev[data-editor]:not([data-editor=""]){top:max(14vh,env(safe-area-inset-top,0px));border-radius:var(--space-3,12px) var(--space-3,12px) 0 0}
+/* An open editor keeps its tools at the bottom of the sheet, under the thumb, above the readout strip; tucked, they are the strip. */
+#dev[data-editor]:not([data-editor=""]):not(.min):not([hidden]){display:flex;flex-direction:column;padding-bottom:0}
+#dev[data-editor]:not([data-editor=""]):not(.min)>#panel{order:1;flex:none;box-sizing:border-box;width:100%}
+#dev[data-editor]:not([data-editor=""]):not(.min)>#sheet-top{order:2;flex:none;top:auto;bottom:0;margin-top:auto;border-top:1px solid var(--line);padding-bottom:calc(36px + env(safe-area-inset-bottom,0px))}
 #dev[data-editor]:not([data-editor=""]) #editor-head{display:flex;align-items:center;gap:var(--space-2,8px);padding:0 var(--space-2,8px) var(--space-2,8px)}
 #editor-title{flex:1;color:var(--hot)}
 #dev[data-editor]:not([data-editor=""]) #panel{max-width:none;padding:var(--space-2,8px)}
@@ -89,9 +99,9 @@ body.sheet-min #interaction{bottom:var(--peek,80px);border-bottom:1px solid var(
 <div id="safe"></div>
 <output id="interaction" hidden aria-live="polite"></output>
 <div id="scrim" hidden></div>
-<div id="part-bar"><button id="edit-part" hidden aria-label="Edit selected part"></button><button id="delete-part" hidden aria-label="Delete selected"></button></div>
-<button id="to-start" hidden aria-label="Set to start"></button>
-<div id="clip-bar"><button id="copy-parts" hidden aria-label="Copy selected"></button><button id="paste-parts" hidden aria-label="Paste"></button></div>
+<div id="part-bar"><button id="edit-part" hidden aria-label="Edit selected part"></button><button id="rec-part" hidden aria-label="Record onto the plate" aria-pressed="false"></button><button id="zero-part" hidden aria-label="Set to 0"></button></div>
+<button id="to-start" hidden aria-label="Reset to start"></button>
+<div id="clip-bar"><button id="copy-parts" hidden aria-label="Copy selected"></button><button id="paste-parts" hidden aria-label="Paste"></button><button id="delete-part" hidden aria-label="Delete selected"></button><button id="midi-part" hidden aria-label="Connect a MIDI keyboard"></button></div>
 <div id="history"><button id="undo-all" aria-label="Undo"></button><button id="redo-all" aria-label="Redo"></button></div>
 <div id="dev" hidden role="dialog" aria-label="Part controls">
   <div id="sheet-top"><div id="grab" role="button" aria-label="Tuck away or bring back the sheet"></div>

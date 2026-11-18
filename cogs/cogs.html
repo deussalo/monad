@@ -135,15 +135,21 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #dev input[type=range]{touch-action:none}
 #dev[hidden],#scrim[hidden]{display:none}
 #panel{max-width:440px;margin:0 auto;padding:6px}
-#part-bar{position:fixed;left:var(--space-2,8px);display:flex;gap:var(--space-2,8px)}
-#clip-bar{position:fixed;left:var(--space-2,8px);display:flex;gap:var(--space-2,8px)}
-#copy-parts[hidden],#paste-parts[hidden]{display:none}
-#history{position:fixed;left:50%;transform:translateX(-50%);display:flex;gap:var(--space-2,8px)}
+#part-bar{position:fixed;left:var(--space-2,8px);display:flex}
+/* Thumb reach: everything sits in the two rows over the shelf. What you use on a part is at the left edge, the transport and undo at the right. */
+#clip-bar{position:fixed;left:var(--space-2,8px);right:var(--space-2,8px);display:flex;gap:var(--space-2,8px);pointer-events:none}#clip-bar button{pointer-events:auto}
+#copy-parts[hidden],#paste-parts[hidden],#midi-part[hidden],#rec-part[hidden]{display:none}
+#clip-bar #midi-part{margin-left:auto;display:flex;align-items:center;gap:6px;padding:0 10px;color:var(--sel);background:var(--pad);border-radius:8px;font-size:13px;max-width:170px}
+#midi-part[hidden]{display:none!important}#midi-part span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#midi-part svg{flex:none}
+#clip-bar #midi-part[aria-pressed=true]{color:var(--bg);background:var(--sel)}#rec-part{color:var(--hot)!important}#rec-part[aria-pressed=true]{background:var(--pad);border-radius:8px}
+#dev .roll-rec{color:var(--hot);background:var(--pad);border-radius:8px;padding:0 14px}#dev .roll-rec[aria-pressed=true]{color:var(--bg);background:var(--hot)}
+#history{position:fixed;right:106px;display:flex}
 #history[hidden]{display:none}
 #history button:disabled{opacity:.3}
+#to-start.on{color:var(--hot)}
 #part-bar button,#to-start,#history button,#clip-bar button,#editor-head button{min-height:44px;min-width:44px;padding:0;border:0;background:none;display:grid;place-items:center;color:var(--fg)}
 #to-start{position:fixed;right:62px}
-#edit-part[hidden],#delete-part[hidden],#to-start[hidden],#editor-head{display:none}
+#edit-part[hidden],#delete-part[hidden],#zero-part[hidden],#to-start[hidden],#editor-head{display:none}
 /* The sheet's top: a grab bar and, for an editor, its head. Drag it down to tuck the sheet away to just this strip,
    up or tap to bring it back; drag down again from the strip to close. */
 #sheet-top{position:sticky;top:0;z-index:1;background:var(--bg);touch-action:none;cursor:grab}
@@ -154,6 +160,10 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 #dev.dragging{transition:none}
 body.sheet-min #interaction{bottom:var(--peek,80px);border-bottom:1px solid var(--line)}
 #dev[data-editor]:not([data-editor=""]){top:max(14vh,env(safe-area-inset-top,0px));border-radius:var(--space-3,12px) var(--space-3,12px) 0 0}
+/* An open editor keeps its tools at the bottom of the sheet, under the thumb, above the readout strip; tucked, they are the strip. */
+#dev[data-editor]:not([data-editor=""]):not(.min):not([hidden]){display:flex;flex-direction:column;padding-bottom:0}
+#dev[data-editor]:not([data-editor=""]):not(.min)>#panel{order:1;flex:none;box-sizing:border-box;width:100%}
+#dev[data-editor]:not([data-editor=""]):not(.min)>#sheet-top{order:2;flex:none;top:auto;bottom:0;margin-top:auto;border-top:1px solid var(--line);padding-bottom:calc(36px + env(safe-area-inset-bottom,0px))}
 #dev[data-editor]:not([data-editor=""]) #editor-head{display:flex;align-items:center;gap:var(--space-2,8px);padding:0 var(--space-2,8px) var(--space-2,8px)}
 #editor-title{flex:1;color:var(--hot)}
 #dev[data-editor]:not([data-editor=""]) #panel{max-width:none;padding:var(--space-2,8px)}
@@ -208,9 +218,9 @@ body.sheet-min #interaction{bottom:var(--peek,80px);border-bottom:1px solid var(
 <div id="safe"></div>
 <output id="interaction" hidden aria-live="polite"></output>
 <div id="scrim" hidden></div>
-<div id="part-bar"><button id="edit-part" hidden aria-label="Edit selected part"></button><button id="delete-part" hidden aria-label="Delete selected"></button></div>
-<button id="to-start" hidden aria-label="Set to start"></button>
-<div id="clip-bar"><button id="copy-parts" hidden aria-label="Copy selected"></button><button id="paste-parts" hidden aria-label="Paste"></button></div>
+<div id="part-bar"><button id="edit-part" hidden aria-label="Edit selected part"></button><button id="rec-part" hidden aria-label="Record onto the plate" aria-pressed="false"></button><button id="zero-part" hidden aria-label="Set to 0"></button></div>
+<button id="to-start" hidden aria-label="Reset to start"></button>
+<div id="clip-bar"><button id="copy-parts" hidden aria-label="Copy selected"></button><button id="paste-parts" hidden aria-label="Paste"></button><button id="delete-part" hidden aria-label="Delete selected"></button><button id="midi-part" hidden aria-label="Connect a MIDI keyboard"></button></div>
 <div id="history"><button id="undo-all" aria-label="Undo"></button><button id="redo-all" aria-label="Redo"></button></div>
 <div id="dev" hidden role="dialog" aria-label="Part controls">
   <div id="sheet-top"><div id="grab" role="button" aria-label="Tuck away or bring back the sheet"></div>
@@ -2084,7 +2094,8 @@ const W={cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[],cams:[],pits:[],
 let simT=0,sel=null,group=[],marquee=null;
 const view={x:0,y:0};
 const stats={events:0,late:0,skipped:0,steps:0,stepsTick:0,log:[]};
-const clock={off:0,shift:0,audio:false,view:0,paused:false};
+// atStart: paused on the stage's start, by the reset button, with nothing played since. Plates turned now set their start.
+const clock={off:0,shift:0,audio:false,view:0,paused:false,atStart:false};
 
 const stackOf=c=>W.cogs.filter(o=>Math.hypot(o.x-c.x,o.y-c.y)<=S.coaxTol);
 const renderTh=c=>c.th-c.w*(simT-clock.view);
@@ -2121,6 +2132,8 @@ function placeSeated(r){
   const x1=c.x+ux*q.f0*R,y1=c.y+uy*q.f0*R,x2=c.x+ux*q.f1*R,y2=c.y+uy*q.f1*R;
   if(Math.abs(x1-r.x1)+Math.abs(y1-r.y1)+Math.abs(x2-r.x2)+Math.abs(y2-r.y2)>1e-7)Object.assign(r,{x1,y1,x2,y2});
 }
+// Nothing else turns with this cog: no other cog touches it and no belt holds it.
+const loose=c=>W.cogs.every(o=>o===c||!contact(c,o))&&W.belts.every(b=>b.a!==c&&b.b!==c);
 function solve(){
   for(const r of W.readers)if(r.on){if(!W.cogs.includes(r.on)||!r.on.track)r.on=null;else placeSeated(r)}
   const cs=W.cogs,adj=new Map(cs.map(c=>[c,[]]));
@@ -2234,9 +2247,19 @@ function resizer(c){
     }};
 }
 function interlock(c,partner){
-  const phi=Math.atan2(c.y-partner.y,c.x-partner.x),toothOnPartner=(phi-partner.th)*partner.n/TAU;
-  c.th=phi+Math.PI-(.5-toothOnPartner)*TAU/c.n;
+  const phi=Math.atan2(c.y-partner.y,c.x-partner.x),toothOnPartner=(phi-partner.th-(partner.tooth||0))*partner.n/TAU;
+  c.tooth=wrap(phi+Math.PI-(.5-toothOnPartner)*TAU/c.n-c.th);
 }
+// A plate's angle (th: its mark, its dots and arms) is its timing, and is only ever set by hand. Its teeth are drawn
+// at th+tooth, so a mesh sets the tooth offset and never the timing, and meshed plates can all stand at exactly 0.
+// Turn a plate to angle a as drawn; its teeth stay in the mesh. On the stage's start this is its new start.
+function setPhase(c,a){
+  const d=a-renderTh(c);c.th=a+c.w*(simT-clock.view);
+  if(!loose(c))c.tooth=wrap((c.tooth||0)-d);
+  if(clock.atStart)c.th0=wrap(a);
+}
+// A plate's 0, pointing exactly right: it stands there now, and starts there from here on.
+function zeroPlate(c){setPhase(c,0);c.th0=0}
 
 function hitWindow(c,arm,pad){
   const dx=pad.x-c.x,dy=pad.y-c.y,D=Math.hypot(dx,dy),rho=pad.r;
@@ -2258,8 +2281,10 @@ function armHit(p,t){
 function circleCross(c,R,a0,dt,seg){
   const a1=a0+c.w*dt,x0=c.x+Math.cos(a0)*R,y0=c.y+Math.sin(a0)*R,x1=c.x+Math.cos(a1)*R,y1=c.y+Math.sin(a1)*R;
   const ex=seg.x2-seg.x1,ey=seg.y2-seg.y1,s0=ex*(y0-seg.y1)-ey*(x0-seg.x1),s1=ex*(y1-seg.y1)-ey*(x1-seg.x1);
-  if(!(s0<0&&s1>=0||s0>0&&s1<=0))return null;
-  const f=s0/(s0-s1),qx=x0+(x1-x0)*f,qy=y0+(y1-y0)*f,L2=ex*ex+ey*ey,u=((qx-seg.x1)*ex+(qy-seg.y1)*ey)/L2;
+  // Half open: a dot lying exactly on the line, as one can at a perfect start, crosses as it leaves. So does one that
+  // ended the last step there, so it never sounds twice. The tolerance takes float noise for "exactly".
+  const on0=Math.abs(s0)<1e-9,on1=Math.abs(s1)<1e-9;if(on1||!(on0||s0<0&&s1>0||s0>0&&s1<0))return null;
+  const f=on0?0:s0/(s0-s1),qx=x0+(x1-x0)*f,qy=y0+(y1-y0)*f,L2=ex*ex+ey*ey,u=((qx-seg.x1)*ex+(qy-seg.y1)*ey)/L2;
   if(u<0||u>1)return null;
   const am=a0+c.w*dt*f;
   return {f,u,x:qx,y:qy,am,vn:Math.abs(c.w*R*(Math.sin(am)*ey+Math.cos(am)*ex))/Math.sqrt(L2)};
@@ -2267,6 +2292,7 @@ function circleCross(c,R,a0,dt,seg){
 function dotCross(c,dot,rd,dt){
   const hit=circleCross(c,ringR(c,dot.ring),c.th+dot.a,dt,rd);if(!hit)return;
   const t=simT+dt*hit.f,turn=c.turns+Math.floor((c.th+c.w*dt*hit.f)/TAU);
+  if(dot.skip>t)return; // being recorded, or just played by hand
   if(dot.p<1&&chance(c.id,dot.ring,dot.a,turn)>=dot.p)return;
   const midi=rd.tines?scaleNote(rd.combBase,rd.combScale,Math.min(rd.tines-1,Math.floor(hit.u*rd.tines))):ringNote(c.track,dot.ring);
   rd.hits++;rd.lastV=hit.vn;rd.lastMidi=voiceMidi(rd.voice,midi);dot.flash=rd.flash=t;
@@ -2425,16 +2451,20 @@ function syncClock(){
 }
 function setPaused(p){
   if(p===clock.paused)return;
-  clock.paused=p;if(!p)clock.off=nowSec()-clock.view;
+  clock.paused=p;
+  // Playing from the start, the first step is scheduled ahead like any other, so a dot on the line sounds on time.
+  if(!p){clock.off=nowSec()-clock.view+(clock.atStart?S.lookahead:0);clock.atStart=false}
 }
-// Each running train turns until its motor shows angle 0; its cogs move by their ratios, so meshes hold.
+// The reset button: stop, and put every plate on its stored start. The clock comes back to the picture, so the sim is
+// not ahead of what is drawn and nothing on the start is skipped when play resumes. The teeth stay where they are, so
+// every mesh holds whatever the plates have been through since. The balls are left as they are.
 function toStart(){
-  // a motor already at its start (within float noise either side of 0) stays put: wrap() can read that as 2π-ε,
-  // and a whole turn back would move every cog of a non-integer ratio to a different place
-  const back=m=>{const a=wrap(renderTh(m));return a>TAU-1e-6?a-TAU:a};
-  const by=new Map(W.cogs.filter(m=>m.motor&&m.w).map(m=>[m,-back(m)/m.w]));
-  for(const c of W.cogs){const dt=by.get(c.driver);if(dt!==undefined)c.th=wrap(c.th+c.w*dt);c.turns=0}
-  changed();
+  setPaused(true);clock.atStart=true;
+  if(ui.spin){ui.spin.c.scrub=null;ui.spin=null}
+  for(const c of W.cogs){c.tooth=wrap((c.tooth||0)+renderTh(c)-c.th0);c.turns=0}
+  simT=clock.view;
+  for(const c of W.cogs)c.th=c.th0;
+  changed(true);
 }
 
 
@@ -2475,7 +2505,8 @@ const ballStates=()=>new Map(W.pits.flatMap(p=>p.balls.map(b=>[p.id+':'+b.id,{bx
 function restore(s){
   const kept=sel&&{type:sel.type,id:sel.o.id};
   const j=JSON.parse(s.key);Object.assign(j.S,{zoom:S.zoom});j.view={...view};
-  for(const c of j.cogs){const p=s.phase.get(c.id);c.th=wrap(p.th+p.w*(simT-s.t))}
+  for(const c of j.cogs){const p=s.phase.get(c.id);const th=wrap(p.th+p.w*(simT-s.t));
+    if(clock.atStart){c.tooth=wrap(c.tooth+th-c.th0);c.th=c.th0}else c.th=th}
   const live=ballStates();
   for(const p of j.pits||[])for(const b of p.balls){const k=p.id+':'+b.id,st=live.get(k)||s.balls?.get(k);if(st)Object.assign(b,st)}
   reload(j);
@@ -2486,7 +2517,7 @@ addEventListener('pointerdown',()=>{edits.held=true},true);
 for(const type of ['pointerup','pointercancel'])addEventListener(type,()=>{edits.held=false;if(edits.pending)edits.commit()});
 function serialize(){
   return {S,SPACE,climax:CLIMAX,view,
-    cogs:W.cogs.map(c=>({id:c.id,x:c.x,y:c.y,n:c.n,motor:c.motor&&{...c.motor},layer:c.layer,th:wrap(c.th),
+    cogs:W.cogs.map(c=>({id:c.id,x:c.x,y:c.y,n:c.n,motor:c.motor&&{...c.motor},layer:c.layer,th:wrap(c.th),th0:wrap(c.th0),tooth:wrap(c.tooth||0),
       track:c.track&&{...c.track,dots:c.track.dots.map(d=>({ring:d.ring,a:d.a,p:d.p,v:d.v,len:d.len}))}})),
     arms:W.arms.map(a=>({id:a.id,cog:a.cog.id,a:a.a,r0:a.r0,len:a.len,flex:a.flex})),
     pads:W.pads.map(p=>({id:p.id,x:p.x,y:p.y,r:p.r,voice:p.voice})),
@@ -2499,7 +2530,10 @@ function serialize(){
 }
 // Every part is built and checked before any of the live world is replaced.
 function deserialize(j){
-  const cogs=j.cogs.map(c=>({...c,motor:c.motor?{rpm:+c.motor.rpm||0,revs:+c.motor.revs||0}:null,w:0,turns:0}));
+  const cogs=j.cogs.map(c=>({...c,motor:c.motor?{rpm:+c.motor.rpm||0,revs:+c.motor.revs||0}:null,w:0,turns:0,
+    // a save from before starts: the angle it was saved at is its start, and its teeth are its angle
+    th0:c.th0??c.th,tooth:c.tooth||0}));
+  if(cogs.some(c=>c.th!==c.th0))clock.atStart=false;
   const byId=new Map(cogs.map(c=>[c.id,c]));
   const cog=(id,who)=>{const c=byId.get(id);if(!c)throw new Error(`${who}: no cog ${id}`);return c};
   const importedVoice=o=>{
@@ -2602,6 +2636,10 @@ const RADIX={
   Piano:["M1 2.5C1 2.22386 1.22386 2 1.5 2H13.5C13.7761 2 14 2.22386 14 2.5V12.5C14 12.7761 13.7761 13 13.5 13H1.5C1.22386 13 1 12.7761 1 12.5V2.5ZM2 3V12H13V3H2Z","M4 3H5.5V8.5H5.25V12H4.75V8.5H4V3ZM6.75 3H8.25V8.5H7.75V12H7.25V8.5H6.75V3ZM9.5 3H11V8.5H10.25V12H9.75V8.5H9.5V3Z"],
   // Not in Radix: velocity bars in its style, for the roll's velocity lane toggle.
   Velocity:["M2.5 9H4.5V13H2.5V9ZM6.5 6H8.5V13H6.5V6ZM10.5 2H12.5V13H10.5V2Z"],
+  // Not in Radix: the record dot.
+  Record:["M7.5 3a4.5 4.5 0 1 0 0 9a4.5 4.5 0 0 0 0-9Z"],
+  // Not in Radix: a dial with its mark at 0, pointing right, for setting a plate to its 0.
+  Zero:["M7.5 1a6.5 6.5 0 1 0 0 13a6.5 6.5 0 0 0 0-13ZM7.5 2a5.5 5.5 0 1 1 0 11a5.5 5.5 0 0 1 0-11Z","M6 7.5a1.5 1.5 0 0 1 2.9-.5H13.5V8H8.9a1.5 1.5 0 0 1-2.9-.5Z"],
   MixerVertical:["M5 1.5C5 1.22386 4.77614 1 4.5 1C4.22386 1 4 1.22386 4 1.5L4 7C4 7.01671 4.00082 7.03323 4.00242 7.04952C2.86009 7.28022 2 8.28967 2 9.5C2 10.7103 2.86009 11.7198 4.00242 11.9505C4.00082 11.9668 4 11.9833 4 12V13.5C4 13.7761 4.22386 14 4.5 14C4.77614 14 5 13.7761 5 13.5V12C5 11.9833 4.99918 11.9668 4.99758 11.9505C6.1399 11.7198 7 10.7103 7 9.5C7 8.28967 6.1399 7.28022 4.99758 7.04952C4.99918 7.03323 5 7.01671 5 7L5 1.5ZM11 1.5C11 1.22386 10.7761 1 10.5 1C10.2239 1 10 1.22386 10 1.5V3C10 3.01671 10.0008 3.03323 10.0024 3.04952C8.8601 3.28022 8 4.28967 8 5.5C8 6.71033 8.8601 7.71978 10.0024 7.95048C10.0008 7.96677 10 7.98329 10 8V13.5C10 13.7761 10.2239 14 10.5 14C10.7761 14 11 13.7761 11 13.5V8C11 7.98329 10.9992 7.96677 10.9976 7.95048C12.1399 7.71978 13 6.71033 13 5.5C13 4.28967 12.1399 3.28022 10.9976 3.04952C10.9992 3.03323 11 3.01671 11 3V1.5ZM4.5 8C3.67157 8 3 8.67157 3 9.5C3 10.3284 3.67157 11 4.5 11C5.32843 11 6 10.3284 6 9.5C6 8.67157 5.32843 8 4.5 8ZM9 5.5C9 4.67157 9.67157 4 10.5 4C11.3284 4 12 4.67157 12 5.5C12 6.32843 11.3284 7 10.5 7C9.67157 7 9 6.32843 9 5.5Z"],
   Trash:["M5.5 1C5.22386 1 5 1.22386 5 1.5C5 1.77614 5.22386 2 5.5 2H9.5C9.77614 2 10 1.77614 10 1.5C10 1.22386 9.77614 1 9.5 1H5.5ZM3 3.5C3 3.22386 3.22386 3 3.5 3H5H10H11.5C11.7761 3 12 3.22386 12 3.5C12 3.77614 11.7761 4 11.5 4H11V12C11 12.5523 10.5523 13 10 13H5C4.44772 13 4 12.5523 4 12V4L3.5 4C3.22386 4 3 3.77614 3 3.5ZM5 4H10V12H5V4Z"],
   TrackPrevious:["M1.94976 2.74989C1.94976 2.44613 2.196 2.19989 2.49976 2.19989C2.80351 2.19989 3.04976 2.44613 3.04976 2.74989V7.2825C3.0954 7.18802 3.17046 7.10851 3.26662 7.05776L12.2666 2.30776C12.4216 2.22596 12.6081 2.23127 12.7582 2.32176C12.9083 2.41225 13 2.57471 13 2.74995V12.25C13 12.4252 12.9083 12.5877 12.7582 12.6781C12.6081 12.7686 12.4216 12.7739 12.2666 12.6921L3.26662 7.94214C3.17046 7.89139 3.0954 7.81188 3.04976 7.7174V12.2499C3.04976 12.5536 2.80351 12.7999 2.49976 12.7999C2.196 12.7999 1.94976 12.5536 1.94976 12.2499V2.74989ZM4.57122 7.49995L12 11.4207V3.5792L4.57122 7.49995Z"],
@@ -2873,7 +2911,7 @@ function drawCog(c){
   if(c.jam){const k=clock.view;x+=Math.sin(k*71)*1.3*PX;y+=Math.cos(k*53)*1.3*PX}
   cx.lineWidth=PX;cx.strokeStyle=c.jam?BAD:DIM;cx.setLineDash(c.layer?[4*PX,3*PX]:[]);circle(x,y,r);cx.setLineDash([]);
   cx.beginPath();
-  for(let k=0;k<c.n;k++){const a=th+k*TAU/c.n,ca=Math.cos(a),sa=Math.sin(a);cx.moveTo(x+ca*(r-3),y+sa*(r-3));cx.lineTo(x+ca*(r+3),y+sa*(r+3))}
+  for(let k=0;k<c.n;k++){const a=th+(c.tooth||0)+k*TAU/c.n,ca=Math.cos(a),sa=Math.sin(a);cx.moveTo(x+ca*(r-3),y+sa*(r-3));cx.lineTo(x+ca*(r+3),y+sa*(r+3))}
   cx.stroke();
   if(c.track)drawDiscFace(c,th,x,y);
   cx.strokeStyle=FG;line(x,y,x+Math.cos(th)*(r-5),y+Math.sin(th)*(r-5));
@@ -2937,6 +2975,8 @@ function drawBelt(b){
   for(const[x1,y1,x2,y2]of beltLines(b))line(x1,y1,x2,y2);
   cx.setLineDash([]);cx.lineWidth=PX;
 }
+// Paused, a selected plate shows where its 0 is: a tick outside the rim, pointing right, lit when the plate is on it.
+function zeroTick(c){const R=radius(c),on=Math.abs(wrapPi(renderTh(c)))<1e-3;cx.lineWidth=(on?2:1)*PX;cx.strokeStyle=on?HOT:SEL;line(c.x+R+5*PX,c.y,c.x+R+15*PX,c.y);cx.lineWidth=PX}
 function halo(x,y,r){cx.lineWidth=1.5*PX;cx.strokeStyle=SEL;circle(x,y,r+3*PX);cx.lineWidth=PX}
 function drawWindows(){
   const show=(arm,pad)=>S.windows||isSel(arm)||isSel(pad);
@@ -2968,8 +3008,9 @@ function draw(){
   if(ui.pitBand){const{a,p}=ui.pitBand;cx.setLineDash([6*PX,5*PX]);strokes(a.x,a.y,p.x,p.y,[[2*PX,DIM]]);cx.setLineDash([])}
   if(ui.carry&&ui.carry.band){const{a,p}=ui.carry.band;cx.setLineDash([6*PX,5*PX]);strokes(a.x,a.y,p.x,p.y,[[2*PX,DIM]]);cx.setLineDash([])}
   if(sel){const o=sel.o;
-    if(sel.type==='cog')halo(o.x,o.y,radius(o)+3.2);else if(sel.type==='pad')halo(o.x,o.y,o.r+2.4);
+    if(sel.type==='cog'){halo(o.x,o.y,radius(o)+3.2);if(clock.paused)zeroTick(o)}else if(sel.type==='pad')halo(o.x,o.y,o.r+2.4);
     else if(sel.type==='arm'){const t=armTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='cam'){const t=camTip(o);halo(t.x,t.y,3.3)}else if(sel.type==='probe'){if(probeAlive(o)){const t=probePoint(o);halo(t.x,t.y,3.6)}}else if(sel.type==='reader'||sel.type==='string'){halo(o.x1,o.y1,3.8);halo(o.x2,o.y2,3.8)}else if(sel.type==='pit')drawPitSel(o);else if(sel.type==='field')drawFieldSel(o)}
+  drawRec();
   if(S.ids){cx.fillStyle=DIM;cx.font=`${10*PX}px monospace`;
     for(const c of W.cogs)cx.fillText('c'+c.id,c.x+4*PX,c.y-4*PX);
     for(const p of W.pads)cx.fillText('p'+p.id,p.x+p.r+2*PX,p.y);
@@ -3092,7 +3133,7 @@ function focus(type,o,s){
   if(S.zoom>=z*.9){flyFit();return}
   const c=centred(at,z);fly(c.x,c.y,z);
 }
-function choose(type,o,play){select(type,o);if(play)audition(o,true);reveal()}
+function choose(type,o){select(type,o);reveal()}
 function removeObj(type,o){
   if(type==='cog'){W.cogs=W.cogs.filter(c=>c!==o);W.arms=W.arms.filter(a=>a.cog!==o);W.cams=W.cams.filter(m=>m.cog!==o);W.belts=W.belts.filter(b=>b.a!==o&&b.b!==o)}
   else if(type==='reader'){W.readers=W.readers.filter(x=>x!==o);for(const m of W.cams)if(m.to===o)m.to=null}
@@ -3191,10 +3232,10 @@ function placeCog(c,p){
 }
 // Snap into mesh only where that overlaps nothing; the rest of `stack` rides along with c.
 function snapClear(c,stack=[c]){
-  const bx=c.x,by=c.y,th=c.th;snap(c);const ex=c.x-bx,ey=c.y-by;if(!ex&&!ey)return false;
+  const bx=c.x,by=c.y,tooth=c.tooth;snap(c);const ex=c.x-bx,ey=c.y-by;if(!ex&&!ey)return false;
   for(const o of stack)if(o!==c){o.x+=ex;o.y+=ey}
   const set=new Set(stack);if(!stack.some(o=>clashes(o,set)))return true;
-  for(const o of stack){o.x-=ex;o.y-=ey}c.x=bx;c.y=by;c.th=th;return false;
+  for(const o of stack){o.x-=ex;o.y-=ey}c.x=bx;c.y=by;c.tooth=tooth;return false;
 }
 const rpmOf=c=>c.w*60/TAU;
 // Ratio snap (S.ratios): a resized cog takes only tooth counts in a simple ratio to the cog it meshes with,
@@ -3244,6 +3285,13 @@ function stepSpin(){
   if(!p.held&&Math.abs(p.rpm-goal)<.01*Math.max(1,Math.abs(goal))&&Math.abs(p.v)<.5){retimed(()=>{c.scrub=null;solve()});ui.spin=null;return}
   retimed(()=>{c.scrub=p.rpm;solve()});
 }
+// What the zero action would act on: the selected plates, and seated readers (a seated reader's 0 is pointing right too).
+const zeroable=()=>(group.length?group:sel?[sel]:[]).filter(({type,o})=>type==='cog'||type==='reader'&&o.on);
+function zeroSel(){
+  const parts=zeroable();if(!parts.length)return;
+  for(const{type,o}of parts)if(type==='cog')zeroPlate(o);else{o.seat.ang=0;placeSeated(o)}
+  buzz(10);changed();
+}
 const trackScrap=s=>{ui.scrap=offStage(s)};
 function endScrap(type,o){const gone=ui.scrap;ui.scrap=false;if(gone)removeObj(type,o);else changed(true)}
 const TRACK_DEFAULT={root:0,octave:3,range:1,scale:'chromatic',div:16},newTrack=()=>({...TRACK_DEFAULT,dots:[]});
@@ -3251,7 +3299,7 @@ const newMotor=()=>({rpm:S.bpm?S.bpm/S.beats:30,revs:1});
 const STRING_DEFAULT={kind:'string',f200:220,quant:1,decay:2.5,damp:.5,hard:.5,level:.7,velSense:.7};
 function newPart(kind,p){
   const id=W.next++;
-  if(MODEL[kind])return {type:'cog',o:{id,x:p.x,y:p.y,n:kind==='disc'?48:12,motor:kind==='motor'?newMotor():null,turns:0,layer:0,th:0,w:0,
+  if(MODEL[kind])return {type:'cog',o:{id,x:p.x,y:p.y,n:kind==='disc'?48:12,motor:kind==='motor'?newMotor():null,turns:0,layer:0,th:0,th0:0,tooth:0,w:0,
     track:kind==='disc'?newTrack():null}};
   if(kind==='pad')return {type:'pad',o:{id,x:p.x,y:p.y,r:12,voice:makeVoice('kick'),hits:0,lastV:0}};
   // a new reader plays the wave synth's pluck; its patch sheet changes the sound
@@ -3279,6 +3327,35 @@ function placePart(type,o,p){
   else{const c=pickCog(p);o.cog=c;if(c){o.a=wrap(Math.atan2(p.y-c.y,p.x-c.x)-renderTh(c));o.len=Math.max(4,Math.hypot(p.x-c.x,p.y-c.y))}}
 }
 
+// Size a cog through a resizer, within its limits and the ratio snap; a size that would overlap anything is refused.
+function setTeeth(c,grow,raw){
+  const min=c.track?12:6,n=ratioSnap(c,grow.anchor,clamp(raw,min,240),min);if(n===c.n)return;
+  const was=c.n,jams=overlaps();grow.set(n);if(overlaps()>jams)grow.set(was);else buzz(3);
+}
+// The two-finger grab: the midpoint of the fingers moves the part and spreading sizes it, both at once. It never turns
+// anything: an angle is timing, set on purpose with the plate's knob. hold(m,k) takes the midpoint's world travel and the spread ratio;
+// body(s) is the one-finger gesture the finger left behind carries on with, and its lift ends the action.
+// Past this share of the view a part is the view: the fingers zoom instead, or there would be no way back out.
+const fillsView=r=>2*r*S.zoom>.9*Math.min(CW,CH);
+const SPREAD_DEAD=10;
+// A turned plate or seated reader catches at 0, within 4°, with a buzz.
+const ZERO_CATCH=.07;
+function catchZero(a){const on=Math.abs(wrapPi(a))<ZERO_CATCH;if(on&&!ui.caught)buzz(8);ui.caught=on;return on?0:a}
+function gripCog(c){
+  if(fillsView(radius(c)))return null;
+  const stack=stackOf(c),start=stack.map(o=>[o,o.x,o.y]),n0=c.n;
+  let last=stack.some(o=>clashes(o,new Set(stack)))?null:[0,0],bx=0,by=0,raw=n0;ui.snapped=false;
+  return {readout:()=>`teeth: ${c.n}`,body:s=>G.cog(c,s),
+    hold(m,k){
+      const dx=m.x+bx,dy=m.y+by;
+      if(ui.scrap){for(const[o,x,y]of start){o.x=x+dx;o.y=y+dy}solve();return}
+      const was=last;last=clearShift(start,dx,dy,last);const blocked=was&&(last[0]!==dx||last[1]!==dy);
+      const snapped=snapClear(c,stack)||blocked;if(snapped&&!ui.snapped)buzz(8);ui.snapped=snapped;solve();
+      // A resize keeps the meshes from wherever the cog stands now, and may shift it: the fingers keep that shift.
+      const r=Math.round(n0*k);
+      if(r!==raw){raw=r;const px=c.x,py=c.y;setTeeth(c,resizer(c),r);const ex=c.x-px,ey=c.y-py;bx+=ex;by+=ey;if(last){last=[last[0]+ex,last[1]+ey]}}
+    }};
+}
 const G={
   marquee(s0){
     const a=screenToWorld(s0);marquee={a,b:a};
@@ -3345,16 +3422,26 @@ const G={
     const p0=screenToWorld(s0),dx=f.x-p0.x,dy=f.y-p0.y;
     return {o:f,readout:()=>edge?`fx ${f.id} radius ${Math.round(f.r)}`:`fx ${f.id}: ${FIELD_MODE_LABEL[f.mode]}`,
       move(s){const q=screenToWorld(s);if(edge)f.r=clamp(Math.hypot(q.x-f.x,q.y-f.y),30,800);else{trackScrap(s);f.x=q.x+dx;f.y=q.y+dy}},
-      up(){if(edge)changed();else endScrap('field',f)},tap(){choose('field',f)},dbl(s){focus('field',f,s)}};
+      up(){if(edge)changed();else endScrap('field',f)},tap(){choose('field',f)},dbl(s){focus('field',f,s)},
+      grip(){if(fillsView(f.r))return null;const x=f.x,y=f.y,r=f.r;
+        return {readout:()=>`fx ${f.id} radius ${Math.round(f.r)}`,hold(m,k){f.x=x+m.x;f.y=y+m.y;f.r=clamp(r*k,30,800)},body:s=>G.field(f,s,false)}}};
   },
-  arm(a){
+  // From the tip a drag swings and stretches the arm; from the shaft it swings it round the hub and keeps its length.
+  arm(a,shaft){
+    if(shaft){const c=a.cog,p0=screenToWorld(shaft),a0=a.a,g0=Math.atan2(p0.y-c.y,p0.x-c.x);
+      return {o:a,move(s){trackScrap(s);const q=screenToWorld(s);a.a=wrap(a0+Math.atan2(q.y-c.y,q.x-c.x)-g0)},
+        up(){endScrap('arm',a)},tap(){choose('arm',a)},dbl(s){focus('arm',a,s)},grip:()=>G.arm(a).grip()}}
     return {o:a,move(s){trackScrap(s);const q=screenToWorld(s),c=a.cog;a.a=wrap(Math.atan2(q.y-c.y,q.x-c.x)-renderTh(c));a.len=Math.max(4,Math.hypot(q.x-c.x,q.y-c.y)-a.r0)},
-      up(){endScrap('arm',a)},tap(){choose('arm',a)},dbl(s){focus('arm',a,s)}};
+      up(){endScrap('arm',a)},tap(){choose('arm',a)},dbl(s){focus('arm',a,s)},
+      grip(){const a0=a.a,L=a.r0+a.len;
+        return {readout:()=>`arm length: ${a.len.toFixed(0)}`,hold(m,k){a.len=Math.max(4,L*k-a.r0)},body:()=>({o:a,move:trackScrap,up(){endScrap('arm',a)}})}}};
   },
   pad(o,s0,rim){
     const p0=screenToWorld(s0),dx=o.x-p0.x,dy=o.y-p0.y;
     return {o,move(s){const q=screenToWorld(s);if(rim)o.r=clamp(Math.hypot(q.x-o.x,q.y-o.y),3,200);else{trackScrap(s);o.x=q.x+dx;o.y=q.y+dy}},
-      up(){if(rim)changed();else endScrap('pad',o)},tap(){choose('pad',o,true)},dbl(s){focus('pad',o,s)}};
+      up(){if(rim)changed();else endScrap('pad',o)},tap(){choose('pad',o)},dbl(s){focus('pad',o,s)},
+      grip(){if(fillsView(o.r))return null;const x=o.x,y=o.y,r=o.r;
+        return {readout:()=>`pad radius: ${settingText(o.r)} px`,hold(m,k){o.x=x+m.x;o.y=y+m.y;o.r=clamp(r*k,3,200)},body:s=>G.pad(o,s,false)}}};
   },
   // Readers and strings: an end stretches, the body moves. A string sings its new pitch as it stretches.
   // A seated reader's body slides around its disc, and its ends slide along the radius; pulled more than
@@ -3368,16 +3455,26 @@ const G={
           const c=o.on,R=radius(c),d=Math.hypot(q.x-c.x,q.y-c.y);
           if(d<=R+UNSEAT_PX/S.zoom&&!ui.scrap){
             if(end){const f=clamp(d/R,0,1);if(end===1)o.seat.f0=f;else o.seat.f1=f}
-            else o.seat.ang=Math.atan2(q.y-c.y,q.x-c.x)+turn;
+            else o.seat.ang=catchZero(Math.atan2(q.y-c.y,q.x-c.x)+turn);
             placeSeated(o);return}
           o.on=null;buzz(10);Object.assign(k,{x1:o.x1-dx,y1:o.y1-dy,x2:o.x2-dx,y2:o.y2-dy});
         }
         if(end!==2){o.x1=k.x1+dx;o.y1=k.y1+dy}if(end!==1){o.x2=k.x2+dx;o.y2=k.y2+dy}
         if(type==='reader'&&!end&&!ui.scrap){const d=pickCog(q,c=>c.track);
           if(d){const keep=o.seat||{f0:(ringR(d,0)-6)/radius(d),f1:(ringR(d,trackRings(d.track)-1)+6)/radius(d)};
-            o.on=d;o.seat={ang:Math.atan2(q.y-d.y,q.x-d.x),f0:keep.f0,f1:keep.f1};turn=0;placeSeated(o);buzz(8)}}
+            o.on=d;o.seat={ang:catchZero(Math.atan2(q.y-d.y,q.x-d.x)),f0:keep.f0,f1:keep.f1};turn=0;placeSeated(o);buzz(8)}}
         if(o.f200&&end){const m=Math.round(stringMidi(o));if(m!==note){note=m;buzz(3)}}},
-      up(){if(end)changed();else endScrap(type,o)},tap(){choose(type,o,true)},dbl(s){focus(type,o,s)}};
+      up(){if(end)changed();else endScrap(type,o)},tap(){choose(type,o)},dbl(s){focus(type,o,s)},
+      // Free, both ends stretch about the middle, which follows the fingers. Seated on a disc, its span stretches along the radius.
+      grip(){
+        const len=()=>Math.hypot(o.x2-o.x1,o.y2-o.y1),readout=()=>`${type} length: ${len().toFixed(0)}`,body=s=>G.span(type,o,s,0);
+        if(seated()){const q={...o.seat},mid=(q.f0+q.f1)/2,half=(q.f1-q.f0)/2;
+          return {readout,body,hold(m,k){o.seat.f0=clamp(mid-half*k,0,1);o.seat.f1=clamp(mid+half*k,0,1);placeSeated(o)}}}
+        const mx=(o.x1+o.x2)/2,my=(o.y1+o.y2)/2,hx=(o.x2-o.x1)/2,hy=(o.y2-o.y1)/2,L=Math.hypot(hx,hy)||1;
+        return {readout,body,hold(m,k){
+          const f=Math.max(k,2/L),ex=hx*f,ey=hy*f;
+          Object.assign(o,{x1:mx+m.x-ex,y1:my+m.y-ey,x2:mx+m.x+ex,y2:my+m.y+ey});
+          if(o.f200){const n=Math.round(stringMidi(o));if(n!==note){note=n;buzz(3)}}}}}};
   },
   belt(b){return {o:b,move:trackScrap,up(){endScrap('belt',b)},tap(){b.cross=b.cross?0:1;buzz(8);changed(true)}}},
   cog(c,s0){
@@ -3391,19 +3488,26 @@ const G={
         const was=last;last=clearShift(start,dx,dy,last);const blocked=was&&(last[0]!==dx||last[1]!==dy);
         const snapped=snapClear(c,stack)||blocked;if(snapped&&!ui.snapped)buzz(8);ui.snapped=snapped;solve()},
       up(){ui.snapped=false;if(ui.scrap){ui.scrap=false;for(const o of stack)removeObj('cog',o)}else changed(true)},
-      tap(){choose('cog',c)},dbl(s){focus('cog',c,s)}};
+      tap(){choose('cog',c)},dbl(s){focus('cog',c,s)},grip:()=>gripCog(c)};
   },
-  // On the rim: pull outward or push inward to change the tooth count.
+  // On the rim, by mouse: pull outward or push inward to change the tooth count. A finger on the rim is on the
+  // cog's body and moves it; two fingers size it.
   rim(c){
     let grow=null;const min=c.track?12:6;
     return {o:c,readout:()=>`teeth: ${c.n}`,
-      move(s){grow??=resizer(c);const n=ratioSnap(c,grow.anchor,clamp(Math.round(grow.radiusThrough(screenToWorld(s))*TAU/TOOTH),min,240),min);if(n!==c.n){const was=c.n,jams=overlaps();grow.set(n);if(overlaps()>jams)grow.set(was);else buzz(3)}},
+      move(s){grow??=resizer(c);setTeeth(c,grow,Math.round(grow.radiusThrough(screenToWorld(s))*TAU/TOOTH))},
       up(){if(!grow)return;if(!grow.anchor&&stackOf(c).length===1)snap(c);changed(true)},
       tap(){choose('cog',c)},dbl(s){focus('cog',c,s)}};
   },
   // The speed knob, dragged round the hub. On a motor it turns the speed along the dial; on any other cog it scrubs.
   knob(c,s0){
     const ang=s=>{const k=toScreen(c);return Math.atan2(s.y-k.y,s.x-k.x)};let at=ang(s0),acc=0;ui.knob={c,a:at};
+    // Paused, the knob is the plate's phase wheel: it turns the plate, its teeth holding the mesh, and catches at 0.
+    if(clock.paused){
+      const th0=renderTh(c),end=()=>{ui.knob=null};ui.caught=false;buzz(6);
+      return {o:c,readout:()=>`phase: ${(wrap(renderTh(c))*180/Math.PI).toFixed(1)}°`,
+        move(s){const a=ang(s);acc+=wrapPi(a-at);at=a;ui.knob.a=a;setPhase(c,catchZero(wrap(th0+acc)))},up(){end();changed()},cancel:end,tap:end};
+    }
     if(c.motor){
       let dial=gaugeAngle(rpmOf(c));ui.crank={c};const end=()=>{ui.crank=null;ui.knob=null};
       return {o:c,readout:()=>`speed rpm: ${rpmOf(c).toFixed(1)}`,
@@ -3468,7 +3572,7 @@ function turner(items){
   const put=a=>{
     const c=Math.cos(a),n=Math.sin(a),rot=(x,y)=>[pivot.x+(x-pivot.x)*c-(y-pivot.y)*n,pivot.y+(x-pivot.x)*n+(y-pivot.y)*c];
     for(const k of start){const o=k.o;
-      if(k.type==='cog'){[o.x,o.y]=rot(k.x,k.y);o.th+=a-cur}
+      if(k.type==='cog'){[o.x,o.y]=rot(k.x,k.y);o.th+=a-cur;o.th0=wrap(o.th0+a-cur)}
       else if(k.type==='pit'){const[x,y]=rot(k.x,k.y);shiftPit(o,x-o.x,y-o.y)}
       else if(k.type==='pad'||k.type==='field')[o.x,o.y]=rot(k.x,k.y);
       else if((k.type==='reader'||k.type==='string')&&!o.on){[o.x1,o.y1]=rot(k.x1,k.y1);[o.x2,o.y2]=rot(k.x2,k.y2)}}
@@ -3503,30 +3607,34 @@ G.twist=function(){
       if(hold&&!held)buzz(6);held=hold;t.turn(hold?q:acc)},
     up(){ui.turn=null;changed(true)}};
 };
-function begin(s){
+function begin(s,touch){
   const ch=chromeHit(s);if(ch)return ch();
   const p=screenToWorld(s),Z=S.zoom,dist=q=>Math.hypot(q.x-p.x,q.y-p.y)*Z;
   // The nearest small part under the finger wins: a hammer sweeping past a pad must not steal the tap.
   let best=null;const near=(d,reach,make)=>{if(d<=reach&&(!best||d<best.d))best={d,make}};
-  for(const a of W.arms)near(dist(armTip(a))-3.3*Z,20,()=>G.arm(a));
+  for(const a of W.arms){near(dist(armTip(a))-3.3*Z,20,()=>G.arm(a));
+    // the shaft too, out from a quarter of the way along: the hub end is left to the cog. The tip wins where both reach.
+    const c=a.cog,ang=renderTh(c)+a.a,r0=a.r0+a.len*.25,r1=a.r0+a.len,ux=Math.cos(ang),uy=Math.sin(ang);
+    near(segDist(p,c.x+ux*r0,c.y+uy*r0,c.x+ux*r1,c.y+uy*r1)*Z+10,22,()=>G.arm(a,s))}
   for(const m of W.cams)near(dist(camTip(m))-3*Z,20,()=>G.cam(m));
   // a probe sits on top of what it rides, so it wins a tie with it
   for(const pr of W.probes)if(probeAlive(pr))near(dist(probePoint(pr))-6*Z,20,()=>G.probe(pr));
-  for(const o of W.pads){const d=dist(o),r=o.r*Z;near(d-r,Math.max(8,22-r),()=>G.pad(o,s,r>=18&&d>=r-8))}
+  for(const o of W.pads){const d=dist(o),r=o.r*Z;near(d-r,Math.max(8,22-r),()=>G.pad(o,s,!touch&&r>=18&&d>=r-8))}
   for(const[type,list]of [['reader',W.readers],['string',W.strings]])for(const o of list){
     near(dist({x:o.x1,y:o.y1}),22,()=>G.span(type,o,s,1));near(dist({x:o.x2,y:o.y2}),22,()=>G.span(type,o,s,2));
     near(segDist(p,o.x1,o.y1,o.x2,o.y2)*Z+8,22,()=>G.span(type,o,s,0))}
   for(const o of W.belts)for(const l of beltLines(o))near(segDist(p,...l)*Z+10,22,()=>G.belt(o));
   let box=null;for(const o of W.pits)box=pitTouch(o,s,near)||box;
   // a field has no edge to grab: its centre ring, and its radius handle while it is selected
-  for(const f of W.fields){near(dist(f)-4,18,()=>G.field(f,s,false));if(isSel(f))near(dist(fieldHandle(f)),20,()=>G.field(f,s,true))}
+  for(const f of W.fields){near(dist(f)-4,18,()=>G.field(f,s,false));if(isSel(f)&&!touch)near(dist(fieldHandle(f)),20,()=>G.field(f,s,true))}
   const c=pickCog(p,()=>true,14/Z),d=c&&dist(c),Rs=c&&radius(c)*Z;
-  if(c&&Rs>=30)near(Math.abs(d-Rs),14,()=>G.rim(c));
+  if(c&&Rs>=30&&!touch)near(Math.abs(d-Rs),14,()=>G.rim(c));
   // the knob sits over the cog, so it wins a tie with the rim and the face
   const kc=knobCog();if(kc){const k=knobAt(kc);near(Math.hypot(s.x-k.x,s.y-k.y)-KNOB_R,Math.max(8,22-KNOB_R),()=>G.knob(kc,s))}
   if(best)return best.make();
   if(c){
-    if(noteMode(c)&&d>Math.max(22,Rs*.2)&&cellAt(c,p))return G.notes(c,s);
+    // Only a selected disc takes pins on its face: reaching for an unselected one moves or grabs it instead.
+    if(noteMode(c)&&isSel(c)&&d>Math.max(22,Rs*.2)&&cellAt(c,p))return G.notes(c,s);
     return G.cog(c,s)}
   if(box)return G.pitIn(box,s);
   return G.pan(s);
@@ -3537,7 +3645,7 @@ function pointerGesture(e,s){
   if(e.ctrlKey||e.metaKey)return G.marquee(s);
   if(ui.linking&&!offStage(s))return linkGesture(s);
   if(ui.armed&&!offStage(s))return G.armed(ui.armed,s);
-  const g=begin(s);
+  const g=begin(s,e.pointerType==='touch');
   if(group.length>1&&g.o&&group.some(x=>x.o===g.o)){g.cancel?.();return G.group(s)}
   // A slide on empty ground pans and keeps the selection; only a tap there clears it.
   if(group.length&&g.o&&!g.o.track)group=[];
@@ -3546,27 +3654,43 @@ function pointerGesture(e,s){
 cv.addEventListener('contextmenu',e=>e.preventDefault());
 const local=e=>{const r=cv.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top}};
 function zoomAt(s,zoom,anchor){S.zoom=clamp(zoom,ZMIN,ZMAX);view.x=anchor.x-(s.x-CW/2)/S.zoom;view.y=anchor.y-(s.y-CH/2)/S.zoom}
-const fingers=new Map();let pinch=null,gesture=null,twist=null;
+const fingers=new Map();let pinch=null,gesture=null,twist=null,grip=null;
 function pinchNow(){const[a,b]=[...fingers.values()];return {mid:{x:(a.x+b.x)/2,y:(a.y+b.y)/2},d:Math.hypot(a.x-b.x,a.y-b.y)||1}}
 // The pinch measures from the fingers down now; whenever one lands or lifts it starts over from here.
 function repinch(){const p=pinchNow();pinch={...p,zoom:S.zoom,anchor:screenToWorld(p.mid)}}
+function gripNow(){const a=fingers.get(grip.a),b=fingers.get(grip.b);return {mid:{x:(a.x+b.x)/2,y:(a.y+b.y)/2},d:Math.hypot(a.x-b.x,a.y-b.y)||1}}
+// A second finger takes the part under the first, wherever it lands, and even mid-drag. False: nothing to take.
+function startGrip(id){
+  const hand=!pinch&&gesture?.g.grip?.();if(!hand)return false;
+  grip={...hand,a:gesture.id,b:id};gesture=null;
+  Object.assign(grip,gripNow());grip.mid0=grip.mid;grip.d0=grip.d;return true;
+}
+function moveGrip(){
+  const n=gripNow();trackScrap(n.mid);
+  const spread=n.d-grip.d0,k=1+Math.sign(spread)*Math.max(Math.abs(spread)-SPREAD_DEAD,0)/grip.d0;
+  grip.hold({x:(n.mid.x-grip.mid0.x)/S.zoom,y:(n.mid.y-grip.mid0.y)/S.zoom},k);
+}
 function dropGesture(){
   if(gesture){const g=gesture.g;if(g.cancel)g.cancel();else if(gesture.moved)g.up?.(gesture.last);gesture=null}
   ui.scrap=false;ui.crank=null;ui.carry=null;ui.knob=null;if(ui.spin)ui.spin.held=false;
 }
 cv.addEventListener('pointerdown',e=>{
   cv.setPointerCapture(e.pointerId);const s=local(e);fingers.set(e.pointerId,s);ui.cam=null;
-  // A second finger zooms the view, unless the first is holding the selection: then the two twist it.
+  // A second finger grabs the part under the first. If the first holds a group, or a selected part with no grab,
+  // the two twist it. Otherwise they zoom the view.
   if(fingers.size>=2){
+    if(grip)return;
     if(twist){twist.rebase();return}
     const g=gesture?.g;
-    if(fingers.size===2&&e.pointerType==='touch'&&g&&(g.grp||g.o&&isSel(g.o))){dropGesture();twist=G.twist();if(twist)return}
+    if(fingers.size===2&&e.pointerType==='touch'&&startGrip(e.pointerId))return;
+    if(fingers.size===2&&e.pointerType==='touch'&&g&&(g.grp||g.o&&isSel(g.o)&&sel?.type!=='cog')){dropGesture();twist=G.twist();if(twist)return}
     dropGesture();repinch();return}
   if(fingers.size===1&&!pinch)gesture={id:e.pointerId,g:pointerGesture(e,s),s0:s,last:s,t0:e.timeStamp,moved:false};
 });
 cv.addEventListener('pointerleave',()=>{ui.hover=null});
 cv.addEventListener('pointermove',e=>{
   ui.hover=local(e);ui.shift=e.shiftKey;if(!fingers.has(e.pointerId))return;const s=local(e);fingers.set(e.pointerId,s);
+  if(grip){if(e.pointerId===grip.a||e.pointerId===grip.b)moveGrip();return}
   if(twist){if(fingers.size>=2)twist.move();return}
   if(pinch){if(fingers.size>=2){const p=pinchNow();zoomAt(p.mid,pinch.zoom*p.d/pinch.d,pinch.anchor)}return}
   if(!gesture||gesture.id!==e.pointerId)return;
@@ -3576,6 +3700,11 @@ cv.addEventListener('pointermove',e=>{
 });
 const endPointer=e=>{
   if(!fingers.delete(e.pointerId))return;
+  if(grip){
+    if(e.pointerId!==grip.a&&e.pointerId!==grip.b)return;
+    const id=e.pointerId===grip.a?grip.b:grip.a,s=fingers.get(id);
+    gesture={id,g:grip.body(s),s0:s,last:s,t0:e.timeStamp,moved:true};grip=null;return;
+  }
   if(twist){if(fingers.size>=2){twist.rebase();return}twist.up();twist=null;gesture=null;return}
   if(pinch){
     if(fingers.size>=2){repinch();return}
@@ -3591,9 +3720,18 @@ const endPointer=e=>{
   else{ui.lastTap={t,s,o:g.g.o};g.g.tap?.(s)}
 };
 cv.addEventListener('pointerup',endPointer);cv.addEventListener('pointercancel',endPointer);
+// One trackpad pinch: it takes the cog under the cursor where it begins, and stays what it began as until it rests.
+let trackpad=null;
+function endTrackpad(){const c=trackpad.c;trackpad=null;if(c){if(stackOf(c).length===1&&!W.cogs.some(o=>o!==c&&contact(c,o)==='mesh'))snapClear(c);changed(true)}}
 // Trackpad pinch arrives as wheel with ctrlKey and small deltas; a mouse notch is ~100 px, or 3 lines.
 cv.addEventListener('wheel',e=>{
   e.preventDefault();const s=local(e);if(typeof shelfWheel==='function'&&shelfWheel(s,e))return;ui.cam=null;const dy=e.deltaY*(e.deltaMode===1?33:e.deltaMode===2?CH:1);
+  if(e.ctrlKey){
+    if(!trackpad){const c=pickCog(screenToWorld(s));trackpad={c:c&&!fillsView(radius(c))?c:null,k:1,n0:c?.n}}
+    clearTimeout(trackpad.rest);trackpad.rest=setTimeout(endTrackpad,250);
+    const c=trackpad.c;
+    if(c){trackpad.k*=Math.exp(-dy*.01);const r=Math.round(trackpad.n0*trackpad.k);if(r!==trackpad.r){trackpad.r=r;setTeeth(c,resizer(c),r)}return}
+  }
   zoomAt(s,S.zoom*Math.exp(-dy*(e.ctrlKey?.01:.002)),screenToWorld(s));
 },{passive:false});
 document.addEventListener('pointerup',initAudio);
@@ -3605,7 +3743,7 @@ document.addEventListener('keydown',e=>{
   if((e.ctrlKey||e.metaKey)&&!e.altKey&&(k==='c'&&copyParts()||k==='x'&&copyParts()&&(removeSel(),true)||k==='v'&&pasteParts())){e.preventDefault();return}
   if(e.ctrlKey||e.metaKey||e.altKey)return;
   if(PART_KEYS[k])armPart(PART_KEYS[k]);else if(k==='s'||k==='escape')armPart(null);
-  else if(e.key==='?')togglePanel();else if(e.key==='0')flyFit();
+  else if(k==='h')toStart();else if(k==='z')zeroSel();else if(k==='n')recToggle();else if(k==='j')connectKeyboard();else if(e.key==='?')togglePanel();else if(e.key==='0')flyFit();
   else if(e.key==='Delete'||e.key==='Backspace')removeSel();else if(e.key===' '){e.preventDefault();setPaused(!clock.paused)}
 });
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&ac&&ac.state!=='running')ac.resume()});
@@ -4045,6 +4183,7 @@ function buildPanel(lead){
   btn('audio',initAudio);btn('pause',()=>setPaused(!clock.paused));btn('del',removeSel);
   btn('demo',demo);btn('clear',()=>deserialize({S:{...S},SPACE:{...SPACE},climax:{...CLIMAX},view:{x:0,y:0},cogs:[],arms:[],pads:[],readers:[],belts:[],strings:[]}));
   inspector=section('selection');inspector.id='inspector';
+  midiSection(section('keyboard'));
   const room=section('room'),sRow=(f,def,o,dflt,after)=>numRow(f,def[1],def[2],def[3],def[4],...bind(o,def[0],after),dflt[def[0]]);
   // the reverb's mode and color are named choices; the rest are sliders
   const spRow=(f,def)=>SPACE_CHOICES[def[0]]?selRow(f,def[1],SPACE_CHOICES[def[0]].map((_,i)=>String(i)),()=>String(SPACE[def[0]]),x=>{SPACE[def[0]]=+x;roomEdited()},i=>SPACE_CHOICES[def[0]][i])
@@ -4143,7 +4282,7 @@ function listen(force=false){
 let inspector=null,panelRows=0,panelReadouts=0;
 const REVS=['-2','-1','-1/2','-1/3','-1/4','0','1/8','1/6','1/4','1/3','1/2','2/3','3/4','1','4/3','3/2','2','3','4','6','8'];
 const frac=s=>{const[a,b=1]=s.split('/').map(Number);return a/b};
-function select(type,o){sel=type?{type,o}:null;if(o&&o.voice&&(type==='reader'||type==='pad'))midi.target=o;group=[];if(inspectorLive())buildInspector()}
+function select(type,o){sel=type?{type,o}:null;const synth=midiVoiced(sel);if(synth)midi.target=synth;group=[];if(inspectorLive())buildInspector()}
 const span=(a,b)=>Array.from({length:b-a+1},(_,i)=>String(a+i));
 const PITCH_KEYS=new Set(['note','octave','semi']);
 function voiceRows(f0,owner,withNote){
@@ -4181,7 +4320,7 @@ function buildInspector(){
       if(S.bpm){const revs=()=>rpmOf(o)*S.beats/S.bpm;selRow(f,'revs/bar',REVS,()=>REVS.reduce((a,b)=>Math.abs(frac(b)-revs())<Math.abs(frac(a)-revs())?b:a),v=>{drive(o,frac(v)*S.bpm/S.beats);changed(true)})}
     }else roRow(f,'rpm',()=>'no motor in this train');
     numRow(f,'layer',0,7,1,...bind(o,'layer',()=>changed(true)));
-    numRow(f,'phase deg',0,360,.1,()=>wrap(o.th)*180/Math.PI,v=>{o.th=v*Math.PI/180;changed()});
+    numRow(f,'phase deg',0,360,.1,()=>wrap(renderTh(o))*180/Math.PI,v=>{setPhase(o,v*Math.PI/180);changed()});
     roRow(f,'ratio',()=>o.driver?`${(o.w/o.driver.w||0).toFixed(4)} of c${o.driver.id}`:'-');
     roRow(f,'state',()=>o.jam?(W.cogs.filter(c=>c.driver===o.driver&&c.motor).length>1?'JAM: two motors':'JAM'):o.w?'turning':'idle');
     if(o.track){
@@ -4959,30 +5098,44 @@ function fieldIn(j){
   f.r=clamp(f.r,30,800);f.diffuse=clamp(f.diffuse,0,1);f.insert=clamp(f.insert,0,1);
   return f;
 }
-/* ---------- MIDI in: a keyboard plays the selected reader (or pad) ---------- */
+/* ---------- MIDI in: a keyboard plays the selected synth and records onto its plate ---------- */
 // Two ways in. Bluetooth: Web Bluetooth straight to a BLE-MIDI keyboard (a Korg microKEY Air, or anything that speaks
 // the BLE-MIDI service), no pairing app needed; Chrome on Android or desktop. MIDI: Web MIDI, for USB keyboards and
-// Bluetooth ones the system already connected. The notes go to the part last selected that has a voice; its synth,
-// octave and all, transposes them as it does every note. Sustain (CC64) holds note-offs; the mod wheel (CC1) turns
-// a synth's macro 1 unless a cam is turning it.
+// Bluetooth ones the system already connected. The notes go to the synth of what is selected (a reader, a pad, a box,
+// or a plate, which means its reader), else to the last one that was; its synth, octave and all, transposes them as it
+// does every note. Sustain (CC64) holds note-offs; the mod wheel (CC1) turns a synth's macro 1 unless a cam is turning it.
 const BLE_MIDI_SERVICE='03b80e5a-ede8-4b33-a751-6ce34ec4c700',BLE_MIDI_CHAR='7772e5db-3868-4112-a1a9-f2669d106bf3';
-const midi={target:null,devices:new Map(),held:new Map(),sustain:false,sustained:new Set(),msg:'',last:null,mod:null,modAt:0,count:0};
-const midiSay=t=>{midi.msg=t;midiSync();if(typeof showInteraction==='function')showInteraction(()=>'MIDI: '+t)};
-// the part that plays: the selection when it has a voice, otherwise the last one that did
-function midiOwner(){const o=sel&&sel.o;if(o&&o.voice&&(sel.type==='reader'||sel.type==='pad'))midi.target=o;
-  const t=midi.target;return t&&(W.readers.includes(t)||W.pads.includes(t))?t:null}
-function midiNoteOn(note,vel){
-  const o=midiOwner();if(!o){midiSay('select a reader to play it');return}
-  if(!ac)initAudio();if(!ac||engineState!=='ready')return;
-  midiNoteOff(note,true);
-  const v=o.voice,vx=vel/127,amp=v.level*(1-v.velSense+v.velSense*Math.pow(vx,S.velCurve)),key=o.id*128+note;
-  playVoice(v,note,ac.currentTime+.003,amp,0,key,vx,30);
-  midi.held.set(note,{key,o});o.flash=clock.view;o.lastMidi=voiceMidi(v,note);midi.last=note;midi.count++;
+const midi={target:null,devices:new Map(),held:new Map(),sustain:false,sustained:new Set(),msg:'',last:null,mod:null,modAt:0,count:0,rec:null};
+// The phone reads it out; the desk shows it in the panel, or for a moment on the stage while the panel is shut.
+const midiSay=t=>{midi.msg=t;midiSync();if(typeof showInteraction==='function')showInteraction(()=>'MIDI: '+t);
+  else if(!panelShown()){notice('MIDI: '+t);clearTimeout(midi.noticeT);midi.noticeT=setTimeout(()=>{$('#notice').hidden=true},3000)}};
+// A plate's reader, and a reader's plate: the seat if there is one, otherwise whatever lies across.
+const plateReader=c=>W.readers.find(r=>r.on===c)||W.readers.find(r=>segDist(c,r.x1,r.y1,r.x2,r.y2)<radius(c))||null;
+const readerPlate=r=>r.on?.track?r.on:W.cogs.filter(c=>c.track&&segDist(c,r.x1,r.y1,r.x2,r.y2)<radius(c)).sort((a,b)=>b.layer-a.layer)[0]||null;
+const midiPlayable=o=>!!o?.voice&&(W.readers.includes(o)||W.pads.includes(o)||W.pits.includes(o));
+// The synth a selection means.
+function midiVoiced(s){
+  if(!s)return null;
+  if(s.type==='cog')return s.o.track?plateReader(s.o):null;
+  if(s.type==='dot')return plateReader(ui.dotOf);
+  return midiPlayable(s.o)?s.o:null;
 }
+// the part that plays: the one being recorded through, the selection's synth, otherwise the last one selected
+function midiOwner(){if(midi.rec)return midi.rec.rd;const o=midiVoiced(sel);if(o)midi.target=o;return midiPlayable(midi.target)?midi.target:null}
+function midiNoteOn(note,vel){
+  const o=midiOwner();if(!o){midiSay('select a synth to play it');return}
+  midiNoteOff(note,true);
+  const v=o.voice,vx=vel/127,key=o.id*128+note;
+  midi.held.set(note,{key,o});o.flash=clock.view;o.lastMidi=voiceMidi(v,note);midi.last=note;midi.count++;
+  recNoteOn(note,vx,v);
+  if(!ac)initAudio();if(!ac||engineState!=='ready')return;
+  playVoice(v,note,ac.currentTime+.003,v.level*velGain(v,vx),0,key,vx,30);
+}
+const velGain=(v,vx)=>1-v.velSense+v.velSense*Math.pow(vx,S.velCurve);
 function midiNoteOff(note,now){
   const h=midi.held.get(note);if(!h)return;
   if(midi.sustain&&!now){midi.sustained.add(note);return}
-  midi.held.delete(note);midi.sustained.delete(note);if(ac)damp(h.key,ac.currentTime);
+  midi.held.delete(note);midi.sustained.delete(note);recNoteOff(note);if(ac&&engineNode)damp(h.key,ac.currentTime);
 }
 function midiPedal(down){midi.sustain=down;if(!down){for(const n of [...midi.sustained])midiNoteOff(n,true);midi.sustained.clear()}}
 function midiMod(x){
@@ -4999,6 +5152,86 @@ function midiMessage(st,d1,d2){
   if(t===0x90&&d2>0)midiNoteOn(d1,d2);
   else if(t===0x80||t===0x90)midiNoteOff(d1);
   else if(t===0xb0){if(d1===64)midiPedal(d2>=64);else if(d1===1)midiMod(d2/127);else if(d1===123||d1===120)midiPanic()}
+}
+/* Recording: what the keyboard plays lands on the plate as pins, where the reader was when you played it, so it comes
+   back round in time. A take adds to what is there and is one undo step. Notes snap to the roll's snap (off: as played). */
+// What you hear now, on the sim's clock: exact between frames, since a key can land anywhere in one.
+const heardNow=()=>clock.paused?clock.view:Math.max(clock.view,clock.audio&&heardOffset!==null?performance.now()/1000+heardOffset:nowSec()-clock.off);
+// Where a reader meets the circle of radius R about c: its world angle, and how far along the reader.
+function readerCrossing(c,R,rd){
+  const dx=rd.x2-rd.x1,dy=rd.y2-rd.y1,fx=rd.x1-c.x,fy=rd.y1-c.y,A=dx*dx+dy*dy,B=2*(fx*dx+fy*dy),D=B*B-4*A*(fx*fx+fy*fy-R*R);
+  if(!A||D<0)return null;
+  for(const u of [(-B-Math.sqrt(D))/(2*A),(-B+Math.sqrt(D))/(2*A)])if(u>=0&&u<=1)return {u,phi:Math.atan2(fy+dy*u,fx+dx*u)};
+  return null;
+}
+// The rings this reader can play, each with the note it sounds there (a comb's comes from where it is crossed).
+function recRings(c,rd){
+  const t=c.track,out=[];
+  for(let ring=0;ring<trackRings(t);ring++){const h=readerCrossing(c,ringR(c,ring),rd);if(!h)continue;
+    out.push({ring,phi:h.phi,note:rd.tines?scaleNote(rd.combBase,rd.combScale,Math.min(rd.tines-1,Math.floor(h.u*rd.tines))):ringNote(t,ring)})}
+  return out;
+}
+// The plate makes room for the note: an empty one moves to its octave, then the range grows (existing pins keep their pitch).
+function recFit(t,note){
+  const n0=trackRings(t),b0=trackBase(t),L=SCALES[t.scale].length,top=RANGES.at(-1);
+  if(!t.dots.length&&(note<trackBase(t)||note>ringNote(t,trackRings(t)-1)))t.octave=clamp(Math.floor((note-t.root)/12)-1,OCTAVES[0],OCTAVES.at(-1));
+  while(note<trackBase(t)&&t.range<top&&t.octave>OCTAVES[0]){t.octave--;t.range++;for(const d of t.dots)d.ring+=L}
+  while(note>ringNote(t,trackRings(t)-1)&&t.range<top)t.range++;
+  return trackRings(t)!==n0||trackBase(t)!==b0;
+}
+// The nearest ring to the note, folding it by octaves into what the reader can reach.
+function recPick(rings,note){
+  if(!rings.length)return null;
+  const ns=rings.map(r=>r.note),lo=Math.min(...ns),hi=Math.max(...ns);let n=note;
+  while(n<lo)n+=12;while(n>hi&&n-12>=lo)n-=12;
+  return rings.reduce((a,b)=>Math.abs(b.note-n)<Math.abs(a.note-n)?b:a);
+}
+const recLive=r=>W.cogs.includes(r.c)&&!!r.c.track&&W.readers.includes(r.rd);
+function recNoteOn(note,vx,v){
+  const r=midi.rec;if(!r)return;if(!recLive(r)){recStop();return}
+  const c=r.c,t=c.track;
+  if(clock.paused||!c.w){midiSay(clock.paused?'paused: press play to record':`plate ${c.id} is not turning: nothing recorded`);return}
+  if(!r.rd.tines&&recFit(t,note))r.grew=true;
+  const hit=recPick(recRings(c,r.rd),note);if(!hit){midiSay('the reader does not reach this plate\'s rings');return}
+  const at=heardNow(),g=snapOf(c);let a=wrap(hit.phi-(c.th-c.w*(simT-at))),skip=0;
+  if(g){const q=colAngle(c,Math.round(rollU(c,a)*t.div/g)*g),lead=-wrapPi(q-a)/c.w;
+    // snapped ahead of the reader, the pin would sound again in a moment: you have just played it
+    if(lead>0)skip=at+lead+.02;a=q}
+  const d={ring:hit.ring,a,p:1,v:clamp(velGain(v,vx),.02,1),len:1,flash:at,skip:Infinity};
+  t.dots=t.dots.filter(o=>!sameCell(o,d));t.dots.push(d);
+  r.open.set(note,{d,at,skip,g});r.n++;if(hit.note!==note)r.moved++;
+}
+function recClose(h,c){
+  const t=c.track,steps=(heardNow()-h.at)*Math.abs(c.w)*t.div/TAU;
+  h.d.len=clamp(h.g?Math.max(h.g,Math.round(steps/h.g)*h.g):tidy(steps),MIN_LEN,t.div);h.d.skip=h.skip;
+}
+function recNoteOff(note){const r=midi.rec,h=r?.open.get(note);if(!h)return;r.open.delete(note);if(recLive(r))recClose(h,r.c)}
+// What record would write to: the selected plate and its reader, or the selected reader and its plate.
+function recTarget(){
+  if(!sel)return null;
+  const c=sel.type==='cog'&&sel.o.track?sel.o:sel.type==='dot'?ui.dotOf:sel.type==='reader'?readerPlate(sel.o):null;
+  return c&&{c,rd:sel.type==='reader'?sel.o:plateReader(c)};
+}
+function recStart(){
+  const q=recTarget();
+  if(!q){midiSay('select a plate or its reader to record');return}
+  if(!q.rd){midiSay('put a reader on this plate to record');return}
+  initAudio();if(edits.pending)edits.commit();if(clock.paused)setPaused(false);
+  midi.rec={...q,open:new Map(),n:0,moved:0,grew:false};midi.target=q.rd;
+  midiSay(!q.c.w?`plate ${q.c.id} is not turning: give it a motor to record`:midi.devices.size?`recording onto plate ${q.c.id}`:`recording onto plate ${q.c.id}: connect a keyboard to play`);
+}
+function recStop(){
+  const r=midi.rec;if(!r)return;midi.rec=null;
+  if(!recLive(r)){midiSay('recording stopped: its plate is gone');return}
+  for(const h of r.open.values())recClose(h,r.c);
+  if(r.n){changed();edits.commit();if(r.grew&&inspectorLive())buildInspector()}
+  midiSay(`${r.n} note${r.n===1?'':'s'} on plate ${r.c.id}`+(r.moved?` (${r.moved} moved to fit its scale or reach)`:''));
+}
+const recToggle=()=>{if(midi.rec)recStop();else recStart();buzz(8)};
+// A red ring round the plate being recorded onto. Undo or a load can take it away mid-take.
+function drawRec(){
+  const r=midi.rec;if(!r)return;if(!recLive(r)){recStop();return}
+  cx.lineWidth=2*PX;cx.strokeStyle=HOT;circle(r.c.x,r.c.y,radius(r.c)+6*PX);cx.lineWidth=PX;
 }
 // BLE-MIDI packets: a header byte, then timestamped messages; running status and several messages per packet allowed
 function bleMidi(d){
@@ -5017,14 +5250,16 @@ async function connectBluetooth(){
   if(!navigator.bluetooth){midiSay('Bluetooth MIDI is not available here: '+MIDI_HELP);return}
   try{
     const dev=await navigator.bluetooth.requestDevice({filters:[{services:[BLE_MIDI_SERVICE]}]});
+    // connected already: a second listener would play every note twice
+    if(midi.devices.has('ble:'+dev.id)){midiSay((dev.name||'device')+' is already connected');return}
     midiSay('connecting '+(dev.name||'device')+'…');
     const server=await dev.gatt.connect(),svc=await server.getPrimaryService(BLE_MIDI_SERVICE),ch=await svc.getCharacteristic(BLE_MIDI_CHAR);
     ch.addEventListener('characteristicvaluechanged',e=>bleMidi(new Uint8Array(e.target.value.buffer,e.target.value.byteOffset,e.target.value.byteLength)));
     await ch.startNotifications();
     midi.devices.set('ble:'+dev.id,dev.name||'Bluetooth MIDI');
     dev.addEventListener('gattserverdisconnected',()=>{midi.devices.delete('ble:'+dev.id);midiPanic();midiSay((dev.name||'device')+' disconnected')});
-    midiSay((dev.name||'device')+' connected: it plays the selected reader');
-  }catch(e){midiSay(e.name==='NotFoundError'?'no device chosen':e.name==='SecurityError'||e.name==='NotAllowedError'?'Bluetooth is blocked here: '+MIDI_HELP:'Bluetooth failed: '+e.message)}
+    midiSay((dev.name||'device')+' connected: it plays the selected synth');
+  }catch(e){midiSay(e.name==='NotFoundError'?'no device chosen':e.name==='SecurityError'&&navigator.userActivation&&!navigator.userActivation.isActive?'tap again to choose a Bluetooth keyboard':e.name==='SecurityError'||e.name==='NotAllowedError'?'Bluetooth is blocked here: '+MIDI_HELP:'Bluetooth failed: '+e.message)}
 }
 let midiAccess=null;
 async function connectMidi(){
@@ -5036,19 +5271,32 @@ async function connectMidi(){
         inp.onmidimessage=e=>{const d=e.data;if(d.length)midiMessage(d[0],d[1]||0,d[2]||0)}}midiSync()};
     midiAccess.onstatechange=hook;hook();
     const n=[...midi.devices.keys()].filter(k=>k.startsWith('midi:')).length;
-    midiSay(n?`${n} input${n>1?'s':''} listening: they play the selected reader`:'no MIDI inputs yet: plug one in, or connect a Bluetooth one, and they appear');
+    midiSay(n?`${n} input${n>1?'s':''} listening: they play the selected synth`:'no MIDI inputs yet: plug one in, or connect a Bluetooth one, and they appear');
   }catch(e){midiSay('MIDI is blocked here: '+MIDI_HELP)}
 }
-// The row in a part's sheet: the two ways in, what is connected, and what it plays.
+// One button to connect: a phone's keyboard is a Bluetooth one; on a computer, what is plugged in, else Bluetooth.
+async function connectKeyboard(){
+  initAudio();
+  if(navigator.bluetooth&&matchMedia('(pointer:coarse)').matches){connectBluetooth();return}
+  await connectMidi();
+  if(navigator.bluetooth&&![...midi.devices.keys()].some(k=>k.startsWith('midi:')))connectBluetooth();
+}
+// The row in a part's sheet or the panel: the two ways in, what is connected, and what it plays.
 let midiRows=[];
 function midiSync(){for(const f of midiRows)f()}
 function midiRow(f,owner){
   const st=el('span',{className:'midi-status'});
   const sync=()=>{const names=[...midi.devices.values()];
-    st.textContent=names.length?`${names.join(', ')} → ${midi.target===owner||sel&&sel.o===owner?'this part':'the selected part'}`:midi.msg||'play this part from a keyboard'};
+    st.textContent=names.length?`${names.join(', ')} → ${midi.rec?`recording onto plate ${midi.rec.c.id}`:owner&&(midi.target===owner||sel&&sel.o===owner)?'this part':'the selected synth'}`:midi.msg||(owner?'play this part from a keyboard':'play the selected synth from a keyboard')};
   midiRows=midiRows.filter(s=>s.el?.isConnected);sync.el=st;midiRows.push(sync);
-  f.append(el('div',{className:'midi-row'},el('button',{textContent:'Bluetooth MIDI',onclick:()=>{initAudio();midi.target=owner;connectBluetooth()}}),
-    el('button',{textContent:'MIDI in',onclick:()=>{initAudio();midi.target=owner;connectMidi()}}),st));sync();
+  f.append(el('div',{className:'midi-row'},el('button',{textContent:'Bluetooth MIDI',onclick:()=>{initAudio();if(owner)midi.target=owner;connectBluetooth()}}),
+    el('button',{textContent:'MIDI in',onclick:()=>{initAudio();if(owner)midi.target=owner;connectMidi()}}),st));sync();
+}
+// The panel's section: connect, and record onto the selected plate.
+function midiSection(f){
+  midiRow(f);
+  const b=el('button',{onclick:recToggle}),sync=()=>{b.textContent=midi.rec?'stop recording':'record onto the plate';b.ariaPressed=String(!!midi.rec)};
+  sync.el=b;midiRows.push(sync);sync();f.append(b);
 }
 /* ---------- wave synth editor: knobs in tabs, the mod sources, the matrix and the patch library ---------- */
 // Serum's way to modulate: pick a source (tap its chip to arm it, or drag the chip onto a knob), then drag a knob to
@@ -5336,8 +5584,8 @@ function waveEditor(f,owner,part){
   root.append(top,...(part?[part]:[]),stick,body);
   f.append(root);show(waveUi.tab);syncChips();
   waveModHooks.add(()=>{if(!root.isConnected)return false;for(const p of parts)if(p.path&&(p.dot||waveMod.at.has(p.path)))p.draw();return true});waveWatch(v);
-  // the bar sticks under the phone sheet's head, or at the panel's top
-  requestAnimationFrame(()=>{const head=document.querySelector('#sheet-top');stick.style.top=(head&&head.offsetParent?head.offsetHeight:0)+'px'});
+  // the bar sticks under the phone sheet's head when that is on top, or at the panel's top
+  requestAnimationFrame(()=>{const head=document.querySelector('#sheet-top');stick.style.top=(head&&head.offsetParent&&getComputedStyle(head).order==='0'?head.offsetHeight:0)+'px'});
   rows.push(redraw);
 }
 /* ---------- phone: shelf, glyph, bezel ---------- */
@@ -5403,6 +5651,8 @@ function placeRoll(c,f){
   // The disc's tuning as compact chips under the strip, not full-width form rows; each number gets − and + beside it.
   const fields=el('div',{className:'disc-fields'},...['root','octave','range','scale','steps'].map(k=>f.querySelector(`:scope>.row[data-k="${k}"]`)).filter(Boolean));
   roll.box.after(fields);
+  // Record from here too, so the notes can be watched landing in the roll.
+  const rec=el('button',{className:'roll-rec',onclick:recToggle});rec.dataset.roll='record';fields.append(rec);
   for(const sr of fields.querySelectorAll('[data-k="steps"],[data-k="octave"],[data-k="range"]')){const num=sr.querySelector('input[type=number]'),bump=d=>()=>{num.value=+num.value+d;num.dispatchEvent(new Event('input'));buzz(4)},k=sr.dataset.k;
     const box=el('div',{className:'stepper'},el('button',{textContent:'−',ariaLabel:k+' down',onclick:bump(-1)}),num,el('button',{textContent:'+',ariaLabel:k+' up',onclick:bump(1)}));
     sr.querySelector('input[type=range]').remove();sr.append(box)}
@@ -5419,10 +5669,17 @@ function syncRollBar(){
   for(const b of bar.querySelectorAll('button')){const off=b.dataset.roll==='velocity'?false:b.dataset.roll==='paste'?!rollClip.length:!some;if(b.disabled!==off)b.disabled=off}
 }
 function syncEditor(){syncRollBar();
+  {const b=document.querySelector('.roll-rec'),on=!!midi.rec,say=on?'stop recording':'record';if(b&&b.textContent!==say){b.textContent=say;b.ariaPressed=String(on)}}
   const mode=editorMode(),button=$('#edit-part'),start=$('#to-start'),busy=(panelShown()&&!sheetMin())||!!ui.carry;
   button.hidden=!mode||busy;$('#delete-part').hidden=!(sel||group.length)||busy;
   $('#copy-parts').hidden=!(group.length||sel&&sel.type!=='dot')||busy;$('#paste-parts').hidden=!partClip||busy;
   {const ct=shelfTop()-102+'px';if($('#clip-bar').style.top!==ct)$('#clip-bar').style.top=ct}
+  // The keyboard's two buttons: connect, always there, named for what is connected; record, for anything on a plate.
+  const rec=$('#rec-part'),keys=$('#midi-part'),recOn=!!midi.rec,canRec=recOn||!!recTarget();
+  keys.hidden=busy;rec.hidden=!canRec||busy;
+  if(rec.ariaPressed!==String(recOn)){rec.ariaPressed=String(recOn);rec.ariaLabel=recOn?'Stop recording':'Record onto the plate'}
+  {const on=String(midi.devices.size>0),say=[...midi.devices.values()].join(', ')||'MIDI',t=keys.lastChild;if(keys.ariaPressed!==on)keys.ariaPressed=on;if(t.textContent!==say)t.textContent=say}
+  $('#zero-part').hidden=!zeroable().length||busy;start.classList.toggle('on',clock.atStart);
   start.hidden=$('#history').hidden=busy;const top=shelfTop()-54+'px';if(start.style.top!==top)start.style.top=$('#part-bar').style.top=$('#history').style.top=top;
   const noUndo=!edits.past.length,noRedo=!edits.future.length;
   if($('#undo-all').disabled!==noUndo)$('#undo-all').disabled=$('#editor-undo').disabled=noUndo;
@@ -5470,7 +5727,7 @@ function mount(){
   for(const[kind,describe]of Object.entries(GESTURE_READOUT)){
     const make=G[kind];G[kind]=(...args)=>{const g=make(...args);g.readout=()=>describe(...args);return g};
   }
-  cv.addEventListener('pointerdown',()=>showInteraction(twist?.readout||gesture?.g.readout||(()=>`view zoom: ${Math.round(S.zoom*100)}%`),true));
+  cv.addEventListener('pointerdown',()=>showInteraction(grip?.readout||twist?.readout||gesture?.g.readout||(()=>`view zoom: ${Math.round(S.zoom*100)}%`),true));
   document.addEventListener('pointerdown',e=>{if(e.target===cv)return;const read=rollReadout(e)||controlReadout(e.target);if(read)showInteraction(read,true)});
   document.addEventListener('pointermove',e=>{if(e.buttons){const read=rollReadout(e);if(read)showInteraction(read,true)}});
   for(const type of ['input','change','click'])document.addEventListener(type,e=>{const read=controlReadout(e.target);if(read)showInteraction(read)});
@@ -5479,9 +5736,11 @@ function mount(){
   // Chrome can retarget the opening tap's click to the newly exposed scrim.
   $('#scrim').onclick=()=>{if(performance.now()-editorOpenedAt>200)togglePanel(false)};
   $('#editor-close').onclick=()=>togglePanel(false);
-  $('#delete-part').innerHTML=rx('Trash',22);$('#to-start').innerHTML=rx('TrackPrevious',22);
+  $('#delete-part').innerHTML=rx('Trash',22);$('#to-start').innerHTML=rx('TrackPrevious',22);$('#zero-part').innerHTML=rx('Zero',22);
   $('#editor-undo').innerHTML=rx('Reset',20);$('#editor-redo').innerHTML=rx('Reset',20,true);$('#editor-close').innerHTML=rx('Cross2',20);
   $('#copy-parts').innerHTML=rx('Copy',22);$('#paste-parts').innerHTML=rx('Clipboard',22);
+  $('#midi-part').innerHTML=BT_ICON;$('#midi-part').append(el('span',{textContent:'MIDI'}));$('#rec-part').innerHTML=rx('Record',22);
+  $('#midi-part').onclick=connectKeyboard;$('#rec-part').onclick=recToggle;
   $('#copy-parts').onclick=()=>{if(copyParts()){buzz(8);showInteraction(()=>`copy parts: ${group.length||1}`)}};
   // A finger has no hover: paste lands in the middle of the open stage, selected, ready to drag into place.
   $('#paste-parts').onclick=()=>{const h=ui.hover;ui.hover={x:CW/2,y:(safeTop+shelfTop())/2};pasteParts();ui.hover=h;buzz(8)};
@@ -5491,7 +5750,7 @@ function mount(){
   sheetDrag();
   const openEditor=openPartEditor;
   $('#edit-part').onpointerup=$('#edit-part').onclick=openEditor;
-  $('#delete-part').onclick=()=>removeSel();$('#to-start').onclick=()=>{toStart();buzz(10)};
+  $('#delete-part').onclick=()=>removeSel();$('#to-start').onclick=()=>{toStart();buzz(10)};$('#zero-part').onclick=()=>zeroSel();
 }
 // The shelf is a tray wider than the phone: each part has a slot at least SLOT_MIN wide, and a sideways drag scrolls
 // it (with a fling). A drag up off a slot carries that part in. It never changes, so it is painted once per size and

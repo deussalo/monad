@@ -31,13 +31,16 @@ function syncChrome(){
   const open=bar.classList.contains('open'),right=bar.offsetWidth+'px';
   if(dock.style.right!==right)dock.style.right=right;
   if(dock.hidden===!!roll)dock.hidden=!roll;
-  const state=[ui.armed,clock.paused,edits.past.length,edits.future.length,open,ui.scrap].join();
+  const state=[ui.armed,clock.paused,clock.atStart,!!midi.rec,!!(midi.rec||recTarget()),midi.devices.size,zeroable().length,edits.past.length,edits.future.length,open,ui.scrap].join();
   if(state===chromeState)return;chromeState=state;
   bar.classList.toggle('scrap',ui.scrap);
   for(const kind of PARTS)railButtons[kind].classList.toggle('on',ui.armed===kind);
   railButtons.select.classList.toggle('on',!ui.armed);
   railButtons.panel.querySelector('span').textContent=open?'panel ›':'‹ panel';
   railButtons.pause.querySelector('span').textContent=clock.paused?'play':'pause';railButtons.pause.querySelector('.rx').innerHTML=rx(clock.paused?'Play':'Pause');railButtons.pause.classList.toggle('on',clock.paused);
+  railButtons.start.classList.toggle('on',clock.atStart);railButtons.zero.disabled=!zeroable().length;
+  railButtons.record.classList.toggle('on',!!midi.rec);railButtons.record.querySelector('span').textContent=midi.rec?'stop':'record';railButtons.record.disabled=!midi.rec&&!recTarget();
+  railButtons.keyboard.classList.toggle('on',midi.devices.size>0);
   railButtons.undo.disabled=!edits.past.length;railButtons.redo.disabled=!edits.future.length;
 }
 function mount(){
@@ -49,6 +52,10 @@ function mount(){
   railButton('undo','undo','ctrl z','undo',()=>edits.undo(),rx('Reset'));
   railButton('redo','redo','ctrl ⇧z','redo',()=>edits.redo(),rx('Reset',18,true));
   railButton('pause','pause','space','pause or play',()=>setPaused(!clock.paused),rx('Pause'));
+  railButton('start','start','h','reset: stop and put every plate on its start',toStart,rx('TrackPrevious'));
+  railButton('zero','zero','z','set the selection to 0, pointing right',zeroSel,rx('Zero'));
+  railButton('keyboard','keys','j','connect a MIDI keyboard: it plays the selected synth',connectKeyboard,BT_ICON);
+  railButton('record','record','n','record the keyboard onto the selected plate',recToggle,rx('Record'));
   railButton('fit','fit','0','fit the machine in view',flyFit,rx('EnterFullScreen'));
   railButton('delete','delete','del','delete the selection',removeSel,rx('Trash'));
 }
