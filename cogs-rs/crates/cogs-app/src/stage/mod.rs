@@ -156,6 +156,9 @@ struct Active {
     last: (f64, f64),
     t0: f64,
     moved: bool,
+    /// What the readout would have said at the press: it speaks only once that has changed.
+    hint0: Option<String>,
+    hinted: bool,
 }
 
 struct Pinch {
@@ -170,6 +173,8 @@ struct GripState {
     hand: Grip,
     mid0: (f64, f64),
     d0: f64,
+    hint0: String,
+    hinted: bool,
 }
 
 /// The speed knob being scrubbed: a hand on a turntable, sprung toward the drag's speed.
@@ -475,6 +480,10 @@ impl Stage {
         }
         self.edits.mark(self.now);
     }
+    /// What the readout strip says now.
+    pub fn hint(&self) -> Option<&str> {
+        self.readout.as_ref().filter(|r| self.now <= r.1).map(|r| r.0.as_str())
+    }
     pub(crate) fn say(&mut self, text: String, held: bool) {
         self.readout = Some((text, if held { f64::INFINITY } else { self.now + 1.8 }));
         self.readout_held = held;
@@ -522,6 +531,14 @@ impl Stage {
         let fit = ((self.cw - 24.0) / bw).min((b - t - 24.0) / bh);
         let z = fit.clamp(ZMIN, 2.0);
         (cx, cy - ((t + b) / 2.0 - self.ch / 2.0) / z, z, fit)
+    }
+    /// From this zoom a disc's face is a score: pins can be tapped on it, and it is drawn as one. Well past the
+    /// whole-stage fit, so that a tap at the overview never edits.
+    pub(crate) fn score_zoom(&self, w: &World) -> f64 {
+        1.25 * self.full_fit(w).2
+    }
+    pub(crate) fn pins_live(&self, w: &World, c: &cogs_sim::Cog) -> bool {
+        note_mode(c, w.s.zoom) && w.s.zoom >= self.score_zoom(w)
     }
     /// The fit for the open stage, whatever sheet is up now.
     fn full_fit(&self, w: &World) -> (f64, f64, f64) {
@@ -646,7 +663,8 @@ impl Stage {
             Sel::Cog(i) => {
                 let Some(c) = w.cog(i) else { return };
                 if c.track.is_some() {
-                    let z = 14.0 / ring_gap(c);
+                    // far enough in that the face takes pins
+                    let z = (14.0 / ring_gap(c)).max(1.4 * self.full_fit(w).2);
                     let q = self.to_world(w, s);
                     if w.s.zoom < z * 0.9 {
                         self.fly_to(w, q.0 - (s.0 - self.cw / 2.0) / z, q.1 - (s.1 - self.ch / 2.0) / z, z);
@@ -741,7 +759,7 @@ impl Stage {
     fn draw(&mut self, painter: &egui::Painter, w: &World) {
         painter.rect_filled(self.rect, 0.0, BG);
         let pen = self.pen(painter, w);
-        let mut marks = Marks::default();
+        let mut marks = Marks { score_zoom: self.score_zoom(w), ..Marks::default() };
         if let Some(Sel::Dot { cog, ring, a }) = self.sel {
             marks.dot = Some((cog, ring, a));
         }

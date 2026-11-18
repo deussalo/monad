@@ -204,9 +204,12 @@ impl Stage {
             return;
         }
         if self.pinch.is_none() {
+            // a press says nothing by itself (a bezel sector without words excepted): hints report changes
+            self.readout = None;
+            self.readout_held = false;
             let g = self.pointer_gesture(w, s, touch, mods);
-            self.say_gesture(w, &g, true);
-            self.gesture = Some(Active { id, g, s0: s, last: s, t0: self.now, moved: false });
+            let hint0 = self.readout_of(w, &g);
+            self.gesture = Some(Active { id, g, s0: s, last: s, t0: self.now, moved: false, hint0, hinted: false });
         }
     }
     fn moved(&mut self, w: &mut World, id: u64, s: (f64, f64)) {
@@ -237,12 +240,17 @@ impl Stage {
         a.moved = true;
         let mut g = std::mem::replace(&mut a.g, Gesture::Glyph);
         self.g_move(w, &mut g, s);
-        // the readout follows the gesture
+        // the readout follows the gesture, from when its value first differs from the press. These have no value to
+        // compare: moving at all is the news.
         let text = self.readout_of(w, &g);
+        let always = matches!(g, Gesture::Pan { .. } | Gesture::Carry { .. } | Gesture::Shelf { .. } | Gesture::Group { .. } | Gesture::Marquee { .. });
+        let mut speak = false;
         if let Some(a) = &mut self.gesture {
             a.g = g;
+            a.hinted |= always || text != a.hint0;
+            speak = a.hinted;
         }
-        if let Some(t) = text {
+        if let (true, Some(t)) = (speak, text) {
             self.say(t, true);
         }
     }
@@ -264,7 +272,7 @@ impl Stage {
             let other = if id == g.a { g.b } else { g.a };
             if let Some(f) = self.fingers.get(&other).copied() {
                 let body = self.grip_body(w, &g.hand, f.pos);
-                self.gesture = Some(Active { id: other, g: body, s0: f.pos, last: f.pos, t0: self.now, moved: true });
+                self.gesture = Some(Active { id: other, g: body, s0: f.pos, last: f.pos, t0: self.now, moved: true, hint0: None, hinted: false });
             }
             self.changed(w, true);
             return;
@@ -278,7 +286,7 @@ impl Stage {
             self.pinch = None;
             if let Some((&fid, f)) = self.fingers.iter().next() {
                 let g = Gesture::Pan { v0: (w.view.x, w.view.y), a: self.to_world(w, f.pos), boxing: false };
-                self.gesture = Some(Active { id: fid, g, s0: f.pos, last: f.pos, t0: self.now, moved: true });
+                self.gesture = Some(Active { id: fid, g, s0: f.pos, last: f.pos, t0: self.now, moved: true, hint0: None, hinted: false });
             }
             return;
         }
@@ -344,7 +352,8 @@ impl Stage {
         let Some(hand) = self.grip_of(w, &a.g) else { return false };
         let first = a.id;
         self.gesture = None;
-        let mut g = GripState { a: first, b: id, hand, mid0: (0.0, 0.0), d0: 1.0 };
+        let hint0 = self.grip_readout(w, &hand);
+        let mut g = GripState { a: first, b: id, hand, mid0: (0.0, 0.0), d0: 1.0, hint0, hinted: false };
         let (mid, d) = self.grip_now(&g);
         g.mid0 = mid;
         g.d0 = d;
@@ -360,7 +369,10 @@ impl Stage {
         let m = ((mid.0 - g.mid0.0) / w.s.zoom, (mid.1 - g.mid0.1) / w.s.zoom);
         self.grip_hold(w, &mut g.hand, m, k);
         let text = self.grip_readout(w, &g.hand);
-        self.say(text, true);
+        g.hinted |= text != g.hint0;
+        if g.hinted {
+            self.say(text, true);
+        }
         self.grip = Some(g);
     }
 
@@ -503,7 +515,7 @@ impl Stage {
         }
         if let Some(ci) = c {
             let cg = &w.cogs[ci];
-            if note_mode(cg, z) && self.is_sel(Sel::Cog(cg.id)) && cd > 22f64.max(rs * 0.2) && w.cell_at(ci, p.0, p.1).is_some() {
+            if self.pins_live(w, cg) && self.is_sel(Sel::Cog(cg.id)) && cd > 22f64.max(rs * 0.2) && w.cell_at(ci, p.0, p.1).is_some() {
                 let cell0 = w.cell_at(ci, p.0, p.1);
                 return Gesture::Notes { id: cg.id, cell0, paint: None, mode: 0, sweep: (0.0, 0.0, -1) };
             }
@@ -1146,6 +1158,8 @@ impl Stage {
             Gesture::Belt(id) => {
                 if let Some(b) = w.belts.iter_mut().find(|b| b.id == *id) {
                     b.cross = !b.cross;
+                    let on = b.cross;
+                    self.say(format!("belt crossed: {}", if on { "on" } else { "off" }), false);
                 }
                 self.buzz(8);
                 self.changed(w, true);
@@ -1161,7 +1175,14 @@ impl Stage {
             }
             Gesture::Notes { id, cell0, paint, .. } => {
                 let Some(ci) = w.cog_ix(*id) else { return };
+                let n0 = w.cogs[ci].track.as_ref().map_or(0, |t| t.dots.len());
                 self.put_pin(w, ci, *cell0, paint);
+                if let (Some(t), Some((ring, _))) = (w.cogs[ci].track.as_ref(), *cell0) {
+                    if t.dots.len() != n0 {
+                        let what = if t.dots.len() > n0 { "pin added" } else { "pin removed" };
+                        self.say(format!("{what}: {}", note_name(t.ring_note(ring as i64) as i64)), false);
+                    }
+                }
                 if !self.is_sel(Sel::Cog(*id)) {
                     self.select(Some(Sel::Cog(*id)));
                 }

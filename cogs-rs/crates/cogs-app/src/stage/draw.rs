@@ -31,6 +31,8 @@ pub fn roll_dir(c: &Cog) -> f64 {
 pub struct Marks {
     /// A selected pin: (cog id, ring, angle).
     pub dot: Option<(u32, f64, f64)>,
+    /// The zoom from which a disc face is a score to edit, and drawn as one (0: by ring spacing alone).
+    pub score_zoom: f64,
 }
 
 pub fn draw_cog(pen: &Pen, c: &Cog, th: f64, marks: &Marks) {
@@ -63,7 +65,7 @@ pub fn draw_cog(pen: &Pen, c: &Cog, th: f64, marks: &Marks) {
 
 fn draw_disc_face(pen: &Pen, c: &Cog, t: &Track, th: f64, x: f64, y: f64, marks: &Marks) {
     let px = pen.px();
-    let note = note_mode(c, pen.s);
+    let note = note_mode(c, pen.s) && pen.s >= marks.score_zoom;
     let gap = ring_gap(c);
     let rings = t.rings();
     let (r_in, r_out) = (c.ring_r(0.0), c.ring_r((rings - 1) as f64));

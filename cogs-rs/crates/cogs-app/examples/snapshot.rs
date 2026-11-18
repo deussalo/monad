@@ -279,5 +279,6 @@ fn main() {
     enc.set_depth(png::BitDepth::Eight);
     enc.write_header().unwrap().write_image_data(&flipped).unwrap();
     painter.destroy();
-    eprintln!("wrote {out}: {} parts, zoom {:.3}, sel {:?}, group {}, undo {}, view {:.0},{:.0}", w.cogs.len() + w.pads.len() + w.readers.len(), w.s.zoom, stage.sel, stage.group.len(), stage.edits.can_undo(), w.view.x, w.view.y);
+    eprintln!("wrote {out}: {} parts, zoom {:.3}, sel {:?}, group {}, undo {}, view {:.0},{:.0}, pins {}, hint {:?}", w.cogs.len() + w.pads.len() + w.readers.len(), w.s.zoom, stage.sel, stage.group.len(), stage.edits.can_undo(), w.view.x, w.view.y,
+        w.cogs.iter().filter_map(|c| c.track.as_ref()).map(|t| t.dots.len()).sum::<usize>(), stage.hint());
 }
