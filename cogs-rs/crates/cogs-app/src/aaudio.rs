@@ -24,8 +24,11 @@
 //! goes to deep buffer and takes the chain along, and open the fast track meanwhile; it then keeps running after the
 //! chain has come back. The price: global effects are not applied to fast tracks, so DAP does not process our sound.
 //!
-//! `Supervisor` owns the stream while the app runs: it keeps trying for the fast path on a timer and on resume, moves the
-//! machine across without a break when it gets it (out.rs), and opens a new stream when the old one is disconnected.
+//! `supervise` owns the stream while the app runs: it keeps trying for the fast path on a timer and after a return to the
+//! app, moves the machine across without a break when it gets it (out.rs), and opens a new stream when the old one is
+//! disconnected. There is only ever one stream sounding. The machine keeps playing while the app is away; since the
+//! system then gives the audio thread less CPU, and the transitions themselves are busy, the buffer is held at its
+//! deepest from pause until two seconds after resume.
 use crate::out::{Handoff, Out, Source};
 use crate::play::{Render, Shared};
 use std::ffi::{c_char, c_void, CStr};
@@ -199,7 +202,7 @@ impl Info {
 #[derive(Default)]
 struct Stats {
     callbacks: AtomicU64, frames: AtomicU64, in_cpu_ns: AtomicU64, in_wall_ns: AtomicU64, thread_cpu_ns: AtomicU64,
-    min_frames: AtomicU32, max_frames: AtomicU32, worst_pct: AtomicU32, worst_us: AtomicU32, ahead_us: AtomicU32, xruns: AtomicI32, buffer: AtomicI32, pad: AtomicU64, dead: AtomicBool,
+    min_frames: AtomicU32, max_frames: AtomicU32, worst_pct: AtomicU32, worst_us: AtomicU32, ahead_us: AtomicU32, xruns: AtomicI32, buffer: AtomicI32, want: AtomicI32, hold: AtomicBool, pad: AtomicU64, dead: AtomicBool,
 }
 static CURRENT: std::sync::Mutex<Option<Arc<Stats>>> = std::sync::Mutex::new(None);
 
@@ -241,11 +244,11 @@ extern "C" fn on_data(s: S, user: *mut c_void, data: *mut c_void, frames: i32) -
     c.out.latency = ahead + n as f64 / c.sr;
     let st = &c.stats;
     st.ahead_us.store((c.out.latency * 1e6) as u32, Relaxed);
-    // A glitch: one more burst of buffer, up to what the stream has.
+    // A glitch in normal running: one more burst of buffer, up to what the stream has.
     let x = unsafe { AAudioStream_getXRunCount(s) };
-    if x > c.xruns && c.buffer + c.burst <= c.capacity {
-        c.buffer = unsafe { AAudioStream_setBufferSizeInFrames(s, c.buffer + c.burst) }.max(c.buffer);
-    }
+    let mut want = st.want.load(Relaxed);
+    if x > c.xruns && !st.hold.load(Relaxed) && want + c.burst <= c.capacity { want += c.burst; st.want.store(want, Relaxed) }
+    if want > 0 && want != c.buffer { let got = unsafe { AAudioStream_setBufferSizeInFrames(s, want) }; if got > 0 { c.buffer = got } }
     c.xruns = x;
     let (wall1, cpu1) = (now(libc::CLOCK_MONOTONIC), now(libc::CLOCK_THREAD_CPUTIME_ID));
     st.callbacks.fetch_add(1, Relaxed); st.frames.fetch_add(n as u64, Relaxed); st.in_cpu_ns.fetch_add(cpu1 - cpu0, Relaxed); st.in_wall_ns.fetch_add(wall1 - wall0, Relaxed);
@@ -273,7 +276,7 @@ extern "C" fn on_data(s: S, user: *mut c_void, data: *mut c_void, frames: i32) -
 }
 
 /// An open stream and what its callback owns.
-pub struct Stream { s: S, cb: Box<Cb>, stats: Arc<Stats>, handoff: Arc<Handoff<Live>>, pub info: Info, open: bool }
+pub struct Stream { s: S, cb: Box<Cb>, stats: Arc<Stats>, handoff: Arc<Handoff<Live>>, pub info: Info, open: bool, normal_buffer: i32, held: bool }
 unsafe impl Send for Stream {}
 impl Stream {
     fn close(&mut self) { if self.open { self.open = false; unsafe { AAudioStream_requestStop(self.s); AAudioStream_close(self.s); } } }
@@ -291,6 +294,23 @@ impl Stream {
     fn set_bursts(&mut self, bursts: i32) {
         let got = unsafe { AAudioStream_setBufferSizeInFrames(self.s, self.info.burst * bursts.max(1)) };
         if got > 0 { self.cb.buffer = got; self.info.buffer = got }
+        self.normal_buffer = self.info.buffer;
+        self.stats.want.store(self.info.buffer, Relaxed);
+    }
+    /// The deepest buffer while the app is away or just back; the normal one (with any growth it earned) otherwise.
+    fn set_hold(&mut self, hold: bool) {
+        if hold == self.held { return }
+        self.held = hold;
+        let st = &self.stats;
+        if hold {
+            self.normal_buffer = st.want.load(Relaxed).max(self.info.buffer);
+            st.hold.store(true, Relaxed);
+            st.want.store(self.info.capacity.min((self.info.rate / 10).max(self.normal_buffer)), Relaxed);
+        } else {
+            st.want.store(self.normal_buffer, Relaxed);
+            st.hold.store(false, Relaxed);
+        }
+        log::info!("audio buffer {} frames ({})", st.want.load(Relaxed), if hold { "held deep" } else { "normal" });
     }
     fn begin(&mut self) -> bool {
         let r = unsafe { AAudioStream_requestStart(self.s) };
@@ -332,7 +352,7 @@ fn open_at(spec: &Spec, sr_guess: f64) -> Result<Stream, String> {
         if info.rate as f64 != sr_guess { cb.out = Out::new(info.rate as f64) }
         cb.sr = info.rate as f64; cb.format = info.format; cb.channels = info.channels.max(1) as usize; cb.burst = info.burst; cb.capacity = info.capacity; cb.buffer = info.buffer;
         let handoff = cb.out.handoff.clone();
-        Ok(Stream { s, cb, stats, handoff, info, open: true })
+        Ok(Stream { s, cb, stats, handoff, info, open: true, normal_buffer: 0, held: false })
     }
 }
 
@@ -408,7 +428,7 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
         // when to try for the fast path again, seconds after launch
         let mut tries: Vec<f64> = o.delay_ms.iter().map(|d| *d as f64 / 1000.).chain([1., 2., 4., 8.]).collect();
         tries.sort_by(f64::total_cmp); tries.dedup();
-        let mut reopen_at = 0f64;
+        let (mut reopen_at, mut settle_until) = (0f64, 0f64);
         while sh.running.load(Relaxed) {
             std::thread::sleep(std::time::Duration::from_millis(50));
             let t = since();
@@ -422,10 +442,14 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
                 }
                 continue;
             }
-            if RESUMED.swap(false, Relaxed) && !running.as_ref().is_some_and(|s| s.fast()) { log::info!("audio: resumed at {t:.2} s"); tries.insert(0, t) }
-            let Some(cur) = running.as_ref() else { continue };
+            // away and just back: the deep buffer, and no stream changes while the system is busy with the transition
+            let away = AWAY.load(Relaxed);
+            if away { settle_until = t + 2. }
+            if RESUMED.swap(false, Relaxed) { tries.push(t + 1.); tries.sort_by(f64::total_cmp) }
+            let Some(cur) = running.as_mut() else { continue };
+            cur.set_hold(away || t < settle_until);
             if o.forced.is_some() || o.probe || cur.fast() { tries.clear(); continue }
-            if tries.first().is_none_or(|x| *x > t) { continue }
+            if away || tries.first().is_none_or(|x| *x > t) { continue }
             tries.remove(0);
             let Some(mut next) = open_fast(cur.info.rate, !o.nokick, &format!("retry at {t:.2} s")) else { continue };
             // the new stream runs silent until the old one hands over at the right moment
@@ -454,8 +478,14 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
         }
     }).expect("audio thread")
 }
-/// Set by the activity's onResume.
-pub static RESUMED: AtomicBool = AtomicBool::new(false);
+static RESUMED: AtomicBool = AtomicBool::new(false);
+static AWAY: AtomicBool = AtomicBool::new(false);
+/// The activity's lifecycle: 1 resume, 2 pause, 3 start, 4 stop.
+pub fn lifecycle(what: i32) {
+    match what { 1 => { AWAY.store(false, Relaxed); RESUMED.store(true, Relaxed) } 2 => AWAY.store(true, Relaxed), _ => {} }
+    let x = CURRENT.lock().ok().and_then(|c| c.clone()).map_or(0, |s| s.xruns.load(Relaxed));
+    log::info!("audio lifecycle: {} (xruns so far {x})", ["?", "resume", "pause", "start", "stop"][what.clamp(0, 4) as usize]);
+}
 
 /// Every variant, opened and run silently for a moment; one log line each.
 pub fn probe(when: &str, _o: &Options) {

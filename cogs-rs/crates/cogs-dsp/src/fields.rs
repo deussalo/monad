@@ -60,7 +60,7 @@ impl FieldParams {
 
 struct Slot {
     p: Option<FieldParams>, mode: i32, q: f64, tq: f64, pub k: f64, quiet: f64,
-    dl: Vec<f32>, dr: Vec<f32>, dw: usize, d_t: f64, dlp: [f64; 2], dhp: [f64; 2],
+    dl: Vec<f32>, dr: Vec<f32>, d_dirty: bool, dw: usize, d_t: f64, dlp: [f64; 2], dhp: [f64; 2],
     verb: Option<Box<Verb>>, verb_fresh: bool, dz: [f64; 4], crush: [f64; 2], crush_n: u64, tl: Vec<f32>, tr: Vec<f32>,
 }
 
@@ -70,7 +70,7 @@ impl Fields {
         let n = (fs * 3.2).ceil() as usize;
         Fields {
             fs,
-            slots: (0..FIELD_SLOTS).map(|_| Slot { p: None, mode: -1, q: 0.5, tq: 0.5, k: 0., quiet: 1e9, dl: vec![0.; n], dr: vec![0.; n], dw: 0, d_t: -1.,
+            slots: (0..FIELD_SLOTS).map(|_| Slot { p: None, mode: -1, q: 0.5, tq: 0.5, k: 0., quiet: 1e9, dl: vec![0.; n], dr: vec![0.; n], d_dirty: false, dw: 0, d_t: -1.,
                 dlp: [0.; 2], dhp: [0.; 2], verb: None, verb_fresh: false, dz: [0.; 4], crush: [0.; 2], crush_n: 0, tl: vec![0.; max_block], tr: vec![0.; max_block] }).collect(),
             verbs: (0..verbs).map(|_| Box::new(Verb::new(fs, &VerbParams::default()))).collect(),
             hits: Vec::with_capacity(512), zero: vec![0.; max_block], bpm: 120.,
@@ -88,7 +88,7 @@ impl Fields {
             Some(p) => {
                 let m = p.mode.min(2) as i32;
                 if m != s.mode {
-                    s.mode = m; s.dl.fill(0.); s.dr.fill(0.); s.d_t = -1.; s.dz = [0.; 4]; s.crush = [0.; 2]; s.crush_n = 0;
+                    s.mode = m; if s.d_dirty { s.dl.fill(0.); s.dr.fill(0.); s.d_dirty = false; } s.d_t = -1.; s.dz = [0.; 4]; s.crush = [0.; 2]; s.crush_n = 0;
                     if s.verb.is_some() { s.verb_fresh = true; }
                 }
                 s.p = Some(p);
@@ -144,6 +144,7 @@ impl Fields {
 #[allow(clippy::too_many_arguments)]
 fn delay(s: &mut Slot, p: &FieldParams, k: f64, inl: &[f32], inr: &[f32], l: &mut [f32], r: &mut [f32], n: usize, bpm: f64, lv: f64, fs: f64) {
     let nn = s.dl.len();
+    s.d_dirty = true;
     let t0 = match p.sync { Some(b) if b > 0. => 60. / bpm * b, _ => (if p.time != 0. { p.time } else { 0.375 }).max(0.02) };
     let t = (t0 * 2f64.powf(0.5 * k) * fs).max(8.).min((nn - 4) as f64);
     if s.d_t < 0. { s.d_t = t; }

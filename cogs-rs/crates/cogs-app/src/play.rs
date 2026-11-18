@@ -381,8 +381,11 @@ impl Render {
         match world {
             Ok(mut w) if !w.clock.paused => {
                 let t0 = w.clock.sim_t;
-                let t1 = t0 + self.owed + dt;
-                self.owed = 0.;
+                // time owed from blocks that found the world locked is made up at up to three times speed, so one long
+                // hold by the UI does not become one long block with all its notes on top of each other
+                let catch_up = self.owed.min(2. * dt);
+                let t1 = t0 + dt + catch_up;
+                self.owed -= catch_up;
                 let sr = self.sr;
                 // collect into a fixed scratch to keep the borrow of `w` apart from `self.engine`
                 let mut buf = std::mem::take(&mut SCRATCH.with(|s| s.take()));

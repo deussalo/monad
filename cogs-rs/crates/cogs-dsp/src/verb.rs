@@ -133,6 +133,8 @@ pub struct Verb {
     off: Vec<i64>, mask: Vec<i64>,
     l_pre: [usize; 2], l_ind: [usize; 12], l_sw: [usize; 4], l_er: [usize; 2], l_a1: [usize; 6], l_a2: [usize; 6], l_d: [usize; 6],
     mem: Vec<f32>,
+    /// something has been written to `mem` since it was last wiped (wiping it is the costly part of `clear`)
+    dirty: bool,
     sh_size: usize, sh_buf: Vec<f32>,
     tin_l: Vec<f64>, tin_r: Vec<f64>, tout_l: Vec<f64>, tout_r: Vec<f64>,
     d_len: [f64; S], a1_len: [f64; S], a2_len: [f64; S], gl: [f64; S], gm: [f64; S], gh: [f64; S], lo: [f64; S], hp: [f64; S], o: [f64; S],
@@ -176,7 +178,7 @@ impl Verb {
         let sh_size = p2((fs * 0.2) as usize);
         const B: f64 = 128.;
         let mut v = Verb {
-            fs, off, mask, l_pre, l_ind, l_sw, l_er, l_a1, l_a2, l_d, mem: vec![0.; total], sh_size, sh_buf: vec![0.; sh_size],
+            fs, off, mask, l_pre, l_ind, l_sw, l_er, l_a1, l_a2, l_d, mem: vec![0.; total], dirty: false, sh_size, sh_buf: vec![0.; sh_size],
             tin_l: vec![0.; 128], tin_r: vec![0.; 128], tout_l: vec![0.; 128], tout_r: vec![0.; 128],
             d_len: [0.; S], a1_len: [0.; S], a2_len: [0.; S], gl: [0.; S], gm: [0.; S], gh: [0.; S], lo: [0.; S], hp: [0.; S], o: [0.; S],
             mc: [0.; S], ms: [0.; S], rc: [0.; S], rs: [0.; S], r1: [0.; S], r2: [0.; S], tg: [0.; S], cnt: [0.; S], chaos: [0.; S],
@@ -196,7 +198,7 @@ impl Verb {
     }
     /// Silence everything and take params at once, without a glide.
     pub fn clear(&mut self, params: &VerbParams) {
-        self.mem.fill(0.); self.sh_buf.fill(0.);
+        if self.dirty { self.mem.fill(0.); self.sh_buf.fill(0.); self.dirty = false; }
         self.target = params.0;
         for (i, d) in VERB_DEFS.iter().enumerate() { if !self.target[i].is_finite() { self.target[i] = VERB_DEFAULT[i]; } let _ = d; }
         self.target[V_MODE] = js_round(self.target[V_MODE].clamp(0., 19.));
@@ -339,6 +341,7 @@ impl Verb {
     /// in: the dry block. Adds only the wet signal, scaled by wet, into out. n ≤ 128.
     pub fn process(&mut self, in_l: &[f32], in_r: &[f32], out_l: &mut [f32], out_r: &mut [f32], n: usize) {
         let switching = self.pending;
+        self.dirty = true;
         // the glides are per block of 128; a shorter block glides that much less
         if n != self.glide_n { let b = n as f64; let fs = self.fs; self.glide_n = n;
             self.glide = 1. - (-b / (fs * 0.05)).exp(); self.size_glide = 1. - (-b / (fs * 0.35)).exp(); self.pre_glide = 1. - (-b / (fs * 0.12)).exp(); }

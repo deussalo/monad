@@ -4,8 +4,8 @@ package help.techmate.cogs
 object Native {
     @JvmStatic external fun midi(status: Int, d1: Int, d2: Int)
     @JvmStatic external fun status(text: String, connected: Boolean)
-    /** The activity came to the front. */
-    @JvmStatic external fun resumed()
+    /** The activity's lifecycle: 1 resume, 2 pause, 3 start, 4 stop. */
+    @JvmStatic external fun lifecycle(what: Int)
     /** The window's top and bottom insets in pixels: cutout, status bar, navigation bar. */
     @JvmStatic external fun insets(top: Int, bottom: Int)
     /** A file the user picked to open, as text (null: cancelled or unreadable, with why). */
