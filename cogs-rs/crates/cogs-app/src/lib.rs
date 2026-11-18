@@ -3,6 +3,7 @@
 pub mod audio;
 pub mod midi;
 pub mod testsynth;
+pub mod stage;
 #[cfg(target_os = "android")]
 pub mod ui;
 #[cfg(target_os = "android")]
