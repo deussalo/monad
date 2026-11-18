@@ -401,7 +401,8 @@ impl World {
         }
         // Older saves schedule 60 ms ahead, too close for a phone's main thread.
         self.s.lookahead = js_max(self.s.lookahead, LOOKAHEAD_MIN);
-        self.solve();
+        // the angles just read are the ones meant, whatever the clock's lead
+        self.solve_speeds();
         Ok(())
     }
 

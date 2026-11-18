@@ -61,13 +61,31 @@ fn main() {
         t = (t + 0.01).min(t_end);
         w.advance(t, &mut |_| {});
     }
-    w.clock.view = t_end;
+    // --lead S: the heard time behind the sim, as on a phone (S of output latency and buffering)
+    let lead: f64 = arg(&args, "--lead").and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    w.clock.view = t_end - lead;
+    if args.iter().any(|a| a == "--ratios") {
+        w.s.ratios = 1.0;
+        w.solve();
+    }
+    // --run: the machine keeps advancing, a frame at a time, while the script plays
+    let run = args.iter().any(|a| a == "--run");
+    // --cogs: every cog's angle and speed before and after the script
+    let show_cogs = args.iter().any(|a| a == "--cogs");
+    fn cogs_now(w: &cogs_sim::World, label: &str) {
+        for (i, c) in w.cogs.iter().enumerate() {
+            eprintln!("{label} cog {:>2}: drawn {:+.6}  th {:.6}  tooth {:.6}  w {:+.5}  k {:+.4}  n {}  at {:.1},{:.1}  turns {}", c.id, cogs_sim::wrap(w.render_th(i)), c.th, c.tooth, c.w, c.k.unwrap_or(0.0), c.n, c.x, c.y, c.turns);
+        }
+    }
+    if show_cogs {
+        cogs_now(&w, "before");
+    }
     if args.iter().any(|a| a == "--paused") {
         w.set_paused(true);
     }
     // --safe TOP,BOTTOM: the phone's insets in points (the Moto G57: 47,48 at ppp 2.5)
     let (safe_top, safe_bottom) = arg(&args, "--safe").map(pair).unwrap_or((0.0, 0.0));
-    let io = StageIo { heard: t_end, safe_top, safe_bottom, ..Default::default() };
+    let mut io = StageIo { heard: t_end - lead, safe_top, safe_bottom, ..Default::default() };
     let old_rows = args.iter().any(|a| a == "--old-rows");
     let mut stage = Stage::new();
     match arg(&args, "--zoom") {
@@ -161,7 +179,10 @@ fn main() {
                     let d = d0 + (d1 - d0) * k as f32 / 20.0;
                     frames.push(vec![touch(1, TouchPhase::Move, cx - d / 2.0, cy), touch(2, TouchPhase::Move, cx + d / 2.0, cy)]);
                 }
-                frames.push(vec![touch(2, TouchPhase::End, cx + d1 / 2.0, cy), touch(1, TouchPhase::End, cx - d1 / 2.0, cy)]);
+                // "keep": the fingers stay down, to see what shows during the gesture
+                if parts.next() != Some("keep") {
+                    frames.push(vec![touch(2, TouchPhase::End, cx + d1 / 2.0, cy), touch(1, TouchPhase::End, cx - d1 / 2.0, cy)]);
+                }
                 frames.extend(std::iter::repeat_with(Vec::new).take(5));
             }
             // the Android Back button, through Stage::back
@@ -233,6 +254,11 @@ fn main() {
         let mut raw = RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), size)), time: Some(time), events, ..Default::default() };
         raw.viewports.entry(ViewportId::ROOT).or_default().native_pixels_per_point = Some(ppp);
         time += 1.0 / 60.0;
+        if run && !w.clock.paused {
+            let to = w.clock.sim_t + 1.0 / 60.0;
+            w.advance(to, &mut |_| {});
+            io.heard = to - lead;
+        }
         let mut outs = Vec::new();
         let full = ctx.run_ui(raw, |ui| {
             if editor.is_some() { cogs::wave_ui::strip_foreign(ui.ctx(), &mut foreign); }
@@ -263,6 +289,9 @@ fn main() {
             gl.clear(glow::COLOR_BUFFER_BIT);
         }
         painter.paint_and_update_textures([pw as u32, ph as u32], full.pixels_per_point, &prims, &mut td);
+    }
+    if show_cogs {
+        cogs_now(&w, "after ");
     }
     let mut buf = vec![0u8; (pw * ph * 4) as usize];
     unsafe {

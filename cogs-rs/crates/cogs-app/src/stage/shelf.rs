@@ -9,6 +9,27 @@ use cogs_sim::PartRef;
 use egui::{vec2, Align2, FontId, Stroke};
 use serde_json::{json, Value};
 
+/// A resize's standing against the cog ratio snap holds it to.
+pub(super) struct RatioLine {
+    /// For the hint strip.
+    pub text: String,
+    /// For the tag on the stage.
+    pub big: String,
+    pub small: String,
+    pub snapped: bool,
+    pub other: u32,
+}
+/// A ratio as a plain fraction when it is one ("1/3", "4", "3/2"), else to two places.
+fn frac_text(x: f64) -> String {
+    for d in 1..=8 {
+        let n = (x * d as f64).round();
+        if n >= 1.0 && (n / d as f64 - x).abs() < 1e-6 {
+            return if d == 1 { format!("{n}") } else { format!("{n}/{d}") };
+        }
+    }
+    format!("{x:.2}")
+}
+
 const SLOT_MIN: f64 = 58.0;
 const FLING_MS: f64 = 0.26;
 
@@ -300,6 +321,79 @@ impl Stage {
     }
 
     // ---------- the readout ----------
+    /// With ratio snap on: how the cog being resized stands to the cog it snaps against, from the speeds the solver
+    /// gave them. None when there is nothing true to say (no ratio snap, no such cog, not in one train, jammed).
+    pub(super) fn ratio_line(&self, w: &World, id: u32, anchor: Option<u32>) -> Option<RatioLine> {
+        if w.s.ratios == 0.0 {
+            return None;
+        }
+        let (ci, ai) = (w.cog_ix(id)?, w.cog_ix(anchor?)?);
+        let (c, a) = (&w.cogs[ci], &w.cogs[ai]);
+        if ci == ai || c.jam || a.jam {
+            return None;
+        }
+        let word = |c: &cogs_sim::Cog| if c.track.is_some() { "disc" } else if c.motor.is_some() { "motor" } else { "cog" };
+        let name = format!("{} {}", word(a), a.id);
+        let teeth = c.n / a.n;
+        let snapped = cogs_sim::solve::SNAP_RATIOS.iter().any(|r| (r - teeth).abs() < 1e-9);
+        let mark = if snapped { "● " } else { "" };
+        if w.contact(ci, ai) == Some(cogs_sim::Contact::Mesh) {
+            // what the machine will do: this cog's speed against the other's
+            let r = c.k? / a.k?;
+            let x = r.abs();
+            let f = frac_text(x);
+            let way = if r < 0.0 { ", reversed" } else { "" };
+            let say = if (x - 1.0).abs() < 1e-9 { format!("same speed as {name}") } else if x > 1.0 { format!("{f}× speed of {name}") } else { format!("{f} speed of {name}") };
+            let big = if x >= 1.0 { format!("{f}×") } else { f };
+            let small = format!("speed of {name}{}", if r < 0.0 { " · reversed" } else { "" });
+            return Some(RatioLine { text: format!("{mark}{say}{way} · {} teeth", c.n), big, small, snapped, other: a.id });
+        }
+        // it meshes through a cog on its axle: its teeth are measured against this one, its speed is the axle's
+        let linked = w.stack_at(c.x, c.y).any(|o| w.contact(o, ai) == Some(cogs_sim::Contact::Mesh));
+        if !linked {
+            return None;
+        }
+        let f = frac_text(teeth);
+        Some(RatioLine { text: format!("{mark}{} teeth: {f}× those of {name} (its axle sets the speed)", c.n), big: format!("{f}×"), small: format!("teeth of {name}"), snapped, other: a.id })
+    }
+    pub(super) fn resize_text(&self, w: &World, id: u32, anchor: Option<u32>) -> String {
+        match self.ratio_line(w, id, anchor) {
+            Some(l) => l.text,
+            None => {
+                let jam = w.s.ratios != 0.0 && anchor.is_some() && w.cog(id).map_or(false, |c| c.jam);
+                format!("teeth: {}{}", w.cog(id).map(|c| c.n).unwrap_or(0.0), if jam { " · train jammed" } else { "" })
+            }
+        }
+    }
+    /// While a resize with ratio snap is reporting: on the stage, a line between the two cogs, the other one ringed,
+    /// and the ratio in a large tag.
+    pub(super) fn draw_ratio(&self, p: &egui::Painter, w: &World) {
+        use super::gesture::Grip;
+        let from_gesture = self.gesture.as_ref().filter(|a| a.hinted).and_then(|a| match &a.g {
+            Gesture::Rim { id, grow: Some(g) } => Some((*id, g.anchor.map(|i| w.cogs[i].id))),
+            _ => None,
+        });
+        let from_grip = self.grip.as_ref().filter(|g| g.hinted).and_then(|g| match &g.hand {
+            Grip::Cog { id, anchor, .. } => Some((*id, *anchor)),
+            _ => None,
+        });
+        let Some((id, anchor)) = from_gesture.or(from_grip) else { return };
+        let Some(l) = self.ratio_line(w, id, anchor) else { return };
+        let (Some(c), Some(a)) = (w.cog(id), w.cog(l.other)) else { return };
+        let ink = if l.snapped { HOT } else { FG };
+        let (sc, sa) = (self.to_screen(w, c.x, c.y), self.to_screen(w, a.x, a.y));
+        p.extend(egui::Shape::dashed_line(&[self.scr(sc), self.scr(sa)], Stroke::new(1.5, alpha(ink, 0.8)), 5.0, 4.0));
+        p.circle_stroke(self.scr(sa), (a.radius() * w.s.zoom + 5.0) as f32, Stroke::new(1.5, alpha(ink, 0.8)));
+        // at the top of the stage, where fingers on a cog don't cover it and it stands still as the cogs move
+        let (t, _) = self.free_area();
+        let (hw, hh) = (80.0, 27.0);
+        let (x, y) = (self.cw / 2.0, t + hh + 10.0);
+        let r = Rect::from_center_size(self.scr((x, y)), vec2(2.0 * hw as f32, 2.0 * hh as f32));
+        p.rect_filled(r, 10.0, alpha(BG, 0.95));
+        p.rect_stroke(r, 10.0, Stroke::new(if l.snapped { 2.0 } else { 1.0 }, ink), egui::StrokeKind::Inside);
+        p.text(r.center() - vec2(0.0, 9.0), Align2::CENTER_CENTER, &l.big, FontId::proportional(21.0), ink);
+        p.text(r.center() + vec2(0.0, 13.0), Align2::CENTER_CENTER, &l.small, FontId::proportional(11.0), FG);
+    }
     pub(super) fn readout_of(&self, w: &World, g: &Gesture) -> Option<String> {
         let kind_label = |k: cogs_sim::VoiceKind| match k {
             cogs_sim::VoiceKind::Synth => "modal".to_string(),
@@ -351,7 +445,11 @@ impl Stage {
                 let c = w.cog(*id)?;
                 format!("{} position: {}, {}", if c.track.is_some() { "disc" } else if c.motor.is_some() { "motor" } else { "cog" }, c.x.round(), c.y.round())
             }
-            Gesture::Rim { id, .. } => format!("teeth: {}", w.cog(*id)?.n),
+            Gesture::Rim { id, grow } => {
+                let ci = w.cog_ix(*id)?;
+                let anchor = grow.as_ref().map_or_else(|| w.resizer(ci).anchor, |g| g.anchor).map(|a| w.cogs[a].id);
+                self.resize_text(w, *id, anchor)
+            }
             Gesture::Knob { id, mode, .. } => {
                 let ci = w.cog_ix(*id)?;
                 match mode {
@@ -410,7 +508,7 @@ impl Stage {
     pub(super) fn grip_readout(&self, w: &World, g: &super::gesture::Grip) -> String {
         use super::gesture::Grip;
         match g {
-            Grip::Cog { id, .. } => format!("teeth: {}", w.cog(*id).map(|c| c.n).unwrap_or(0.0)),
+            Grip::Cog { id, anchor, .. } => self.resize_text(w, *id, *anchor),
             Grip::Field { id, .. } => format!("fx {id} radius {}", w.fields.iter().find(|f| f.id == *id).map(|f| f.r.round()).unwrap_or(0.0)),
             Grip::Pad { id, .. } => format!("pad radius: {} px", fmt3(w.pads.iter().find(|f| f.id == *id).map(|f| f.r).unwrap_or(0.0))),
             Grip::Arm { id, .. } => format!("arm length: {}", w.arms.iter().find(|f| f.id == *id).map(|f| f.len.round()).unwrap_or(0.0)),
