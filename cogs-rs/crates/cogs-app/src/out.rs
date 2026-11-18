@@ -90,3 +90,27 @@ impl<T: Source> Out<T> {
         }
     }
 }
+
+/// When a buffer that grew after a glitch comes back down. After a clean stretch it steps down; a glitch shortly after
+/// such a step shows that level was too low, and the level it then grows to becomes the floor. Glitches while a stream is
+/// settling (a start, a hand-over) or while the app is away say nothing about the normal depth and do not count.
+#[derive(Clone, Copy, Debug)]
+pub struct Ladder { pub floor: u32, step_at: f64, glitch_at: f64, settle_until: f64, stepped: bool }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Move { Stay, Up, Down }
+impl Ladder {
+    pub const CLEAN: f64 = 10.;
+    pub const BETWEEN: f64 = 5.;
+    pub const BLAME: f64 = 15.;
+    pub const SETTLE: f64 = 1.5;
+    pub fn new(floor: u32, t: f64) -> Self { Ladder { floor, step_at: t, glitch_at: t, settle_until: t + Self::SETTLE, stepped: false } }
+    pub fn settle(&mut self, t: f64) { self.settle_until = t + Self::SETTLE; self.glitch_at = t }
+    /// One look at `value`, which moves by `step`. On `Up` the caller grows it, then reports the new value with `grew`.
+    pub fn tick(&mut self, t: f64, glitch: bool, value: u32, step: u32, away: bool) -> Move {
+        if away || t < self.settle_until { self.glitch_at = self.glitch_at.max(t.min(self.settle_until)); return Move::Stay }
+        if glitch { self.glitch_at = t; return Move::Up }
+        if t - self.glitch_at > Self::CLEAN && t - self.step_at > Self::BETWEEN && value >= self.floor + step { self.step_at = t; self.stepped = true; return Move::Down }
+        Move::Stay
+    }
+    pub fn grew(&mut self, t: f64, value: u32) { if self.stepped && t - self.step_at < Self::BLAME { self.floor = self.floor.max(value) } }
+}

@@ -15,14 +15,12 @@
 //!         the normal choice, with a line of audio-thread figures every 2 s
 //!     --es audio delay=3000,stats
 //!         start on whatever is granted without help, and try for the fast path only after 3 s (and then on the timer)
-//!     --es audio fast,stats
-//!         try for the fast path. OFF by default: on the Moto G57 the engine cannot keep up with 4 ms callbacks yet
-//!         (about 93% of a core, hundreds of xruns), so a normal launch stays on the normal stream
 //!     --es audio nokick,stats
 //!         never use the deep-buffer stream described below
 //!
-//!     --es audio fast,stats          the fast path, fed by the render thread (below)
-//!     --es audio fast,direct,stats   the fast path with the machine rendered in the callback itself
+//!     (by default the app takes the fast path if it can, fed by the render thread below)
+//!     --es audio nofast,stats        stay on the normal stream
+//!     --es audio direct,stats        render the machine in the callback itself
 //!     --es audio bench               time the machine on each kind of CPU core, at 4 ms and 20 ms blocks, then run
 //!     more words: world=N (start on shipped world N), ring=N and chunk=N (frames), look=N (machine lookahead, frames),
 //!     nohint (no performance hint session)
@@ -46,7 +44,7 @@
 //! worse, so from pause until two seconds after resume the stream buffer is at its deepest and the ring holds 150 ms,
 //! rendered in bursts so the thread wakes rarely. Coming back, the ring plays down to its normal depth by itself:
 //! nothing is skipped or repeated. Out of sight and paused, the stream is closed and everything idles until play or return.
-use crate::out::{Handoff, Out, Source};
+use crate::out::{Handoff, Ladder, Move, Out, Source};
 use crate::play::{self, Render, Shared};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::ffi::{c_char, c_void, CStr};
@@ -168,7 +166,7 @@ const ORDER: [Spec; 8] = [
 pub struct Options { pub probe: bool, pub stats: bool, pub bursts: i32, forced: Option<Spec>, nokick: bool, delay_ms: Option<u64>, fast: bool, direct: bool, nohint: bool, pub bench: bool, pub world: Option<usize>, ring: Option<u32>, chunk: Option<u32>, look: Option<u64> }
 impl Options {
     pub fn parse(text: &str) -> Options {
-        let mut o = Options { bursts: 2, ..Default::default() };
+        let mut o = Options { bursts: 2, fast: true, ..Default::default() };
         let mut s = Spec::new(FORMAT_FLOAT, SHARED, 0, 0);
         let mut forced = false;
         for w in text.split(',').map(str::trim).filter(|w| !w.is_empty()) {
@@ -178,6 +176,7 @@ impl Options {
                 "stats" => { o.stats = true; force = false }
                 "nokick" => { o.nokick = true; force = false }
                 "fast" => { o.fast = true; force = false }
+                "nofast" => { o.fast = false; force = false }
                 "direct" => { o.direct = true; force = false }
                 "nohint" => { o.nohint = true; force = false }
                 "bench" => { o.bench = true; force = false }
@@ -277,6 +276,10 @@ impl Source for Live {
     }
 }
 
+/// How far the machine runs ahead of the sound on this stream: enough to ride out the UI holding the world (15-20 ms seen
+/// on the phone on the fast path's 5 ms chunks, up to 40 ms in the normal stream's long blocks). It delays edits, not notes.
+fn lookahead(o: &Options, s: &Stream) -> u64 { o.look.unwrap_or((s.info.rate as f64 * if s.fast() { 0.024 } else { 0.048 }) as u64) }
+
 impl Feed {
     fn set_normal(&self, v: u32) { self.normal.store(v, Relaxed); self.target.store(v, Relaxed); self.low.store(v, Relaxed) }
     /// A callback takes `burst` frames at a time: keep that much queued beyond the usual margin.
@@ -346,15 +349,13 @@ fn render_thread(mut render: Render, mut tx: Producer<f32>, feed: Arc<Feed>, sh:
 }
 
 /// How the machine runs on the phone: `live` for the stream, and the render thread if it has one.
-fn machine(mut render: Render, sh: &Arc<Shared>, o: &Options, rate: i32) -> (Box<Live>, Option<(std::thread::JoinHandle<()>, Arc<Feed>, u32)>) {
+fn machine(render: Render, sh: &Arc<Shared>, o: &Options, rate: i32) -> (Box<Live>, Option<(std::thread::JoinHandle<()>, Arc<Feed>, u32)>) {
     let sr = rate as f64;
     if o.direct {
-        render.set_lookahead(o.look.unwrap_or((sr * 0.02) as u64));
         return (Box::new(Live { machine: Machine::Here(render), sh: sh.clone() }), None);
     }
     let chunk = o.chunk.unwrap_or((sr * 0.005) as u32);
     let target = o.ring.unwrap_or(chunk * 2).max(chunk);
-    render.set_lookahead(o.look.unwrap_or((sr * 0.016) as u64));
     let (tx, rx) = RingBuffer::<f32>::new(2 * (sr * 0.2) as usize);
     let feed = Arc::new(Feed::default());
     feed.set_normal(target); feed.min_fill.store(u32::MAX, Relaxed);
@@ -616,7 +617,7 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
         }
         let start = |mut s: Stream, l: Box<Live>| -> Result<Stream, Box<Live>> {
             s.cb.out.src = Some(l);
-            s.set_bursts(o.bursts); s.publish(&sh);
+            s.set_bursts(o.bursts); s.publish(&sh); sh.lookahead.store(lookahead(&o, &s), Relaxed);
             if let Some((_, f, chunk)) = &worker { f.fit(s.info.burst as u32, *chunk, o.ring); f.parked.store(false, Relaxed) }
             if s.begin() { log::info!("audio started at {:.2} s: buffer {} frames ({:.1} ms) on {}", since(), s.info.buffer, s.info.buffer as f64 * 1000. / s.info.rate.max(1) as f64, s.info.line()); Ok(s) }
             else { Err(s.take_live().expect("the machine was just put here")) }
@@ -687,6 +688,7 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
             let Some(mut next) = open_fast(cur.info.rate, !o.nokick, &format!("retry at {t:.2} s")) else { continue };
             // the new stream runs silent until the old one hands over at the right moment
             let old = running.take().unwrap();
+            tune.settle(t);
             next.cb.out.incoming = Some(old.handoff.clone());
             next.set_bursts(o.bursts);
             if !next.begin() { running = Some(old); continue }
@@ -701,7 +703,7 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
                 live = l; continue;
             }
             let end = old.handoff.end_ns();
-            next.publish(&sh);
+            next.publish(&sh); sh.lookahead.store(lookahead(&o, &next), Relaxed);
             if let Some((_, f, chunk)) = &worker { f.fit(next.info.burst as u32, *chunk, o.ring) }
             log::info!("audio moved to the fast path at {:.2} s: {} frames of silence waited for the old stream; {}", since(), next.stats.pad.load(Relaxed), next.info.line());
             running = Some(next);
@@ -714,30 +716,37 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
         if let Some((j, ..)) = worker { let _ = j.join(); }
     }).expect("audio thread")
 }
+/// Keeps the stream buffer and the ring as shallow as has proved safe (`Ladder`).
 #[derive(Default)]
-struct Tune { stream: usize, xruns: i32, starved: u64, glitch_at: f64, step_at: f64, floor_buffer: i32, floor_target: u32 }
+struct Tune { stream: usize, xruns: i32, starved: u64, buffer: Option<Ladder>, ring: Option<Ladder> }
 impl Tune {
+    fn settle(&mut self, t: f64) { for l in [&mut self.buffer, &mut self.ring].into_iter().flatten() { l.settle(t) } }
     fn step(&mut self, t: f64, s: &Stream, feed: Option<(&Feed, u32)>, holding: bool) {
-        let id = Arc::as_ptr(&s.stats) as usize;
-        if id != self.stream { *self = Tune { stream: id, xruns: s.stats.xruns.load(Relaxed), glitch_at: t, step_at: t, floor_buffer: s.normal_buffer, floor_target: feed.map_or(0, |f| f.0.normal.load(Relaxed)), ..Tune::default() }; }
-        let (x, starved) = (s.stats.xruns.load(Relaxed), feed.map_or(0, |f| f.0.starved.load(Relaxed)));
-        let glitch = x > self.xruns || starved > self.starved;
-        let starving = starved > self.starved;
+        let st = &s.stats;
+        let id = Arc::as_ptr(st) as usize;
+        if id != self.stream {
+            *self = Tune { stream: id, xruns: st.xruns.load(Relaxed), starved: feed.map_or(0, |f| f.0.starved.load(Relaxed)),
+                buffer: Some(Ladder::new(s.normal_buffer.max(0) as u32, t)), ring: feed.map(|f| Ladder::new(f.0.normal.load(Relaxed), t)) };
+        }
+        let (x, starved) = (st.xruns.load(Relaxed), feed.map_or(0, |f| f.0.starved.load(Relaxed)));
+        let (xrun, starving) = (x > self.xruns, starved > self.starved);
         self.xruns = x; self.starved = starved;
-        if holding { self.glitch_at = t; return }
-        let want = s.stats.want.load(Relaxed);
-        if glitch {
-            if let (true, Some((f, chunk))) = (starving, feed) { let v = (f.normal.load(Relaxed) + chunk).min(chunk * 24); f.set_normal(v); log::info!("audio ring target {v} frames (starved)") }
-            if t - self.step_at < 15. {
-                self.floor_buffer = self.floor_buffer.max(want);
-                if let Some((f, _)) = feed { self.floor_target = self.floor_target.max(f.normal.load(Relaxed)) }
-                log::info!("audio buffers stay at {} frames, ring {} (a glitch soon after coming down)", self.floor_buffer, self.floor_target);
+        if let Some(l) = &mut self.buffer {
+            let (want, burst) = (st.want.load(Relaxed).max(0) as u32, s.info.burst.max(1) as u32);
+            match l.tick(t, xrun, want, burst, holding) {
+                // the callback has already grown it
+                Move::Up => l.grew(t, want),
+                Move::Down => { st.want.store((want - burst) as i32, Relaxed); log::info!("audio buffer back down to {} frames", want - burst) }
+                Move::Stay => {}
             }
-            self.glitch_at = t;
-        } else if t - self.glitch_at > 20. && t - self.step_at > 10. {
-            self.step_at = t;
-            if want - s.info.burst >= self.floor_buffer { s.stats.want.store(want - s.info.burst, Relaxed); log::info!("audio buffer back down to {} frames", want - s.info.burst) }
-            else if let Some((f, chunk)) = feed { let v = f.normal.load(Relaxed); if v >= self.floor_target + chunk { f.set_normal(v - chunk); log::info!("audio ring back down to {} frames", v - chunk) } }
+        }
+        if let (Some(l), Some((f, chunk))) = (&mut self.ring, feed) {
+            let v = f.normal.load(Relaxed);
+            match l.tick(t, starving, v, chunk, holding) {
+                Move::Up => { let n = (v + chunk).min(chunk * 24); f.set_normal(n); l.grew(t, n); log::info!("audio ring target {n} frames (starved at {t:.1} s)") }
+                Move::Down => { f.set_normal(v - chunk); log::info!("audio ring back down to {} frames at {t:.1} s", v - chunk) }
+                Move::Stay => {}
+            }
         }
     }
 }

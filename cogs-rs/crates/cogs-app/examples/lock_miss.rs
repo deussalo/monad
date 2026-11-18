@@ -21,7 +21,7 @@ fn run(src: &str, look: u64, hold_ms: u64) -> (u64, u64, u64, u64) {
     out
 }
 fn main() {
-    for (name, src) in cogs::WORLDS { for (look, hold) in [(0, 0), (0, 8), (576, 8), (576, 0)] {
+    for (name, src) in cogs::WORLDS { for (look, hold) in [(0, 8), (1152, 8), (1152, 16), (1152, 0)] {
         let (ev, miss, blocks, late) = run(src, look, hold);
         println!("{name}: lookahead {:.0} ms, UI holds {hold} ms: {ev} notes, world locked in {miss} of {blocks} blocks, {late} notes late", look as f64 / 48.);
     } }

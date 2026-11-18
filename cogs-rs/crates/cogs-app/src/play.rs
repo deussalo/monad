@@ -100,6 +100,8 @@ pub struct Shared {
     pub running: AtomicBool,
     /// The output is parked: the machine is paused with the app out of sight.
     pub idle: AtomicBool,
+    /// How far ahead of the sound the machine runs, in frames (see `Render::set_lookahead`).
+    pub lookahead: AtomicU64,
     /// Keys go to `rec` too, stamped with the sim time heard with them, while this is set.
     pub recording: AtomicBool,
     pub rec: Mutex<Consumer<RecEv>>,
@@ -117,8 +119,6 @@ pub struct Render {
     dead: Producer<Arc<CompiledPatch>>,
     parts: HashMap<u32, Prep>,
     sr: f64,
-    /// How far ahead of the sound the machine runs, in frames (see `set_lookahead`).
-    lookahead: u64,
     /// The frame the world has been advanced to, and the sim time there.
     horizon: u64,
     sim_at_horizon: f64,
@@ -159,11 +159,11 @@ pub fn parts(world: World, sr: f32) -> (Arc<Shared>, Render, Sync) {
     let (rp, rc) = RingBuffer::new(512);
     let velcurve = world.s.vel_curve;
     let sh = Arc::new(Shared { world: Mutex::new(world), listen: Mutex::new(Listen::default()), meters: Meters::default(), midi_part: AtomicU32::new(0),
-        velcurve: AtomicU32::new((velcurve as f32).to_bits()), midi_tx: Mutex::new(mp), running: AtomicBool::new(true), idle: AtomicBool::new(false),
+        velcurve: AtomicU32::new((velcurve as f32).to_bits()), midi_tx: Mutex::new(mp), running: AtomicBool::new(true), idle: AtomicBool::new(false), lookahead: AtomicU64::new(0),
         recording: AtomicBool::new(false), rec: Mutex::new(rc) });
     // Room for the busiest shipped world: every field with its reverb, and plenty of synth racks.
     let engine = Engine::with_config(sr, cogs_dsp::EngineConfig { parts: 96, rack_delays: 24, rack_verbs: 12, field_verbs: 8, modal_voices: 64, drum_voices: 64 });
-    let render = Render { sh: sh.clone(), engine, midi: mc, ctl: cc, dead: dp, parts: HashMap::with_capacity(512), sr: sr as f64, lookahead: 0, horizon: 0, sim_at_horizon: 0., held: [0; 128],
+    let render = Render { sh: sh.clone(), engine, midi: mc, ctl: cc, dead: dp, parts: HashMap::with_capacity(512), sr: sr as f64, horizon: 0, sim_at_horizon: 0., held: [0; 128],
         sustain: false, sustained: [false; 128], listen: Listen::default(), velcurve, rec: rp, t_now: 0. };
     (sh, render, Sync::new(cp, dc))
 }
@@ -361,7 +361,7 @@ impl Render {
     /// Run the machine this many frames ahead of the sound. Its notes are handed to the engine for their exact future
     /// frames, so they do not sound any earlier or later for it; but when the UI holds the world for less than this, no
     /// note is late. The price is that an edit reaches the sound this much later. Keys played live are not affected.
-    pub fn set_lookahead(&mut self, frames: u64) { self.lookahead = frames }
+    pub fn set_lookahead(&mut self, frames: u64) { self.sh.lookahead.store(frames, Relaxed) }
 
     pub fn block(&mut self, l: &mut [f32], r: &mut [f32], latency: f64) {
         let n = l.len();
@@ -401,7 +401,7 @@ impl Render {
         // the world locked just leaves more to do next time, and with lookahead to spare nothing is late.
         let dt = n as f64 / self.sr;
         let end = f0 + n as u64;
-        let want = end + self.lookahead;
+        let want = end + self.sh.lookahead.load(Relaxed);
         let sh = self.sh.clone();
         let world = sh.world.try_lock();
         match world {
@@ -413,7 +413,8 @@ impl Render {
                 let mut buf = std::mem::take(&mut SCRATCH.with(|s| s.take()));
                 if frames > 0 { w.advance(t1, &mut |e: Event| buf.push(e)) }
                 self.sim_at_horizon = w.clock.sim_t;
-                let heard = (w.clock.sim_t - (want - end) as f64 / self.sr - latency - dt).max(0.);
+                let ahead = want.max(self.horizon) - end;
+                let heard = (w.clock.sim_t - ahead as f64 / self.sr - latency - dt).max(0.);
                 self.sh.meters.heard.store(heard.to_bits(), Relaxed);
                 drop(w);
                 let span = t1 - t0;
@@ -426,9 +427,9 @@ impl Render {
                     self.sh.meters.events.fetch_add(1, Relaxed);
                 }
                 SCRATCH.with(|s| s.set(buf));
-                self.horizon = want;
+                self.horizon = self.horizon.max(want);
             }
-            Ok(w) => { let h = w.clock.view; self.sim_at_horizon = w.clock.sim_t; self.horizon = want; drop(w); self.sh.meters.heard.store(h.to_bits(), Relaxed) }
+            Ok(w) => { let h = w.clock.view; self.sim_at_horizon = w.clock.sim_t; self.horizon = self.horizon.max(want); drop(w); self.sh.meters.heard.store(h.to_bits(), Relaxed) }
             Err(_) => {
                 let m = &self.sh.meters;
                 m.lock_misses.fetch_add(1, Relaxed);
