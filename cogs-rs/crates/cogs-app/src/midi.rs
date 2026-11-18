@@ -7,6 +7,8 @@ pub enum Midi {
     Off { note: u8 },
     Cc { cc: u8, value: u8 },
     Bend { value: i16 },
+    /// Sound a part once, as a tap or a placed note does (stage.js sound): part 0 is the first synth.
+    Audition { part: u32, midi: f32, key: u32 },
 }
 
 /// One complete message (status, data1, data2) into an event; None for what we don't play.

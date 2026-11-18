@@ -261,6 +261,18 @@ impl Render {
         self.held[note as usize] = key;
         let m = &self.sh.meters; m.notes.fetch_add(1, Relaxed); m.last_note.store(note as u32, Relaxed);
     }
+    /// stage.js sound(): now, at a middling velocity, its own part's voice; a short note for the synths.
+    fn audition(&mut self, part: u32, midi: f32, key: u32, at: u64) {
+        let target = if part != 0 { self.parts.get(&part).map(|p| (part, *p)) } else { None }.or_else(|| self.midi_target());
+        let Some((id, prep)) = target else { return };
+        let s = Sends::default();
+        match prep {
+            Prep::Wave { level, .. } => { self.engine.command(Cmd::Note { at, part: id, key, midi, amp: 0.85 * level, vel: 0.7, pan: 0., hold: 0.3, dark: 0., sends: s }) }
+            Prep::Modal { voice, level, .. } => self.engine.command(Cmd::Modal { at, key, voice, midi, amp: 0.85 * level, pan: 0., x: 0.7, hold: 0., dark: 0., sends: s }),
+            Prep::Drum { voice, level, .. } => self.engine.command(Cmd::Drum { at, voice, amp: 0.85 * level, pan: 0., dark: 0., sends: s }),
+            Prep::Str { bar, decay, damp, hard, level, .. } => self.engine.command(Cmd::Strike(pluck(at, key, midi as f64, 0.3, 0.85 * level as f64, 0., 0.7, 0., bar, decay, damp, hard, s))),
+        }
+    }
     fn key_off(&mut self, note: u8, at: u64, now: bool) {
         let k = self.held[note as usize]; if k == 0 { return }
         if self.sustain && !now { self.sustained[note as usize] = true; return }
@@ -293,6 +305,7 @@ impl Render {
                 Midi::Off { note } => self.key_off(note, f0, false),
                 Midi::Cc { cc: 64, value } => { self.sustain = value >= 64; if !self.sustain { for i in 0..128 { if self.sustained[i] { self.key_off(i as u8, f0, true) } } } }
                 Midi::Cc { cc: 120 | 123, .. } => { for i in 0..128 { self.key_off(i as u8, f0, true) } }
+                Midi::Audition { part, midi, key } => self.audition(part, midi, key, f0),
                 _ => {}
             }
         }
