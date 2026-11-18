@@ -206,6 +206,8 @@ impl Engine {
     }
     /// Frames rendered so far: the engine's clock.
     pub fn frame(&self) -> u64 { self.frame }
+    /// The last block's peak.
+    pub fn peak(&self) -> f32 { self.stats.peak }
     pub fn stats(&self) -> Stats {
         let mut s = self.stats;
         s.wave_voices = self.wave.voices(); s.modal_voices = self.modal.active(); s.drum_voices = self.drums.active();
