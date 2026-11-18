@@ -3,6 +3,7 @@
 //! it never waits on.
 pub mod midi;
 pub mod play;
+pub mod out;
 #[cfg(feature = "gui")]
 pub mod rec;
 #[cfg(feature = "gui")]
@@ -17,6 +18,8 @@ pub mod web;
 pub mod link;
 #[cfg(all(feature = "gui", target_os = "android"))]
 mod android;
+#[cfg(all(feature = "gui", target_os = "android"))]
+mod aaudio;
 
 /// The worlds that ship with the app.
 pub const WORLDS: [(&str, &str); 3] = [

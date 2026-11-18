@@ -48,6 +48,7 @@ class MainActivity : NativeActivity(), MidiHub.Listener {
     }
 
     override fun onDestroy() { hub.stop(); super.onDestroy() }
+    override fun onResume() { super.onResume(); try { Native.resumed() } catch (e: UnsatisfiedLinkError) {} }
 
     /** Called from Rust, on its thread. */
     @Suppress("unused")
