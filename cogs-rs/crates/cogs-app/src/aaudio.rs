@@ -15,6 +15,9 @@
 //!         the normal choice, with a line of audio-thread figures every 2 s
 //!     --es audio delay=3000,stats
 //!         start on whatever is granted without help, and try for the fast path only after 3 s (and then on the timer)
+//!     --es audio fast,stats
+//!         try for the fast path. OFF by default: on the Moto G57 the engine cannot keep up with 4 ms callbacks yet
+//!         (about 93% of a core, hundreds of xruns), so a normal launch stays on the normal stream
 //!     --es audio nokick,stats
 //!         never use the deep-buffer stream described below
 //!
@@ -144,7 +147,7 @@ const ORDER: [Spec; 8] = [
 ];
 
 #[derive(Clone, Debug, Default)]
-pub struct Options { pub probe: bool, pub stats: bool, pub bursts: i32, forced: Option<Spec>, nokick: bool, delay_ms: Option<u64> }
+pub struct Options { pub probe: bool, pub stats: bool, pub bursts: i32, forced: Option<Spec>, nokick: bool, delay_ms: Option<u64>, fast: bool }
 impl Options {
     pub fn parse(text: &str) -> Options {
         let mut o = Options { bursts: 2, ..Default::default() };
@@ -156,6 +159,7 @@ impl Options {
                 "probe" => { o.probe = true; force = false }
                 "stats" => { o.stats = true; force = false }
                 "nokick" => { o.nokick = true; force = false }
+                "fast" => { o.fast = true; force = false }
                 "float" => s.format = FORMAT_FLOAT, "i16" => s.format = FORMAT_I16,
                 "shared" => s.sharing = SHARED, "exclusive" => s.sharing = EXCLUSIVE,
                 "auto" => s.rate = 0,
@@ -374,7 +378,7 @@ pub fn open_best(o: &Options, rate: Option<i32>) -> Option<Stream> {
             }
         }
     }
-    if o.forced.is_none() && !o.nokick && o.delay_ms.is_none() {
+    if o.fast && o.forced.is_none() && !o.nokick && o.delay_ms.is_none() {
         if let Some(s) = open_fast(rate.unwrap_or(0), true, "launch") { return Some(s) }
     }
     let (spec, _) = best?;
@@ -424,7 +428,7 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
             }
             if RESUMED.swap(false, Relaxed) && !running.as_ref().is_some_and(|s| s.fast()) { log::info!("audio: resumed at {t:.2} s"); tries.insert(0, t) }
             let Some(cur) = running.as_ref() else { continue };
-            if o.forced.is_some() || o.probe || cur.fast() { tries.clear(); continue }
+            if !o.fast || o.forced.is_some() || o.probe || cur.fast() { tries.clear(); continue }
             if tries.first().is_none_or(|x| *x > t) { continue }
             tries.remove(0);
             let Some(mut next) = open_fast(cur.info.rate, !o.nokick, &format!("retry at {t:.2} s")) else { continue };
