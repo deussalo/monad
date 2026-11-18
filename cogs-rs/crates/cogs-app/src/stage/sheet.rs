@@ -1059,6 +1059,7 @@ impl Stage {
         match World::from_json(&world) {
             Ok(mut nw) => {
                 nw.clock = w.clock.clone();
+                crate::play::bump_versions(w, &mut nw);
                 *w = nw;
                 w.set_paused(paused);
                 self.loaded(w);

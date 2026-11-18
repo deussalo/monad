@@ -11,6 +11,9 @@ use cogs_sim::World;
 use eframe::egui;
 use std::sync::{atomic::Ordering::Relaxed, Arc, Mutex};
 
+/// A file the platform picked for opening: its text, or why not (empty: cancelled).
+pub static FILE_IN: Mutex<Option<Result<String, String>>> = Mutex::new(None);
+
 pub struct App {
     pub sh: Arc<Shared>,
     pub status: Arc<Mutex<String>>,
@@ -29,11 +32,13 @@ pub struct App {
     foreign: std::collections::HashSet<u64>,
     /// Auditions to let go of, by key, at an egui time.
     offs: Vec<(u32, f64)>,
+    pub open_file: Option<Box<dyn Fn()>>,
+    pub save_file: Option<Box<dyn Fn(&str, &str)>>,
 }
 
 impl App {
     pub fn new(sh: Arc<Shared>, status: Arc<Mutex<String>>, connect: Box<dyn Fn()>) -> Self {
-        App { sh, status, connect, stage: Stage::new(), panel: false, world_ix: 0, fitted: false, note: None, editor: None, data: None, save_at: None, rec: None, can_record: false, foreign: Default::default(), offs: Vec::new() }
+        App { sh, status, connect, stage: Stage::new(), panel: false, world_ix: 0, fitted: false, note: None, editor: None, data: None, save_at: None, rec: None, can_record: false, foreign: Default::default(), offs: Vec::new(), open_file: None, save_file: None }
     }
     /// The part a selection plays from the keyboard: a reader, pad or box; a plate means its reader.
     fn keyboard_part(w: &World, sel: Option<Sel>) -> Option<u32> {
@@ -49,8 +54,7 @@ impl App {
         if let Ok(mut w) = self.sh.world.lock() {
             // the new world's voices start their versions past the old ones', so the sync thread recompiles every
             // patch even where a part id is reused
-            let base = w.pads.iter().map(|o| o.voice.ver).chain(w.readers.iter().map(|o| o.voice.ver)).chain(w.pits.iter().map(|o| o.voice.ver)).max().unwrap_or(0).wrapping_add(1);
-            for v in nw.pads.iter_mut().map(|o| &mut o.voice).chain(nw.readers.iter_mut().map(|o| &mut o.voice)).chain(nw.pits.iter_mut().map(|o| &mut o.voice)) { v.ver = v.ver.wrapping_add(base) }
+            crate::play::bump_versions(&w, &mut nw);
             let paused = w.clock.paused; *w = nw; w.set_paused(paused); self.stage.loaded(&w);
         }
         self.world_ix = i; self.fitted = false; self.sh.midi_part.store(0, Relaxed); self.editor = None;
@@ -138,6 +142,19 @@ impl eframe::App for App {
             }
         });
         if let Some(i) = load_req { self.load(i) }
+        // a file the picker handed back: open it as the stage's panel does
+        if let Some(r) = FILE_IN.lock().ok().and_then(|mut f| f.take()) {
+            let now = ctx.input(|i| i.time);
+            match r {
+                Ok(text) => {
+                    let msg = match self.sh.world.lock() { Ok(mut w) => self.stage.open_text(&mut w, &text), Err(_) => "busy".into() };
+                    self.editor = None; self.fitted = false; self.save_at = Some(0.0);
+                    self.note = Some((msg, now));
+                }
+                Err(e) if !e.is_empty() => self.note = Some((e, now)),
+                Err(_) => {}
+            }
+        }
         for o in outs {
             match o {
                 StageOut::ConnectMidi => (self.connect)(),
@@ -155,10 +172,12 @@ impl eframe::App for App {
                 StageOut::AuditionOff { key, after } => self.offs.push((key, ctx.input(|i| i.time) + after)),
                 StageOut::Share(link) => { ctx.copy_text(link); self.note = Some(("share link copied".into(), ctx.input(|i| i.time))) }
                 StageOut::SaveFile { name, text } => {
-                    let r = self.data.as_ref().ok_or_else(|| "no storage".to_string()).and_then(|d| { let p = d.join("files"); std::fs::create_dir_all(&p).map_err(|e| e.to_string())?; std::fs::write(p.join(&name), text).map_err(|e| e.to_string()).map(|_| name.clone()) });
-                    self.note = Some((match r { Ok(n) => format!("saved {n} in the app's files"), Err(e) => format!("not saved: {e}") }, ctx.input(|i| i.time)));
+                    if let Some(f) = &self.save_file { f(&name, &text) } else {
+                        let r = self.data.as_ref().ok_or_else(|| "no storage".to_string()).and_then(|d| { let p = d.join("files"); std::fs::create_dir_all(&p).map_err(|e| e.to_string())?; std::fs::write(p.join(&name), text).map_err(|e| e.to_string()).map(|_| name.clone()) });
+                        self.note = Some((match r { Ok(n) => format!("saved {n} in the app's files"), Err(e) => format!("not saved: {e}") }, ctx.input(|i| i.time)));
+                    }
                 }
-                StageOut::OpenFile => self.note = Some(("Opening files from the phone comes next.".into(), ctx.input(|i| i.time))),
+                StageOut::OpenFile => match &self.open_file { Some(f) => f(), None => self.note = Some(("No file picker here.".into(), ctx.input(|i| i.time))) },
                 _ => {}
             }
         }

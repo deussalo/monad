@@ -65,6 +65,13 @@ enum Ctl {
     Motion(u32, u8, Option<MotionProg>),
 }
 
+/// Before a whole world replaces another: start the new voices' versions past every old one, so the sync thread
+/// recompiles each patch even where a part id is reused.
+pub fn bump_versions(old: &World, new: &mut World) {
+    let base = old.pads.iter().map(|o| o.voice.ver).chain(old.readers.iter().map(|o| o.voice.ver)).chain(old.pits.iter().map(|o| o.voice.ver)).max().unwrap_or(0).wrapping_add(1);
+    for v in new.pads.iter_mut().map(|o| &mut o.voice).chain(new.readers.iter_mut().map(|o| &mut o.voice)).chain(new.pits.iter_mut().map(|o| &mut o.voice)) { v.ver = v.ver.wrapping_add(base) }
+}
+
 /// A key the audio thread heard while recording, stamped with the sim time heard with it (see rec.rs).
 #[derive(Clone, Copy, Debug)]
 pub struct RecEv { pub on: bool, pub note: u8, pub vel: u8, pub at: f64 }

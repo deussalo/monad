@@ -61,6 +61,22 @@ fn open_audio(mut render: play::Render, sh: Arc<play::Shared>, sr: f32) -> Optio
     Some(stream)
 }
 
+/// A picked file's text (or why there is none), for the UI to open.
+#[no_mangle]
+pub extern "system" fn Java_help_techmate_cogs_Native_fileText(mut env: JNIEnv, _c: JClass, text: JString, error: JString) {
+    let get = |env: &mut JNIEnv, s: &JString| if s.is_null() { None } else { env.get_string(s).ok().map(String::from) };
+    let r = match (get(&mut env, &text), get(&mut env, &error)) { (Some(t), _) => Ok(t), (None, Some(e)) => Err(e), (None, None) => Err(String::new()) };
+    if let Ok(mut f) = ui::FILE_IN.lock() { *f = Some(r) }
+}
+
+/// Call a method on the activity from any thread.
+fn call_activity(vm: usize, act: usize, name: &str, sig: &str, args: &[jni::objects::JValue]) {
+    let Ok(vm) = (unsafe { JavaVM::from_raw(vm as *mut _) }) else { return };
+    let Ok(mut env) = vm.attach_current_thread() else { return };
+    let act = unsafe { JObject::from_raw(act as jni::sys::jobject) };
+    if let Err(e) = env.call_method(&act, name, sig, args) { log::error!("{name}: {e}") }
+}
+
 #[no_mangle]
 fn android_main(app: AndroidApp) {
     android_logger::init_once(android_logger::Config::default().with_max_level(log::LevelFilter::Info).with_tag("cogs"));
@@ -76,13 +92,16 @@ fn android_main(app: AndroidApp) {
     let stream = open_audio(render, sh.clone(), sr);
     if stream.is_none() { *status.lock().unwrap() = "Audio failed to open".into() }
     let (vm, act) = (app.vm_as_ptr() as usize, app.activity_as_ptr() as usize);
-    let connect = Box::new(move || {
-        let Ok(vm) = (unsafe { JavaVM::from_raw(vm as *mut _) }) else { return };
-        let Ok(mut env) = vm.attach_current_thread() else { return };
+    let connect = Box::new(move || call_activity(vm, act, "connectMidi", "()V", &[]));
+    let open_file: Box<dyn Fn()> = Box::new(move || call_activity(vm, act, "openFile", "()V", &[]));
+    let save_file: Box<dyn Fn(&str, &str)> = Box::new(move |name, text| {
+        let Ok(jvm) = (unsafe { JavaVM::from_raw(vm as *mut _) }) else { return };
+        let Ok(mut env) = jvm.attach_current_thread() else { return };
+        let (Ok(n), Ok(t)) = (env.new_string(name), env.new_string(text)) else { return };
         let act = unsafe { JObject::from_raw(act as jni::sys::jobject) };
-        if let Err(e) = env.call_method(&act, "connectMidi", "()V", &[]) { log::error!("connectMidi: {e}") }
+        if let Err(e) = env.call_method(&act, "saveFile", "(Ljava/lang/String;Ljava/lang/String;)V", &[(&n).into(), (&t).into()]) { log::error!("saveFile: {e}") }
     });
     let opts = eframe::NativeOptions { android_app: Some(app), ..Default::default() };
-    let _ = eframe::run_native("cogs", opts, Box::new(move |_cc| { let mut a = ui::App::new(sh, status, connect); a.data = data; Ok(Box::new(a)) }));
+    let _ = eframe::run_native("cogs", opts, Box::new(move |_cc| { let mut a = ui::App::new(sh, status, connect); a.data = data; a.open_file = Some(open_file); a.save_file = Some(save_file); Ok(Box::new(a)) }));
     drop(stream);
 }

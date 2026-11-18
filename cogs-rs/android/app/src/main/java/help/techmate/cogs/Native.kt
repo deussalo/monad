@@ -4,6 +4,8 @@ package help.techmate.cogs
 object Native {
     @JvmStatic external fun midi(status: Int, d1: Int, d2: Int)
     @JvmStatic external fun status(text: String, connected: Boolean)
+    /** A file the user picked to open, as text (null: cancelled or unreadable, with why). */
+    @JvmStatic external fun fileText(text: String?, error: String?)
 }
 
 /** Hands each parsed message to Rust: one JNI call, no allocation. */

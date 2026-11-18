@@ -42,6 +42,22 @@ class MainActivity : NativeActivity(), MidiHub.Listener {
     @Suppress("unused")
     fun connectMidi() = runOnUiThread { connectFlow() }
 
+    /** Called from Rust: pick a .cogs.json to open; its text goes back through Native.fileText. */
+    @Suppress("unused")
+    fun openFile() = runOnUiThread {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+        try { startActivityForResult(i, 10) } catch (e: Exception) { Native.fileText(null, "no file picker: ${e.message}") }
+    }
+
+    private var pendingSave: String? = null
+    /** Called from Rust: ask where to save this text, then write it. */
+    @Suppress("unused")
+    fun saveFile(name: String, text: String) = runOnUiThread {
+        pendingSave = text
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json").putExtra(Intent.EXTRA_TITLE, name)
+        try { startActivityForResult(i, 11) } catch (e: Exception) { Toast.makeText(this, "no file picker", Toast.LENGTH_SHORT).show() }
+    }
+
     override fun onStatus(text: String, connected: Boolean) = Native.status(text, connected)
 
     private var scanAdapter: ArrayAdapter<String>? = null
@@ -97,6 +113,22 @@ class MainActivity : NativeActivity(), MidiHub.Listener {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == 2 && hub.bluetoothOn) connectFlow()
+        if (requestCode == 10) {
+            val uri = data?.data
+            if (resultCode != RESULT_OK || uri == null) { Native.fileText(null, null); return }
+            try {
+                val text = contentResolver.openInputStream(uri)!!.use { it.readBytes().toString(Charsets.UTF_8) }
+                Native.fileText(text, null)
+            } catch (e: Exception) { Native.fileText(null, "could not read the file: ${e.message}") }
+        }
+        if (requestCode == 11) {
+            val uri = data?.data; val text = pendingSave; pendingSave = null
+            if (resultCode != RESULT_OK || uri == null || text == null) return
+            try {
+                contentResolver.openOutputStream(uri, "wt")!!.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                Toast.makeText(this, "saved", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) { Toast.makeText(this, "not saved: ${e.message}", Toast.LENGTH_LONG).show() }
+        }
     }
 
     private fun showScanDialog() {
