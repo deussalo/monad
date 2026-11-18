@@ -63,6 +63,7 @@ pub fn parse_path(d: &str) -> Vec<Vec<(f64, f64)>> {
             cmd = c;
             k += 1;
             if c == 'Z' || c == 'z' {
+                cur.push((sx, sy));
                 if cur.len() > 1 {
                     out.push(std::mem::take(&mut cur));
                 }

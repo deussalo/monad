@@ -17,6 +17,10 @@ pub(crate) enum Gesture {
     Shelf { s0: (f64, f64), x0: f64, kind: &'static str, mode: u8, inner: Option<Box<Gesture>>, last: (f64, f64), v: f64 },
     Glyph,
     Button(Btn),
+    /// A sector of the bezel: what it held when pressed.
+    Bezel { i: usize, v0: super::bezel::Val, s0: (f64, f64), owner: Option<Sel> },
+    /// A press that has done its work (a link made or cancelled).
+    Nothing,
     Cam(u32),
     Probe(u32),
     Field { id: u32, off: (f64, f64), edge: bool },
@@ -74,6 +78,7 @@ impl Gesture {
             Gesture::Belt(i) => Sel::Belt(i),
             Gesture::Cog { id, .. } | Gesture::Rim { id, .. } | Gesture::Knob { id, .. } | Gesture::Notes { id, .. } => Sel::Cog(id),
             Gesture::PitBox { id, .. } | Gesture::PitSize(id) | Gesture::PitIn { id, .. } => Sel::Pit(id),
+            Gesture::Bezel { owner, .. } => return owner,
             _ => return None,
         })
     }
@@ -96,6 +101,9 @@ impl Stage {
                     self.seen_touch = true;
                     let id = id.0;
                     let s = local(pos);
+                    if self.route_sheet(w, id, s, phase) {
+                        continue;
+                    }
                     match phase {
                         TouchPhase::Start => self.down(w, id, s, true, mods),
                         TouchPhase::Move => self.moved(w, id, s),
@@ -106,12 +114,20 @@ impl Stage {
                 Event::PointerMoved(p) if !self.seen_touch => {
                     let s = local(p);
                     self.hover = Some(s);
+                    if self.mouse_down && self.route_sheet(w, MOUSE, s, TouchPhase::Move) {
+                        continue;
+                    }
                     if self.mouse_down {
                         self.moved(w, MOUSE, s);
                     }
                 }
                 Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers } if !self.seen_touch => {
                     let s = local(pos);
+                    let phase = if pressed { TouchPhase::Start } else { TouchPhase::End };
+                    if (pressed && self.rect.contains(pos) || !pressed) && self.route_sheet(w, MOUSE, s, phase) {
+                        self.mouse_down = pressed;
+                        continue;
+                    }
                     if pressed && self.rect.contains(pos) {
                         self.mouse_down = true;
                         self.down(w, MOUSE, s, false, modifiers);
@@ -141,6 +157,31 @@ impl Stage {
         }
     }
 
+    /// Fingers that land on an open sheet are the sheet's until they lift. True: the event was the sheet's.
+    fn route_sheet(&mut self, w: &mut World, id: u64, s: (f64, f64), phase: TouchPhase) -> bool {
+        match phase {
+            TouchPhase::Start => {
+                let Some(o) = self.sheet_hit(w, s) else { return false };
+                self.sheet_fingers.insert(id, o);
+                self.sheet_down(w, id, s, o);
+                true
+            }
+            TouchPhase::Move => match self.sheet_fingers.get(&id).copied() {
+                Some(o) => {
+                    self.sheet_move(w, id, s, o);
+                    true
+                }
+                None => false,
+            },
+            TouchPhase::End | TouchPhase::Cancel => match self.sheet_fingers.remove(&id) {
+                Some(o) => {
+                    self.sheet_up(w, id, phase == TouchPhase::Cancel, o);
+                    true
+                }
+                None => false,
+            },
+        }
+    }
     fn down(&mut self, w: &mut World, id: u64, s: (f64, f64), touch: bool, mods: egui::Modifiers) {
         self.fingers.insert(id, Finger { pos: s, touch });
         self.down_t = self.now;
@@ -323,6 +364,12 @@ impl Stage {
             let a = self.to_world(w, s);
             self.marquee = Some((a, a));
             return Gesture::Marquee { a };
+        }
+        if let Some(m) = self.linking.take() {
+            if !self.off_stage(s) {
+                self.link_gesture(w, m, s);
+                return Gesture::Nothing;
+            }
         }
         if let Some(kind) = self.armed {
             if !self.off_stage(s) {
@@ -894,7 +941,11 @@ impl Stage {
                     .unwrap_or(*w0);
                 self.pit_band = Some((a, q));
             }
-            Gesture::Glyph | Gesture::Button(_) => {}
+            Gesture::Bezel { i, v0, s0, .. } => {
+                let (i, v0, s0) = (*i, v0.clone(), *s0);
+                self.bezel_move(w, i, &v0, s0, s);
+            }
+            Gesture::Glyph | Gesture::Button(_) | Gesture::Nothing => {}
         }
     }
     fn gesture_s0(&self) -> (f64, f64) {
@@ -1033,7 +1084,8 @@ impl Stage {
                 let (vx, vy) = self.fling(w, *w0, last.unwrap_or(s));
                 self.throw(w, *id, *w0, *ball, vx, vy);
             }
-            Gesture::Glyph | Gesture::Button(_) => {}
+            Gesture::Bezel { .. } => self.changed(w, true),
+            Gesture::Glyph | Gesture::Button(_) | Gesture::Nothing => {}
         }
     }
     pub(super) fn g_tap(&mut self, w: &mut World, g: &mut Gesture, s: (f64, f64)) {
@@ -1072,6 +1124,11 @@ impl Stage {
                 self.out.push(StageOut::Paused { paused: p, from_start });
             }
             Gesture::Button(b) => self.press(w, *b),
+            Gesture::Bezel { i, .. } => {
+                let i = *i;
+                self.bezel_tap(w, i);
+            }
+            Gesture::Nothing => {}
             Gesture::Belt(id) => {
                 if let Some(b) = w.belts.iter_mut().find(|b| b.id == *id) {
                     b.cross = !b.cross;
@@ -1216,7 +1273,11 @@ impl Stage {
                 }
                 true
             }
-            Gesture::Notes { .. } | Gesture::Glyph | Gesture::Button(_) => true,
+            Gesture::Notes { .. } | Gesture::Glyph | Gesture::Button(_) | Gesture::Nothing => true,
+            Gesture::Bezel { .. } => {
+                self.changed(w, true);
+                true
+            }
             Gesture::PitIn { .. } => {
                 self.pit_band = None;
                 true
@@ -1280,7 +1341,7 @@ impl Stage {
             }
             3 => {
                 self.gesture = None;
-                self.out.push(StageOut::TogglePanel);
+                self.toggle_panel();
                 self.buzz(15);
             }
             4 => {
@@ -1552,8 +1613,64 @@ impl Stage {
             }
         }
     }
-    pub(super) fn choose(&mut self, _w: &World, o: Sel) {
+    pub(super) fn choose(&mut self, w: &World, o: Sel) {
         self.select(Some(o));
+        self.reveal(w);
+    }
+    /// The tap after a cam's or probe's link sector: a reader (a cam), or a reader, pad or sphere (a probe), takes the
+    /// link; anywhere else cancels it.
+    fn link_gesture(&mut self, w: &mut World, m: Sel, s: (f64, f64)) {
+        let p = self.to_world(w, s);
+        let z = w.s.zoom;
+        let mut best: Option<(f64, Part)> = None;
+        let mut take = |d: f64, reach: f64, o: Part| {
+            if d <= reach && best.map_or(true, |b| d < b.0) {
+                best = Some((d, o));
+            }
+        };
+        for r in &w.readers {
+            take(seg_dist(p, r.x1, r.y1, r.x2, r.y2) * z, 24.0, Part::Reader(r.id));
+        }
+        if let Sel::Probe(_) = m {
+            for o in &w.pads {
+                take((dist(p, (o.x, o.y)) - o.r).max(0.0) * z, 16.0, Part::Pad(o.id));
+            }
+            for o in &w.pits {
+                if dist(p, (o.x, o.y)) <= o.w / 2.0 {
+                    take(20.0, 24.0, Part::Pit(o.id));
+                }
+            }
+        }
+        let ok = match (m, best) {
+            (Sel::Cam(c), Some((_, Part::Reader(r)))) => {
+                let ok = w.link_cam(c, r);
+                if !ok {
+                    self.say("link: that reader is not a synth".into(), false);
+                }
+                ok
+            }
+            (Sel::Probe(pr), Some((_, o))) => w.link_probe(pr, o),
+            _ => false,
+        };
+        if ok {
+            self.buzz(12);
+            self.changed(w, true);
+            if let (Sel::Probe(_), Some((_, o))) = (m, best) {
+                if let Some(v) = w.voice(o) {
+                    if v.kind == cogs_sim::VoiceKind::Wave {
+                        self.select(Some(super::gesture::sel_of_part(o)));
+                        self.out.push(StageOut::OpenEditor("patch"));
+                    }
+                }
+            } else if let Sel::Cam(_) = m {
+                if let Some((_, o)) = best {
+                    self.select(Some(super::gesture::sel_of_part(o)));
+                    self.out.push(StageOut::OpenEditor("patch"));
+                }
+            }
+        } else if best.is_none() {
+            self.say("link: cancelled".into(), false);
+        }
     }
 
     // ---------- grips ----------
@@ -1886,6 +2003,15 @@ fn place_reader(w: &mut World, ri: usize, p: (f64, f64)) {
         }
     }
     w.solve();
+}
+
+pub(super) fn sel_of_part(p: Part) -> Sel {
+    match p {
+        Part::Pad(i) => Sel::Pad(i),
+        Part::Reader(i) => Sel::Reader(i),
+        Part::Pit(i) => Sel::Pit(i),
+        Part::String(i) => Sel::String(i),
+    }
 }
 
 pub(super) fn sel_of(p: PartRef) -> Sel {
