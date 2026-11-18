@@ -199,6 +199,20 @@ fn main() {
                 frames.push(vec![Event::Text(format!("__load{}", parts.next().unwrap()))]);
                 frames.extend(std::iter::repeat_with(Vec::new).take(3));
             }
+            // pinchv CX,CY D0 D1: the same, the fingers one above the other
+            "pinchv" => {
+                let (cx, cy) = pair(parts.next().unwrap());
+                let d0: f32 = parts.next().unwrap().parse().unwrap();
+                let d1: f32 = parts.next().unwrap().parse().unwrap();
+                frames.push(vec![touch(1, TouchPhase::Start, cx, cy - d0 / 2.0)]);
+                frames.push(vec![touch(2, TouchPhase::Start, cx, cy + d0 / 2.0)]);
+                for k in 1..=20 {
+                    let d = d0 + (d1 - d0) * k as f32 / 20.0;
+                    frames.push(vec![touch(1, TouchPhase::Move, cx, cy - d / 2.0), touch(2, TouchPhase::Move, cx, cy + d / 2.0)]);
+                }
+                frames.push(vec![touch(2, TouchPhase::End, cx, cy + d1 / 2.0), touch(1, TouchPhase::End, cx, cy - d1 / 2.0)]);
+                frames.extend(std::iter::repeat_with(Vec::new).take(5));
+            }
             "wait" => frames.extend(std::iter::repeat_with(Vec::new).take(parts.next().unwrap().parse().unwrap())),
             o => panic!("unknown op {o}"),
         }
@@ -292,6 +306,9 @@ fn main() {
     }
     if show_cogs {
         cogs_now(&w, "after ");
+    }
+    if let Some(r) = &stage.roll {
+        eprintln!("roll: zoom across {:.3}, down {:.3}, scroll {:.0},{:.0}", r.zx, r.zy, r.sx, r.sy);
     }
     let mut buf = vec![0u8; (pw * ph * 4) as usize];
     unsafe {

@@ -270,6 +270,8 @@ pub struct Stage {
     auto_fit: Option<((f64, f64, f64), [f64; 4])>,
     /// A destructive panel button pressed once: which, and when.
     confirm: Option<(&'static str, f64)>,
+    /// The notes roll's height when nothing caps it, from the last frame: the notes sheet is sized to it.
+    roll_content: f64,
     /// The voices' versions, summed: a change from outside the stage (the synth editor) is an edit of its own.
     voice_sig: u64,
 }
@@ -295,7 +297,7 @@ impl Stage {
             scrap: false, snapped: false, caught: false, last_tap: None, dot_at: (0.0, 0.0), hover: None, shift: false,
             edits: edits::Edits::default(), out: Vec::new(), rect: Rect::NOTHING, cw: 0.0, ch: 0.0, safe_top: 0.0, safe_bot: 0.0, now: 0.0,
             io: StageIo::default(), shelf_x: 0.0, shelf_fling: None, icons: icons::Icons::default(), readout: None, readout_held: false,
-            mouse_down: false, seen_touch: false, started: false, trackpad: None, down_t: 0.0, clip: None, bezel_owner: None, bezel_at: 0.0, seal_at: -9.0, linking: None, sheet: None, roll: None, brush: sheet::Brush::default(), sheet_fingers: BTreeMap::new(), json: String::new(), file_msg: None, snap_pop: false, pop: None, pop_rect: None, framed: None, auto_fit: None, confirm: None, voice_sig: 0,
+            mouse_down: false, seen_touch: false, started: false, trackpad: None, down_t: 0.0, clip: None, bezel_owner: None, bezel_at: 0.0, seal_at: -9.0, linking: None, sheet: None, roll: None, brush: sheet::Brush::default(), sheet_fingers: BTreeMap::new(), json: String::new(), file_msg: None, snap_pop: false, pop: None, pop_rect: None, framed: None, auto_fit: None, confirm: None, voice_sig: 0, roll_content: 400.0,
         }
     }
 
@@ -334,6 +336,7 @@ impl Stage {
             self.edits.mark(self.now);
         }
         self.refit_if_moved(w);
+        self.measure_roll(w);
         self.input(ui, w);
         self.tick(w);
         let painter = ui.painter_at(rect);
@@ -567,10 +570,12 @@ impl Stage {
     /// The panel and the room ring move the machine into the space they leave, and put it back when they go,
     /// unless it has been moved meanwhile.
     fn step_frame(&mut self, w: &World) {
-        let panel = self.sheet.as_ref().map_or(false, |s| s.kind == sheet::SheetKind::Panel && !s.min && s_not_dragged(s));
+        // the panel, or a notes sheet short enough to leave the machine a useful space above it
+        let room_above = self.sheet_top().unwrap_or(0.0) - self.safe_top >= 150.0;
+        let panel = self.sheet.as_ref().map_or(false, |s| !s.min && s_not_dragged(s) && (s.kind == sheet::SheetKind::Panel || room_above));
         let want = if panel { 1 } else if self.room && self.sel.is_none() { 2 } else { 0 };
         let cur = self.framed.map_or(0, |f| f.kind);
-        if want == cur || (want == 0 && self.sheet.as_ref().map_or(false, |s| s.kind == sheet::SheetKind::Panel && !s.min)) {
+        if want == cur || (want == 0 && self.sheet.as_ref().map_or(false, |s| !s.min && s.dragging())) {
             return;
         }
         let was = self.framed.take();

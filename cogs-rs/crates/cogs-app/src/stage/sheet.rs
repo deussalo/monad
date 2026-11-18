@@ -154,8 +154,11 @@ impl Stage {
     pub(super) fn sheet_top(&self) -> Option<f64> {
         let s = self.sheet.as_ref()?;
         let full = match s.kind {
-            // the roll takes the whole height: nothing useful could show in a strip above it
-            SheetKind::Notes => self.safe_top + 4.0,
+            // as tall as the roll needs, up to the whole height: rows are never stretched, and no box is left empty
+            SheetKind::Notes => {
+                let strip = self.ch - self.strip_h(SheetKind::Notes);
+                (strip - CHIPS_H - 4.0 - 6.0 - 8.0 - self.roll_content).max(self.safe_top + 4.0)
+            }
             SheetKind::Panel => (0.28 * self.ch).max(self.safe_top + 120.0),
         };
         let strip = self.ch - self.strip_h(s.kind);
@@ -322,6 +325,14 @@ impl Stage {
     }
 
     // ---------- drawing the sheet and its widgets ----------
+    /// Size the notes sheet to its roll: called before the frame's input and drawing.
+    pub(super) fn measure_roll(&mut self, w: &World) {
+        if let Some(r) = &self.roll {
+            if let Some(g) = r.geo(w, self.cw - 16.0, f64::INFINITY) {
+                self.roll_content = g.content_h();
+            }
+        }
+    }
     pub(super) fn show_sheet(&mut self, ui: &mut egui::Ui, w: &mut World, extra: &mut dyn FnMut(&mut egui::Ui, &mut World)) {
         let Some(kind) = self.sheet.as_ref().map(|s| s.kind) else {
             self.pop = None;

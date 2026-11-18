@@ -7,13 +7,22 @@ use super::draw::*;
 use super::pen::*;
 use super::StageOut;
 use cogs_sim::{wrap, Cog, Dot, Part, World, TAU};
-use egui::{pos2, vec2, Align2, FontId, Painter, Rect, Stroke};
+use egui::{pos2, vec2, Align2, Color32, FontId, Painter, Rect, Stroke};
 use std::collections::{BTreeMap, HashMap};
 
 pub const LANE_H: f64 = 56.0;
-const ROW0: f64 = 32.0;
-pub const LABEL: f64 = 28.0;
-const MIN_CELL: f64 = 28.0;
+/// A row's height at zoom 1: thumb-sized, and never stretched to fill the box.
+const ROW0: f64 = 38.0;
+/// The keys column at the left: wide enough for "C#4" and a thumb.
+pub const LABEL: f64 = 34.0;
+/// A step's least width at zoom 1. Fewer steps than fit spread out, up to `MAX_ASPECT` rows wide; more scroll sideways.
+const MIN_CELL: f64 = 34.0;
+const MAX_ASPECT: f64 = 2.5;
+/// The line under the grid that says what a note's look means.
+pub const LEGEND_H: f64 = 20.0;
+/// Pinch bounds, per axis: rows stay finger-sized, a step never far narrower or wider than its row.
+const ZY: (f64, f64) = (0.75, 1.6);
+const ROW_TO_CELL: (f64, f64) = (0.6, 4.0);
 const MIN_LEN: f64 = 1.0 / 16.0;
 
 /// Snap, as FL Studio's menu: [name, value, unit (s: steps, n: note value, b: bar), short label].
@@ -47,6 +56,9 @@ struct Hold {
 struct Two {
     d: f64,
     z: f64,
+    zy: f64,
+    sx: f64,
+    sy: f64,
     col: f64,
     row: f64,
     mid0: (f64, f64),
@@ -71,13 +83,19 @@ impl Geo {
     }
     /// The grid's height in the box (the lane, when shown, takes the box's bottom).
     pub fn grid_h(&self) -> f64 {
-        self.rect.height() as f64 - if self.lane { LANE_H } else { 0.0 }
+        self.rect.height() as f64 - if self.lane { LANE_H } else { 0.0 } - LEGEND_H
+    }
+    /// The box's height when nothing caps it: every row, the lane if shown, the legend.
+    pub fn content_h(&self) -> f64 {
+        self.h() + if self.lane { LANE_H } else { 0.0 } + LEGEND_H
     }
 }
 
 pub struct Roll {
     pub cog: u32,
-    pub zoom: f64,
+    /// Zoom across (time) and down (rows), each within its bounds.
+    pub zx: f64,
+    pub zy: f64,
     pub sx: f64,
     pub sy: f64,
     pub sel: Vec<usize>,
@@ -107,7 +125,7 @@ pub struct Roll {
 impl Roll {
     pub fn new(cog: u32) -> Roll {
         Roll {
-            cog, zoom: 1.0, sx: 0.0, sy: 0.0, sel: Vec::new(), snap: 5, vel: false, clip: Vec::new(), status: None, anchor: None,
+            cog, zx: 1.0, zy: 1.0, sx: 0.0, sy: 0.0, sel: Vec::new(), snap: 5, vel: false, clip: Vec::new(), status: None, anchor: None,
             pen_len: HashMap::new(), press: None, marquee: None, grabbed: None, touches: BTreeMap::new(), two: None, pan: None, hold: None,
             last_tap: None, second: None, lane_on: false, preview: None, keys: None, ghost: None,
         }
@@ -122,18 +140,34 @@ impl Roll {
             self.sy = 0.0;
         }
     }
-    /// The strip's geometry in a box rect_w wide and max_h tall: the rows fill the box at zoom 1.
+    /// The strip's geometry in a box rect_w wide and at most max_h tall. Rows keep their own height; the box is as tall
+    /// as they are (to max_h, then it scrolls). Steps spread to the width when few, else keep a least width and scroll.
     pub fn geo(&self, w: &World, rect_w: f64, max_h: f64) -> Option<Geo> {
         let c = w.cog(self.cog)?;
         let t = c.track.as_ref()?;
-        let lane = if self.vel { LANE_H } else { 0.0 };
-        let base = if max_h.is_finite() { ((max_h - lane) / t.rings().max(1) as f64).floor().clamp(24.0, 140.0) } else { ROW0 };
-        let row = (base * self.zoom).round().max(8.0);
+        let (row, cw) = self.cells(rect_w, t.div.max(1.0), self.zx, self.zy);
         let div = t.div.max(1.0);
-        let cw = ((MIN_CELL.max(((rect_w - LABEL) / div).floor())) * self.zoom).round().max(4.0);
         let rings = t.rings();
-        let h = if max_h.is_finite() { max_h } else { row * rings as f64 + lane };
-        Some(Geo { rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(rect_w as f32, h as f32)), row, cw, div, rings, lane: self.vel })
+        let mut g = Geo { rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(rect_w as f32, 0.0)), row, cw, div, rings, lane: self.vel };
+        let h = g.content_h().min(max_h.max(LEGEND_H + row.min(g.content_h())));
+        g.rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(rect_w as f32, h as f32));
+        Some(g)
+    }
+    /// A row's height and a step's width at zooms zx, zy.
+    fn cells(&self, rect_w: f64, div: f64, zx: f64, zy: f64) -> (f64, f64) {
+        let row = (ROW0 * zy).round();
+        let fit = ((rect_w - LABEL) / div).floor();
+        let base = fit.min(ROW0 * MAX_ASPECT).max(MIN_CELL);
+        let cw = (base * zx).round().clamp(row * ROW_TO_CELL.0, row * ROW_TO_CELL.1).max(4.0);
+        (row, cw)
+    }
+    /// zx's bounds for this width and these steps: a step from ROW_TO_CELL.0 to ROW_TO_CELL.1 rows wide.
+    fn zx_bounds(&self, rect_w: f64, div: f64, zy: f64) -> (f64, f64) {
+        let row = (ROW0 * zy).round();
+        let base = ((rect_w - LABEL) / div).floor().min(ROW0 * MAX_ASPECT).max(MIN_CELL);
+        // and no narrower than needed to see the whole disc, where that keeps the aspect
+        let least = ((rect_w - LABEL) / div / base).min(1.0);
+        ((row * ROW_TO_CELL.0 / base).max(least.min(1.0)).min(1.0), row * ROW_TO_CELL.1 / base)
     }
     fn clamp_scroll(&mut self, g: &Geo) {
         let bw = g.rect.width() as f64;
@@ -753,7 +787,14 @@ impl Roll {
         self.status = None;
         self.preview_off(out, now);
         let (mid, d) = self.pair();
-        self.two = Some(Two { d, z: self.zoom, col: (self.sx + mid.0 - LABEL) / g.cw, row: (self.sy + mid.1) / g.row, mid0: mid });
+        let (sx, sy) = self.spans();
+        self.two = Some(Two { d, z: self.zx, zy: self.zy, sx, sy, col: (self.sx + mid.0 - LABEL) / g.cw, row: (self.sy + mid.1) / g.row, mid0: mid });
+    }
+    /// The two fingers' spread across and down.
+    fn spans(&self) -> (f64, f64) {
+        let mut it = self.touches.values();
+        let (a, b) = (*it.next().unwrap(), *it.next().unwrap());
+        ((a.0 - b.0).abs(), (a.1 - b.1).abs())
     }
     fn pair(&self) -> ((f64, f64), f64) {
         let mut it = self.touches.values();
@@ -761,11 +802,16 @@ impl Roll {
         (((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0), super::dist(a, b).max(1.0))
     }
     fn move_two(&mut self, w: &World, g: &Geo) {
-        let (mid, d) = self.pair();
+        let (mid, _) = self.pair();
+        let (sx, sy) = self.spans();
         let Some(t) = &self.two else { return };
-        let (col, row, d0, z0) = (t.col, t.row, t.d, t.z);
-        let _ = t.mid0;
-        self.zoom = (z0 * d / d0).clamp(0.4, 3.0);
+        let (col, row) = (t.col, t.row);
+        // each axis zooms by the fingers' spread along it; a spread mostly along one leaves the other be
+        let along = |s: f64, s0: f64, other: f64, other0: f64| if s0 > 40.0 && s0 >= 0.5 * other0 && s > 0.0 && (s / s0 - 1.0).abs() > 0.02 || (other0 < 40.0 && s0 > 20.0) { s / s0 } else { let _ = other; 1.0 };
+        let (kx, ky) = (along(sx, t.sx, sy, t.sy), along(sy, t.sy, sx, t.sx));
+        self.zy = (t.zy * ky).clamp(ZY.0, ZY.1);
+        let (lo, hi) = self.zx_bounds(g.rect.width() as f64, g.div, self.zy);
+        self.zx = (t.z * kx).clamp(lo, hi);
         let Some(g2) = self.geo(w, g.rect.width() as f64, g.rect.height() as f64) else { return };
         self.sx = LABEL + col * g2.cw - mid.0;
         self.sy = row * g2.row - mid.1;
@@ -808,7 +854,7 @@ impl Roll {
         let gh = g.grid_h();
         let grid = Rect::from_min_size(r.min, vec2(r.width(), gh as f32));
         let p = base.with_clip_rect(grid);
-        p.rect_filled(grid, 0.0, BG);
+        p.rect_filled(Rect::from_min_size(r.min, r.size()), 0.0, BG);
         let gw = g.cw * g.div;
         let rh = g.row;
         let ox = r.min.x as f64 + LABEL - self.sx;
@@ -857,20 +903,36 @@ impl Roll {
             if d.ring >= rings as f64 {
                 continue;
             }
-            let hgt = (rh - 1.0) * (0.35 + 0.65 * d.v);
-            let px = ox + Roll::roll_u(c, d.a) * gw + 1.0;
+            // every note the same shape, inset from its cell so neighbours read apart: brightness is its velocity, a
+            // dashed edge and a percentage its chance, gold the moment it sounds
+            let inset = (rh * 0.12).clamp(3.0, 6.0);
+            let top = oy + (rings as f64 - 1.0 - d.ring) * rh + inset;
+            let hgt = rh - 2.0 * inset;
+            let px = ox + Roll::roll_u(c, d.a) * gw + 1.5;
             let on = self.sel.contains(&i);
-            let wd = d.len * g.cw - 1.0;
-            let top = oy + (rings as f64 - d.ring) * rh - hgt;
-            let col = alpha(pen.hot(d.flash, if on { SEL } else { FG }), (0.3 + 0.7 * d.p) as f32);
+            let wd = (d.len * g.cw - 3.0).max(2.0);
+            let base_col = if on { SEL } else { lerp_col(Color32::from_gray(0x55), FG, d.v as f32) };
+            let col = pen.hot(d.flash, base_col);
+            let fill = if d.p < 1.0 { alpha(col, (0.25 + 0.5 * d.p) as f32) } else { col };
             let right = ox + gw;
-            p.rect_filled(Rect::from_min_max(xy(px, top), xy(px + wd.min(right - px), top + hgt)), 0.0, col);
-            if px + wd > right {
-                p.rect_filled(Rect::from_min_max(xy(ox, top), xy(ox + px + wd - right, top + hgt)), 0.0, col);
+            let parts = [(px, (px + wd).min(right)), (ox, ox + px + wd - right)];
+            for (k, &(x0, x1)) in parts.iter().enumerate() {
+                if k == 1 && px + wd <= right {
+                    break;
+                }
+                let rr = Rect::from_min_max(xy(x0, top), xy(x1, top + hgt));
+                p.rect_filled(rr, 3.0, fill);
+                if d.p < 1.0 {
+                    let pts = [rr.left_top(), rr.right_top(), rr.right_bottom(), rr.left_bottom(), rr.left_top()];
+                    p.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.2, col), 3.0, 2.5));
+                }
+            }
+            if d.p < 1.0 && wd >= 30.0 && hgt >= 16.0 {
+                p.text(xy(px + wd.min(right - px) / 2.0, top + hgt / 2.0), Align2::CENTER_CENTER, format!("{}%", (d.p * 100.0).round()), FontId::proportional(11.0), FG);
             }
             if on {
                 let y0 = oy + (rings as f64 - 1.0 - d.ring) * rh + 1.5;
-                p.rect_stroke(Rect::from_min_max(xy(px + 0.5, y0), xy(px + 0.5 + wd.min(right - px) - 1.0, y0 + rh - 2.0)), 0.0, Stroke::new(1.0, SEL), egui::StrokeKind::Inside);
+                p.rect_stroke(Rect::from_min_max(xy(px - 1.0, y0), xy(px + wd.min(right - px) + 1.0, y0 + rh - 3.0)), 3.0, Stroke::new(1.0, SEL), egui::StrokeKind::Inside);
                 // the length grip: a tab on its right end
                 let ex = ox + Roll::end(c, d) * g.cw;
                 let tw = (g.cw * 0.35).round().clamp(4.0, 12.0);
@@ -914,7 +976,7 @@ impl Roll {
             let y = oy + row as f64 * rh;
             let black = [1, 3, 6, 8, 10].contains(&note.rem_euclid(12));
             kp.rect_filled(Rect::from_min_size(xy(r.min.x as f64, y), vec2(LABEL as f32, rh as f32)), 0.0, if black { BG } else { PAD });
-            kp.text(xy(r.min.x as f64 + 4.0, y + rh / 2.0), Align2::LEFT_CENTER, note_name(note), FontId::proportional(11.0), if black { DIM } else { FG });
+            kp.text(xy(r.min.x as f64 + 5.0, y + rh / 2.0), Align2::LEFT_CENTER, note_name(note), FontId::proportional(12.0), if black { Color32::from_gray(0x9a) } else { FG });
             kp.rect_filled(Rect::from_min_size(xy(r.min.x as f64, y + rh - 1.0), vec2(LABEL as f32, 1.0)), 0.0, FAINT);
         }
         let _ = now;
@@ -934,12 +996,39 @@ impl Roll {
         if g.lane {
             self.draw_lane(base, w, c, g);
         }
+        // what a note's look means, under the grid
+        let ly = r.max.y as f64 - LEGEND_H / 2.0;
+        let lx = r.min.x as f64 + 8.0;
+        let font = FontId::proportional(11.0);
+        let cap = Color32::from_gray(0x9a);
+        let mut x = lx;
+        for (sw, word) in [(0u8, "velocity: brightness"), (1, "chance: dashed"), (2, "sounding: gold")] {
+            let s = Rect::from_center_size(xy(x + 6.0, ly), vec2(12.0, 9.0));
+            match sw {
+                0 => {
+                    base.rect_filled(Rect::from_min_max(s.min, pos2(s.center().x, s.max.y)), 2.0, Color32::from_gray(0x66));
+                    base.rect_filled(Rect::from_min_max(pos2(s.center().x, s.min.y), s.max), 2.0, FG);
+                }
+                1 => {
+                    base.rect_filled(s, 2.0, alpha(FG, 0.4));
+                    let pts = [s.left_top(), s.right_top(), s.right_bottom(), s.left_bottom(), s.left_top()];
+                    base.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.0, FG), 2.0, 2.0));
+                }
+                _ => {
+                    base.rect_filled(s, 2.0, HOT);
+                }
+            }
+            let gal = base.layout_no_wrap(word.to_string(), font.clone(), cap);
+            let tw = gal.size().x as f64;
+            base.galley(xy(x + 16.0, ly - gal.size().y as f64 / 2.0), gal, cap);
+            x += 16.0 + tw + 14.0;
+        }
     }
     fn draw_lane(&self, p: &Painter, _w: &World, c: &Cog, g: &Geo) {
         let t = c.track.as_ref().unwrap();
         let r = g.rect;
         let top = r.min.y as f64 + g.grid_h();
-        let lane = Rect::from_min_max(pos2(r.min.x, top as f32), r.max);
+        let lane = Rect::from_min_max(pos2(r.min.x, top as f32), pos2(r.max.x, (top + LANE_H) as f32));
         let p = p.with_clip_rect(lane);
         p.rect_filled(lane, 0.0, BG);
         p.line_segment([lane.left_top(), lane.right_top()], Stroke::new(1.0, LINE));
@@ -971,4 +1060,10 @@ impl Roll {
 fn setting2(x: f64) -> String {
     let s = format!("{:.2}", x);
     s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+fn lerp_col(a: Color32, b: Color32, k: f32) -> Color32 {
+    let k = k.clamp(0.0, 1.0);
+    let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * k).round() as u8;
+    Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
 }
