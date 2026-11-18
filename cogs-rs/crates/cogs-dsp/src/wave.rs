@@ -153,8 +153,8 @@ impl Voice {
 }
 
 /// A stereo delay line for a rack's delay, from the engine's pool.
-pub struct DelayLine { l: Vec<f32>, r: Vec<f32> }
-impl DelayLine { pub fn new(fs: f64) -> Self { let n = (fs * 2.1).ceil() as usize; DelayLine { l: vec![0.; n], r: vec![0.; n] } } }
+pub struct DelayLine { l: Vec<f32>, r: Vec<f32>, dirty: bool }
+impl DelayLine { pub fn new(fs: f64) -> Self { let n = (fs * 2.1).ceil() as usize; DelayLine { l: vec![0.; n], r: vec![0.; n], dirty: false } } }
 
 struct FxState {
     held: [f64; 2], hc: u32, cb: [Vec<f32>; 2], cw: i64, cph: f64,
@@ -341,7 +341,7 @@ impl WaveSynth {
         let Some(i) = self.slot_for(part) else { self.dropped += 1; return Some(cp) };
         self.ver += 1;
         let s = &mut self.slots[i];
-        if cp.fx_on[FX_DELAY] && s.fx.db.is_none() { if let Some(mut d) = self.delays.pop() { d.l.fill(0.); d.r.fill(0.); s.fx.db = Some(d); s.fx.dw = 0; } }
+        if cp.fx_on[FX_DELAY] && s.fx.db.is_none() { if let Some(mut d) = self.delays.pop() { if d.dirty { d.l.fill(0.); d.r.fill(0.); d.dirty = false; } s.fx.db = Some(d); s.fx.dw = 0; } }
         if cp.fx_on[FX_REVERB] && s.fx.verb.is_none() { if let Some(v) = self.verbs.pop() { s.fx.verb = Some(v); s.fx.verb_fresh = true; } }
         // the macros as they play: the knobs' values, or where a motion part has turned them
         for k in 0..WAVE_MACROS { s.mac[k] = match s.motions[k] { Some(m) => m.y, None => cp.base[P_MAC0 + k] }; }
@@ -828,6 +828,7 @@ fn fx_chorus(v: &[f64; NP], st: &mut FxState, l: &mut Buf, r: &mut Buf, fs: f64)
 }
 fn fx_delay(cp: &CompiledPatch, v: &[f64; NP], st: &mut FxState, l: &mut Buf, r: &mut Buf, bpm: f64, fs: f64) {
     let Some(db) = st.db.as_mut() else { return };
+    db.dirty = true;
     let dlen = db.l.len();
     let t = ((if cp.delay_sync != 0. { 60. / bpm * cp.delay_sync } else { v[DELAY_TIME] }) * fs).max(1.).min((dlen - 2) as f64);
     let fb = v[DELAY_FB]; let mix = v[DELAY_MIX];

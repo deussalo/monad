@@ -12,8 +12,8 @@ android {
         applicationId = "help.techmate.cogs"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "0.4.9"
+        versionCode = 14
+        versionName = "0.4.10"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 

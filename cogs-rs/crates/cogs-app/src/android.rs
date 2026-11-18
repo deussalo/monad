@@ -4,19 +4,20 @@
 use crate::{aaudio, midi, play, ui};
 use winit::platform::android::activity::AndroidApp;
 use jni::{objects::{JClass, JObject, JString}, sys::{jboolean, jint}, JNIEnv, JavaVM};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{atomic::Ordering::Relaxed, Arc, Mutex, OnceLock};
 
-static SHARED: OnceLock<Arc<play::Shared>> = OnceLock::new();
+/// The running app's, replaced if the system recreates the activity in the same process.
+static SHARED: Mutex<Option<Arc<play::Shared>>> = Mutex::new(None);
 static STATUS: OnceLock<Arc<Mutex<String>>> = OnceLock::new();
 
 #[no_mangle]
 pub extern "system" fn Java_help_techmate_cogs_Native_midi(_env: JNIEnv, _c: JClass, st: jint, d1: jint, d2: jint) {
-    if let (Some(sh), Some(m)) = (SHARED.get(), midi::decode(st as u8, d1 as u8, d2 as u8)) { sh.midi(m) }
+    if let (Ok(g), Some(m)) = (SHARED.lock(), midi::decode(st as u8, d1 as u8, d2 as u8)) { if let Some(sh) = g.as_ref() { sh.midi(m) } }
 }
 
-/// The activity came to the front: a moment the fast path may be had.
+/// The activity's lifecycle (1 resume, 2 pause, 3 start, 4 stop), for the audio supervisor.
 #[no_mangle]
-pub extern "system" fn Java_help_techmate_cogs_Native_resumed(_env: JNIEnv, _c: JClass) { aaudio::RESUMED.store(true, std::sync::atomic::Ordering::Relaxed) }
+pub extern "system" fn Java_help_techmate_cogs_Native_lifecycle(_env: JNIEnv, _c: JClass, what: jint) { aaudio::lifecycle(what) }
 
 #[no_mangle]
 pub extern "system" fn Java_help_techmate_cogs_Native_status(mut env: JNIEnv, _c: JClass, text: JString, _connected: jboolean) {
@@ -97,16 +98,19 @@ fn android_main(app: AndroidApp) {
     let (vm, act) = (app.vm_as_ptr() as usize, app.activity_as_ptr() as usize);
     let opts = aaudio::Options::parse(&intent_audio(vm, act));
     log_audio_device(vm, act);
+    if opts.bench { aaudio::bench() }
     if opts.probe { aaudio::probe("early", &opts) }
     let data = app.internal_data_path();
     // The world as it was left; the first launch (or a save that no longer loads) starts on the default world.
     let saved = data.as_ref().and_then(|d| std::fs::read_to_string(d.join("world.json")).ok()).and_then(|s| cogs_sim::World::from_str(&s).ok());
-    let world = saved.unwrap_or_else(|| cogs_sim::World::from_str(crate::WORLDS[0].1).unwrap_or_else(|_| cogs_sim::World::demo()));
+    // `world=N` in the launch options starts on a shipped world, for testing
+    let forced = opts.world.and_then(|i| crate::WORLDS.get(i)).and_then(|w| cogs_sim::World::from_str(w.1).ok());
+    let world = forced.or(saved).unwrap_or_else(|| cogs_sim::World::from_str(crate::WORLDS[0].1).unwrap_or_else(|_| cogs_sim::World::demo()));
     // The stream first: the engine runs at the rate it is granted. The engine is made here, off the audio thread.
     let stream = aaudio::open_best(&opts, None);
     let sr = stream.as_ref().map_or(48000, |s| s.info.rate) as f32;
     let (sh, render) = play::start(world, sr);
-    let _ = SHARED.set(sh.clone());
+    if let Ok(mut g) = SHARED.lock() { *g = Some(sh.clone()) }
     if opts.stats || opts.probe { aaudio::log_stats(sh.clone()) }
     let st = status.clone();
     let first = if opts.probe { drop(stream); None } else { stream };

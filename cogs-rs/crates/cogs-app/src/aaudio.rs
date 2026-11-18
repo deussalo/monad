@@ -21,16 +21,30 @@
 //!     --es audio nokick,stats
 //!         never use the deep-buffer stream described below
 //!
+//!     --es audio fast,stats          the fast path, fed by the render thread (below)
+//!     --es audio fast,direct,stats   the fast path with the machine rendered in the callback itself
+//!     --es audio bench               time the machine on each kind of CPU core, at 4 ms and 20 ms blocks, then run
+//!     more words: world=N (start on shipped world N), ring=N and chunk=N (frames), look=N (machine lookahead, frames),
+//!     nohint (no performance hint session)
+//!
+//! A fast track's callback must return within about 4 ms and is scheduled by the system as a real-time thread, which
+//! need not run on a fast core. So with the fast path the machine does not render there: a render thread makes audio in
+//! 5 ms chunks into a lock-free ring a little ahead, and the callback only copies. The ring's depth is the added latency.
+//!
 //! Why a fast track can be refused: AudioFlinger will not make one on an output whose *global* effect chain (session 0,
 //! on Motorola phones Dolby's DAP) holds a software effect. AudioPolicy keeps that chain on the output that plays music,
 //! and moves it to the deep-buffer output while a stream plays there. So we briefly play a silent ordinary stream, which
 //! goes to deep buffer and takes the chain along, and open the fast track meanwhile; it then keeps running after the
 //! chain has come back. The price: global effects are not applied to fast tracks, so DAP does not process our sound.
 //!
-//! `Supervisor` owns the stream while the app runs: it keeps trying for the fast path on a timer and on resume, moves the
-//! machine across without a break when it gets it (out.rs), and opens a new stream when the old one is disconnected.
+//! `supervise` owns the stream while the app runs: it keeps trying for the fast path on a timer and after a return to the
+//! app, moves the machine across without a break when it gets it (out.rs), and opens a new stream when the old one is
+//! disconnected. There is only ever one stream sounding. The machine keeps playing while the app is away; since the
+//! system then gives the audio thread less CPU, and the transitions themselves are busy, the buffer is held at its
+//! deepest from pause until two seconds after resume.
 use crate::out::{Handoff, Out, Source};
-use crate::play::{Render, Shared};
+use crate::play::{self, Render, Shared};
+use rtrb::{Consumer, Producer, RingBuffer};
 use std::ffi::{c_char, c_void, CStr};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
@@ -147,7 +161,7 @@ const ORDER: [Spec; 8] = [
 ];
 
 #[derive(Clone, Debug, Default)]
-pub struct Options { pub probe: bool, pub stats: bool, pub bursts: i32, forced: Option<Spec>, nokick: bool, delay_ms: Option<u64>, fast: bool }
+pub struct Options { pub probe: bool, pub stats: bool, pub bursts: i32, forced: Option<Spec>, nokick: bool, delay_ms: Option<u64>, fast: bool, direct: bool, nohint: bool, pub bench: bool, pub world: Option<usize>, ring: Option<u32>, chunk: Option<u32>, look: Option<u64> }
 impl Options {
     pub fn parse(text: &str) -> Options {
         let mut o = Options { bursts: 2, ..Default::default() };
@@ -160,6 +174,9 @@ impl Options {
                 "stats" => { o.stats = true; force = false }
                 "nokick" => { o.nokick = true; force = false }
                 "fast" => { o.fast = true; force = false }
+                "direct" => { o.direct = true; force = false }
+                "nohint" => { o.nohint = true; force = false }
+                "bench" => { o.bench = true; force = false }
                 "float" => s.format = FORMAT_FLOAT, "i16" => s.format = FORMAT_I16,
                 "shared" => s.sharing = SHARED, "exclusive" => s.sharing = EXCLUSIVE,
                 "auto" => s.rate = 0,
@@ -172,6 +189,10 @@ impl Options {
                     else if let Some(n) = num("cb=") { s.per_callback = n }
                     else if let Some(n) = num("bursts=") { o.bursts = n.max(1); force = false }
                     else if let Some(n) = num("delay=") { o.delay_ms = Some(n.max(0) as u64); force = false }
+                    else if let Some(n) = num("world=") { o.world = Some(n.max(0) as usize); force = false }
+                    else if let Some(n) = num("ring=") { o.ring = Some(n.max(0) as u32); force = false }
+                    else if let Some(n) = num("chunk=") { o.chunk = Some(n.max(32) as u32); force = false }
+                    else if let Some(n) = num("look=") { o.look = Some(n.max(0) as u64); force = false }
                     else if let Ok(n) = w.parse::<i32>() { s.rate = n }
                     else { log::warn!("audio option not understood: {w}"); force = false }
                 }
@@ -203,12 +224,158 @@ impl Info {
 #[derive(Default)]
 struct Stats {
     callbacks: AtomicU64, frames: AtomicU64, in_cpu_ns: AtomicU64, in_wall_ns: AtomicU64, thread_cpu_ns: AtomicU64,
-    min_frames: AtomicU32, max_frames: AtomicU32, worst_pct: AtomicU32, worst_us: AtomicU32, ahead_us: AtomicU32, xruns: AtomicI32, buffer: AtomicI32, pad: AtomicU64, dead: AtomicBool,
+    min_frames: AtomicU32, max_frames: AtomicU32, worst_pct: AtomicU32, worst_us: AtomicU32, ahead_us: AtomicU32, xruns: AtomicI32, buffer: AtomicI32, want: AtomicI32, hold: AtomicBool, pad: AtomicU64, dead: AtomicBool, cores: AtomicU32,
 }
 static CURRENT: std::sync::Mutex<Option<Arc<Stats>>> = std::sync::Mutex::new(None);
 
-pub struct Live { render: Render, sh: Arc<Shared> }
-impl Source for Live { fn block(&mut self, l: &mut [f32], r: &mut [f32], latency: f64) { self.render.block(l, r, latency) } }
+/// What the render thread and the callback share.
+#[derive(Default)]
+struct Feed {
+    /// keep this many frames queued (the ring's depth, the latency it adds)
+    target: AtomicU32, seq: AtomicU32, sleeping: AtomicBool,
+    starved: AtomicU64, min_fill: AtomicU32, ahead_us: AtomicU32,
+    cpu_ns: AtomicU64, chunks: AtomicU64, worst_us: AtomicU32, cores: AtomicU32,
+}
+static CURRENT_FEED: std::sync::Mutex<Option<Arc<Feed>>> = std::sync::Mutex::new(None);
+const FUTEX_WAIT_PRIVATE: i32 = 128;
+const FUTEX_WAKE_PRIVATE: i32 = 129;
+fn core_bit() -> u32 { 1u32 << (unsafe { libc::sched_getcpu() }.clamp(0, 31)) }
+
+enum Machine { Here(Render), Ring { rx: Consumer<f32>, feed: Arc<Feed> } }
+pub struct Live { machine: Machine, sh: Arc<Shared> }
+impl Source for Live {
+    fn block(&mut self, l: &mut [f32], r: &mut [f32], latency: f64) {
+        match &mut self.machine {
+            Machine::Here(render) => render.block(l, r, latency),
+            Machine::Ring { rx, feed } => {
+                let n = l.len();
+                let have = rx.slots() / 2;
+                let take = have.min(n);
+                if let Ok(c) = rx.read_chunk(take * 2) {
+                    let (a, b) = c.as_slices();
+                    for (i, x) in a.iter().chain(b).enumerate() { if i % 2 == 0 { l[i / 2] = *x } else { r[i / 2] = *x } }
+                    c.commit_all();
+                }
+                if take < n { l[take..].fill(0.); r[take..].fill(0.); feed.starved.fetch_add(1, Relaxed); }
+                let left = (have - take) as u32;
+                feed.min_fill.fetch_min(left, Relaxed);
+                feed.ahead_us.store((latency * 1e6) as u32, Relaxed);
+                if left < feed.target.load(Relaxed) {
+                    feed.seq.fetch_add(1, Relaxed);
+                    if feed.sleeping.load(Relaxed) { unsafe { libc::syscall(libc::SYS_futex, feed.seq.as_ptr(), FUTEX_WAKE_PRIVATE, 1) }; }
+                }
+            }
+        }
+    }
+}
+
+/// Android's hint to the scheduler that this thread has deadlines (API 33+): it then gets the cores and clocks to meet them.
+struct Hint { session: *mut c_void, report: extern "C" fn(*mut c_void, i64) -> i32 }
+impl Hint {
+    fn new(target_ns: i64) -> Option<Hint> {
+        unsafe {
+            let h = libc::dlopen(c"libandroid.so".as_ptr(), libc::RTLD_NOW);
+            if h.is_null() { return None }
+            let sym = |n: &CStr| libc::dlsym(h, n.as_ptr());
+            let (m, c, r) = (sym(c"APerformanceHint_getManager"), sym(c"APerformanceHint_createSession"), sym(c"APerformanceHint_reportActualWorkDuration"));
+            if m.is_null() || c.is_null() || r.is_null() { return None }
+            let get: extern "C" fn() -> *mut c_void = std::mem::transmute(m);
+            let create: extern "C" fn(*mut c_void, *const i32, usize, i64) -> *mut c_void = std::mem::transmute(c);
+            let tid = libc::gettid();
+            let mgr = get();
+            if mgr.is_null() { return None }
+            let session = create(mgr, &tid, 1, target_ns);
+            if session.is_null() { None } else { Some(Hint { session, report: std::mem::transmute(r) }) }
+        }
+    }
+}
+
+/// The render thread: keeps the ring at its target, a chunk at a time.
+fn render_thread(mut render: Render, mut tx: Producer<f32>, feed: Arc<Feed>, sh: Arc<Shared>, chunk: usize, sr: f64, hint: bool) {
+    let nice = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, -19) };
+    let h = if hint { Hint::new((chunk as f64 / sr * 0.5e9) as i64) } else { None };
+    log::info!("audio render thread: {chunk} frames a chunk, priority {}, performance hint {}", if nice == 0 { "-19" } else { "unchanged" }, if h.is_some() { "on" } else { "off" });
+    let (mut l, mut r) = (vec![0f32; chunk], vec![0f32; chunk]);
+    let period = chunk as f64 / sr;
+    while sh.running.load(Relaxed) {
+        let seq = feed.seq.load(Relaxed);
+        let queued = (tx.buffer().capacity() - tx.slots()) / 2;
+        if queued >= feed.target.load(Relaxed) as usize || tx.slots() < chunk * 2 {
+            feed.sleeping.store(true, Relaxed);
+            let ts = libc::timespec { tv_sec: 0, tv_nsec: 20_000_000 };
+            unsafe { libc::syscall(libc::SYS_futex, feed.seq.as_ptr(), FUTEX_WAIT_PRIVATE, seq, &ts as *const libc::timespec) };
+            feed.sleeping.store(false, Relaxed);
+            continue;
+        }
+        let (w0, c0) = (now(libc::CLOCK_MONOTONIC), now(libc::CLOCK_THREAD_CPUTIME_ID));
+        // these frames reach the speaker after what is queued and what the stream holds
+        let latency = feed.ahead_us.load(Relaxed) as f64 / 1e6 + queued as f64 / sr + period;
+        render.block(&mut l, &mut r, latency);
+        if let Ok(mut c) = tx.write_chunk(chunk * 2) {
+            let (a, b) = c.as_mut_slices();
+            for (i, x) in a.iter_mut().chain(b).enumerate() { *x = if i % 2 == 0 { l[i / 2] } else { r[i / 2] } }
+            c.commit_all();
+        }
+        let (w1, c1) = (now(libc::CLOCK_MONOTONIC), now(libc::CLOCK_THREAD_CPUTIME_ID));
+        feed.cpu_ns.fetch_add(c1 - c0, Relaxed); feed.chunks.fetch_add(1, Relaxed); feed.worst_us.fetch_max(((w1 - w0) / 1000) as u32, Relaxed); feed.cores.fetch_or(core_bit(), Relaxed);
+        if let Some(h) = &h { (h.report)(h.session, (w1 - w0) as i64); }
+    }
+}
+
+/// How the machine runs on the phone: `live` for the stream, and the render thread if it has one.
+fn machine(mut render: Render, sh: &Arc<Shared>, o: &Options, rate: i32) -> (Box<Live>, Option<(std::thread::JoinHandle<()>, Arc<Feed>, u32)>) {
+    let sr = rate as f64;
+    if !o.fast || o.direct {
+        render.set_lookahead(o.look.unwrap_or((sr * 0.02) as u64));
+        return (Box::new(Live { machine: Machine::Here(render), sh: sh.clone() }), None);
+    }
+    let chunk = o.chunk.unwrap_or((sr * 0.005) as u32);
+    let target = o.ring.unwrap_or(chunk * 2).max(chunk);
+    render.set_lookahead(o.look.unwrap_or((sr * 0.016) as u64));
+    let (tx, rx) = RingBuffer::<f32>::new(2 * (sr * 0.2) as usize);
+    let feed = Arc::new(Feed::default());
+    feed.target.store(target, Relaxed); feed.min_fill.store(u32::MAX, Relaxed);
+    if let Ok(mut c) = CURRENT_FEED.lock() { *c = Some(feed.clone()) }
+    let (f, s, hint) = (feed.clone(), sh.clone(), !o.nohint);
+    let j = std::thread::Builder::new().name("cogs-render".into()).spawn(move || render_thread(render, tx, f, s, chunk as usize, sr, hint)).expect("render thread");
+    (Box::new(Live { machine: Machine::Ring { rx, feed: feed.clone() }, sh: sh.clone() }), Some((j, feed, chunk)))
+}
+
+/// Time the machine and sound on each kind of core, paced like the real thing, so the clocks behave as they do in use.
+pub fn bench() {
+    let max_freq = |c: usize| std::fs::read_to_string(format!("/sys/devices/system/cpu/cpu{c}/cpufreq/cpuinfo_max_freq")).ok().and_then(|s| s.trim().parse::<u64>().ok());
+    let n = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_CONF) }.max(1) as usize;
+    let mut picks: Vec<(usize, u64)> = Vec::new();
+    for c in (0..n).rev() { let f = max_freq(c).unwrap_or(c as u64); if !picks.iter().any(|p| p.1 == f) { picks.push((c, f)) } }
+    log::info!("audio bench: {n} cores, one of each kind (core, max kHz): {picks:?}");
+    let t = std::thread::spawn(move || for &(core, khz) in &picks {
+        unsafe { let mut s: libc::cpu_set_t = std::mem::zeroed(); libc::CPU_SET(core, &mut s); libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &s); }
+        for (name, src) in crate::WORLDS {
+            for frames in [192usize, 960] {
+                let Ok(mut w) = cogs_sim::World::from_str(src) else { continue };
+                w.set_paused(false);
+                let (sh, mut render, mut sync) = play::parts(w, 48000.);
+                sync.step(&sh);
+                let (mut l, mut r) = (vec![0f32; frames], vec![0f32; frames]);
+                let period = (frames as f64 / 48000. * 1e9) as u64;
+                let (mut next, c0, w0, mut worst, mut count) = (now(libc::CLOCK_MONOTONIC), now(libc::CLOCK_THREAD_CPUTIME_ID), now(libc::CLOCK_MONOTONIC), 0u64, 0u32);
+                while now(libc::CLOCK_MONOTONIC) - w0 < 1_500_000_000 {
+                    let b0 = now(libc::CLOCK_MONOTONIC);
+                    render.block(&mut l, &mut r, 0.01);
+                    worst = worst.max(now(libc::CLOCK_MONOTONIC) - b0); count += 1;
+                    if count % 5 == 0 { sync.step(&sh) }
+                    next += period;
+                    let d = next.saturating_sub(now(libc::CLOCK_MONOTONIC));
+                    if d > 0 { std::thread::sleep(std::time::Duration::from_nanos(d)) }
+                }
+                let wall = now(libc::CLOCK_MONOTONIC) - w0;
+                log::info!("audio bench: core {core} ({khz} kHz) {name}, {frames}-frame blocks: {:.1}% of the core, worst block {:.2} ms of {:.1}",
+                    (now(libc::CLOCK_THREAD_CPUTIME_ID) - c0) as f64 / wall as f64 * 100., worst as f64 / 1e6, period as f64 / 1e6);
+            }
+        }
+    });
+    let _ = t.join();
+}
 
 struct Cb {
     out: Out<Live>, stats: Arc<Stats>, written: i64, sr: f64, format: i32, channels: usize,
@@ -245,16 +412,16 @@ extern "C" fn on_data(s: S, user: *mut c_void, data: *mut c_void, frames: i32) -
     c.out.latency = ahead + n as f64 / c.sr;
     let st = &c.stats;
     st.ahead_us.store((c.out.latency * 1e6) as u32, Relaxed);
-    // A glitch: one more burst of buffer, up to what the stream has.
+    // A glitch in normal running: one more burst of buffer, up to what the stream has.
     let x = unsafe { AAudioStream_getXRunCount(s) };
-    if x > c.xruns && c.buffer + c.burst <= c.capacity {
-        c.buffer = unsafe { AAudioStream_setBufferSizeInFrames(s, c.buffer + c.burst) }.max(c.buffer);
-    }
+    let mut want = st.want.load(Relaxed);
+    if x > c.xruns && !st.hold.load(Relaxed) && want + c.burst <= c.capacity { want += c.burst; st.want.store(want, Relaxed) }
+    if want > 0 && want != c.buffer { let got = unsafe { AAudioStream_setBufferSizeInFrames(s, want) }; if got > 0 { c.buffer = got } }
     c.xruns = x;
     let (wall1, cpu1) = (now(libc::CLOCK_MONOTONIC), now(libc::CLOCK_THREAD_CPUTIME_ID));
     st.callbacks.fetch_add(1, Relaxed); st.frames.fetch_add(n as u64, Relaxed); st.in_cpu_ns.fetch_add(cpu1 - cpu0, Relaxed); st.in_wall_ns.fetch_add(wall1 - wall0, Relaxed);
     st.thread_cpu_ns.store(cpu1, Relaxed); st.xruns.store(x, Relaxed); st.buffer.store(c.buffer, Relaxed); st.pad.store(c.out.last_pad, Relaxed);
-    st.max_frames.fetch_max(n as u32, Relaxed);
+    st.max_frames.fetch_max(n as u32, Relaxed); st.cores.fetch_or(core_bit(), Relaxed);
     let mn = st.min_frames.load(Relaxed); if mn == 0 || (n as u32) < mn { st.min_frames.store(n as u32, Relaxed) }
     let pct = ((wall1 - wall0) as f64 / (n.max(1) as f64 / c.sr * 1e9) * 100.) as u32;
     st.worst_pct.fetch_max(pct, Relaxed);
@@ -277,7 +444,7 @@ extern "C" fn on_data(s: S, user: *mut c_void, data: *mut c_void, frames: i32) -
 }
 
 /// An open stream and what its callback owns.
-pub struct Stream { s: S, cb: Box<Cb>, stats: Arc<Stats>, handoff: Arc<Handoff<Live>>, pub info: Info, open: bool }
+pub struct Stream { s: S, cb: Box<Cb>, stats: Arc<Stats>, handoff: Arc<Handoff<Live>>, pub info: Info, open: bool, normal_buffer: i32, held: bool }
 unsafe impl Send for Stream {}
 impl Stream {
     fn close(&mut self) { if self.open { self.open = false; unsafe { AAudioStream_requestStop(self.s); AAudioStream_close(self.s); } } }
@@ -295,6 +462,23 @@ impl Stream {
     fn set_bursts(&mut self, bursts: i32) {
         let got = unsafe { AAudioStream_setBufferSizeInFrames(self.s, self.info.burst * bursts.max(1)) };
         if got > 0 { self.cb.buffer = got; self.info.buffer = got }
+        self.normal_buffer = self.info.buffer;
+        self.stats.want.store(self.info.buffer, Relaxed);
+    }
+    /// The deepest buffer while the app is away or just back; the normal one (with any growth it earned) otherwise.
+    fn set_hold(&mut self, hold: bool) {
+        if hold == self.held { return }
+        self.held = hold;
+        let st = &self.stats;
+        if hold {
+            self.normal_buffer = st.want.load(Relaxed).max(self.info.buffer);
+            st.hold.store(true, Relaxed);
+            st.want.store(self.info.capacity.min((self.info.rate / 10).max(self.normal_buffer)), Relaxed);
+        } else {
+            st.want.store(self.normal_buffer, Relaxed);
+            st.hold.store(false, Relaxed);
+        }
+        log::info!("audio buffer {} frames ({})", st.want.load(Relaxed), if hold { "held deep" } else { "normal" });
     }
     fn begin(&mut self) -> bool {
         let r = unsafe { AAudioStream_requestStart(self.s) };
@@ -336,7 +520,7 @@ fn open_at(spec: &Spec, sr_guess: f64) -> Result<Stream, String> {
         if info.rate as f64 != sr_guess { cb.out = Out::new(info.rate as f64) }
         cb.sr = info.rate as f64; cb.format = info.format; cb.channels = info.channels.max(1) as usize; cb.burst = info.burst; cb.capacity = info.capacity; cb.buffer = info.buffer;
         let handoff = cb.out.handoff.clone();
-        Ok(Stream { s, cb, stats, handoff, info, open: true })
+        Ok(Stream { s, cb, stats, handoff, info, open: true, normal_buffer: 0, held: false })
     }
 }
 
@@ -392,7 +576,8 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
     std::thread::Builder::new().name("cogs-audio".into()).spawn(move || {
         let launch = std::time::Instant::now();
         let since = || launch.elapsed().as_secs_f64();
-        let mut live = Some(Box::new(Live { render, sh: sh.clone() }));
+        let (first_live, worker) = machine(render, &sh, &o, rate);
+        let mut live = Some(first_live);
         let mut cur = first;
         if o.probe {
             std::thread::sleep(std::time::Duration::from_secs(3));
@@ -412,7 +597,10 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
         // when to try for the fast path again, seconds after launch
         let mut tries: Vec<f64> = o.delay_ms.iter().map(|d| *d as f64 / 1000.).chain([1., 2., 4., 8.]).collect();
         tries.sort_by(f64::total_cmp); tries.dedup();
-        let mut reopen_at = 0f64;
+        let (mut reopen_at, mut settle_until) = (0f64, 0f64);
+        let earliest = o.delay_ms.map_or(0., |d| d as f64 / 1000.);
+        // after a clean stretch the buffers come back down, a step at a time; a glitch soon after a step makes that the floor
+        let mut tune = Tune::default();
         while sh.running.load(Relaxed) {
             std::thread::sleep(std::time::Duration::from_millis(50));
             let t = since();
@@ -426,10 +614,17 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
                 }
                 continue;
             }
-            if RESUMED.swap(false, Relaxed) && !running.as_ref().is_some_and(|s| s.fast()) { log::info!("audio: resumed at {t:.2} s"); tries.insert(0, t) }
-            let Some(cur) = running.as_ref() else { continue };
+            // away and just back: the deep buffer, and no stream changes while the system is busy with the transition
+            let away = AWAY.load(Relaxed);
+            if away { settle_until = t + 2. }
+            // `delay` holds back every try, this one too
+            if RESUMED.swap(false, Relaxed) { tries.push((t + 1.).max(earliest)); tries.sort_by(f64::total_cmp) }
+            let Some(cur) = running.as_mut() else { continue };
+            let holding = away || t < settle_until;
+            cur.set_hold(holding);
+            tune.step(t, cur, worker.as_ref().map(|w| (&*w.1, w.2)), holding);
             if !o.fast || o.forced.is_some() || o.probe || cur.fast() { tries.clear(); continue }
-            if tries.first().is_none_or(|x| *x > t) { continue }
+            if away || tries.first().is_none_or(|x| *x > t) { continue }
             tries.remove(0);
             let Some(mut next) = open_fast(cur.info.rate, !o.nokick, &format!("retry at {t:.2} s")) else { continue };
             // the new stream runs silent until the old one hands over at the right moment
@@ -456,10 +651,45 @@ pub fn supervise(first: Option<Stream>, render: Render, sh: Arc<Shared>, o: Opti
             std::thread::sleep(std::time::Duration::from_millis(wait.min(1000)));
             drop(old);
         }
+        drop(running);
+        if let Some((j, ..)) = worker { let _ = j.join(); }
     }).expect("audio thread")
 }
-/// Set by the activity's onResume.
-pub static RESUMED: AtomicBool = AtomicBool::new(false);
+#[derive(Default)]
+struct Tune { stream: usize, xruns: i32, starved: u64, glitch_at: f64, step_at: f64, floor_buffer: i32, floor_target: u32 }
+impl Tune {
+    fn step(&mut self, t: f64, s: &Stream, feed: Option<(&Feed, u32)>, holding: bool) {
+        let id = Arc::as_ptr(&s.stats) as usize;
+        if id != self.stream { *self = Tune { stream: id, xruns: s.stats.xruns.load(Relaxed), glitch_at: t, step_at: t, floor_buffer: s.normal_buffer, floor_target: feed.map_or(0, |f| f.0.target.load(Relaxed)), ..Tune::default() }; }
+        let (x, starved) = (s.stats.xruns.load(Relaxed), feed.map_or(0, |f| f.0.starved.load(Relaxed)));
+        let glitch = x > self.xruns || starved > self.starved;
+        let starving = starved > self.starved;
+        self.xruns = x; self.starved = starved;
+        if holding { self.glitch_at = t; return }
+        let want = s.stats.want.load(Relaxed);
+        if glitch {
+            if let (true, Some((f, chunk))) = (starving, feed) { let v = (f.target.load(Relaxed) + chunk).min(chunk * 12); f.target.store(v, Relaxed); log::info!("audio ring target {v} frames (starved)") }
+            if t - self.step_at < 15. {
+                self.floor_buffer = self.floor_buffer.max(want);
+                if let Some((f, _)) = feed { self.floor_target = self.floor_target.max(f.target.load(Relaxed)) }
+                log::info!("audio buffers stay at {} frames, ring {} (a glitch soon after coming down)", self.floor_buffer, self.floor_target);
+            }
+            self.glitch_at = t;
+        } else if t - self.glitch_at > 20. && t - self.step_at > 10. {
+            self.step_at = t;
+            if want - s.info.burst >= self.floor_buffer { s.stats.want.store(want - s.info.burst, Relaxed); log::info!("audio buffer back down to {} frames", want - s.info.burst) }
+            else if let Some((f, chunk)) = feed { let v = f.target.load(Relaxed); if v >= self.floor_target + chunk { f.target.store(v - chunk, Relaxed); log::info!("audio ring back down to {} frames", v - chunk) } }
+        }
+    }
+}
+static RESUMED: AtomicBool = AtomicBool::new(false);
+static AWAY: AtomicBool = AtomicBool::new(false);
+/// The activity's lifecycle: 1 resume, 2 pause, 3 start, 4 stop.
+pub fn lifecycle(what: i32) {
+    match what { 1 => { AWAY.store(false, Relaxed); RESUMED.store(true, Relaxed) } 2 => AWAY.store(true, Relaxed), _ => {} }
+    let x = CURRENT.lock().ok().and_then(|c| c.clone()).map_or(0, |s| s.xruns.load(Relaxed));
+    log::info!("audio lifecycle: {} (xruns so far {x})", ["?", "resume", "pause", "start", "stop"][what.clamp(0, 4) as usize]);
+}
 
 /// Every variant, opened and run silently for a moment; one log line each.
 pub fn probe(when: &str, _o: &Options) {
@@ -494,6 +724,7 @@ pub fn log_stats(sh: Arc<Shared>) {
     std::thread::spawn(move || {
         struct P { st: Arc<Stats>, t: std::time::Instant, cpu: u64, in_cpu: u64, in_wall: u64, cbs: u64, frames: u64, blocks: u64, misses: u64 }
         let mut last: Option<P> = None;
+        let mut fl = (0u64, 0u64);
         while sh.running.load(Relaxed) {
             std::thread::sleep(std::time::Duration::from_secs(2));
             let Some(st) = CURRENT.lock().ok().and_then(|c| c.clone()) else { continue };
@@ -504,12 +735,28 @@ pub fn log_stats(sh: Arc<Shared>) {
                 let ns = (cur.t - p.t).as_secs_f64() * 1e9;
                 let pc = |a: u64, b: u64| a.saturating_sub(b) as f64 / ns * 100.;
                 let cbs = (cur.cbs - p.cbs).max(1);
-                log::info!("audio stats: cpu {:.1}% (callback {:.1}%, wall {:.1}%) | {} cbs, {} frames ({}..{}) | worst {:.2} ms = {}% | ahead {:.1} ms, buffer {} | xruns {} | world locked {} of {} blocks, owed max {:.1} ms",
+                log::info!("audio stats: cpu {:.1}% (callback {:.1}%, wall {:.1}%) | {} cbs, {} frames ({}..{}) | worst {:.2} ms = {}% | ahead {:.1} ms, buffer {} | xruns {} | world locked {} of {} blocks, held back max {:.1} ms, late notes {} | callback cores {:#x}{}",
                     pc(cur.cpu, p.cpu), pc(cur.in_cpu, p.in_cpu), pc(cur.in_wall, p.in_wall), cur.cbs - p.cbs, (cur.frames - p.frames) / cbs, st.min_frames.swap(0, Relaxed), st.max_frames.swap(0, Relaxed),
                     st.worst_us.swap(0, Relaxed) as f64 / 1000., st.worst_pct.swap(0, Relaxed), st.ahead_us.load(Relaxed) as f64 / 1000., st.buffer.load(Relaxed), st.xruns.load(Relaxed),
-                    cur.misses - p.misses, cur.blocks - p.blocks, m.owed_max_us.swap(0, Relaxed) as f64 / 1000.);
+                    cur.misses - p.misses, cur.blocks - p.blocks, m.owed_max_us.swap(0, Relaxed) as f64 / 1000., m.late_notes.load(Relaxed), st.cores.swap(0, Relaxed), feed_line(&mut fl, ns));
             }
             last = Some(cur);
         }
     });
+}
+
+/// The render thread's part of the stats line, and the cores' clocks.
+fn feed_line(last: &mut (u64, u64), ns: f64) -> String {
+    let mut s = String::new();
+    if let Some(f) = CURRENT_FEED.lock().ok().and_then(|c| c.clone()) {
+        let (cpu, chunks) = (f.cpu_ns.load(Relaxed), f.chunks.load(Relaxed));
+        let min = f.min_fill.swap(u32::MAX, Relaxed);
+        s = format!(" | render cpu {:.1}%, {} chunks, worst {:.2} ms, cores {:#x} | ring target {}, lowest {}, starved {}", cpu.saturating_sub(last.0) as f64 / ns * 100., chunks.saturating_sub(last.1),
+            f.worst_us.swap(0, Relaxed) as f64 / 1000., f.cores.swap(0, Relaxed), f.target.load(Relaxed), if min == u32::MAX { 0 } else { min }, f.starved.load(Relaxed));
+        *last = (cpu, chunks);
+    }
+    let mut mhz = Vec::new();
+    for c in 0..8 { if let Some(k) = std::fs::read_to_string(format!("/sys/devices/system/cpu/cpu{c}/cpufreq/scaling_cur_freq")).ok().and_then(|x| x.trim().parse::<u64>().ok()) { mhz.push((k / 1000).to_string()) } }
+    if !mhz.is_empty() { s += &format!(" | MHz {}", mhz.join(",")) }
+    s
 }

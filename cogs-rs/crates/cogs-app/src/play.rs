@@ -38,6 +38,8 @@ pub struct Meters {
     pub blocks: AtomicU64,
     pub lock_misses: AtomicU64,
     pub owed_max_us: AtomicU32,
+    /// Machine notes that reached the engine after their own frame had gone (the world was held too long).
+    pub late_notes: AtomicU64,
 }
 
 /// Where the camera is, for the listener: a sound pans across the open stage and darkens off it (stage.js heard()).
@@ -111,7 +113,11 @@ pub struct Render {
     dead: Producer<Arc<CompiledPatch>>,
     parts: HashMap<u32, Prep>,
     sr: f64,
-    owed: f64,
+    /// How far ahead of the sound the machine runs, in frames (see `set_lookahead`).
+    lookahead: u64,
+    /// The frame the world has been advanced to, and the sim time there.
+    horizon: u64,
+    sim_at_horizon: f64,
     held: [u32; 128],
     sustain: bool,
     sustained: [bool; 128],
@@ -149,7 +155,7 @@ pub fn parts(world: World, sr: f32) -> (Arc<Shared>, Render, Sync) {
         recording: AtomicBool::new(false), rec: Mutex::new(rc) });
     // Room for the busiest shipped world: every field with its reverb, and plenty of synth racks.
     let engine = Engine::with_config(sr, cogs_dsp::EngineConfig { parts: 96, rack_delays: 24, rack_verbs: 12, field_verbs: 8, modal_voices: 64, drum_voices: 64 });
-    let render = Render { sh: sh.clone(), engine, midi: mc, ctl: cc, dead: dp, parts: HashMap::with_capacity(512), sr: sr as f64, owed: 0., held: [0; 128],
+    let render = Render { sh: sh.clone(), engine, midi: mc, ctl: cc, dead: dp, parts: HashMap::with_capacity(512), sr: sr as f64, lookahead: 0, horizon: 0, sim_at_horizon: 0., held: [0; 128],
         sustain: false, sustained: [false; 128], listen: Listen::default(), velcurve, rec: rp, t_now: 0. };
     (sh, render, Sync::new(cp, dc))
 }
@@ -344,9 +350,16 @@ impl Render {
     /// Voices sounding now, every kind.
     pub fn voices(&self) -> usize { let s = self.engine.stats(); s.wave_voices + s.modal_voices + s.drum_voices }
 
+    /// Run the machine this many frames ahead of the sound. Its notes are handed to the engine for their exact future
+    /// frames, so they do not sound any earlier or later for it; but when the UI holds the world for less than this, no
+    /// note is late. The price is that an edit reaches the sound this much later. Keys played live are not affected.
+    pub fn set_lookahead(&mut self, frames: u64) { self.lookahead = frames }
+
     pub fn block(&mut self, l: &mut [f32], r: &mut [f32], latency: f64) {
         let n = l.len();
         let f0 = self.engine.frame();
+        // what is sounding as this block starts, on the machine's clock
+        self.t_now = self.sim_at_horizon + (f0 as f64 - self.horizon as f64) / self.sr;
         while let Ok(c) = self.ctl.pop() {
             match c {
                 Ctl::Patch(id, p) => self.engine.command(Cmd::Patch { part: id, patch: p }),
@@ -354,9 +367,10 @@ impl Render {
                 Ctl::Remove(id) => { self.parts.remove(&id); self.engine.command(Cmd::RemovePart { part: id }) }
                 Ctl::Cmd(c) => self.engine.command(c),
                 Ctl::Motion(part, slot, prog) => {
-                    // its start, in sim seconds, as a frame: the sim time this block starts at sits on f0
+                    // its start, in sim seconds, as a frame: the world's time now sits on the horizon
                     let t_now = self.sh.world.try_lock().map(|w| w.clock.sim_t).unwrap_or(f64::NAN);
-                    let prog = prog.map(|mut p| { if t_now.is_finite() { p.f0 = f0 as f64 + (p.f0 - t_now) * self.sr } else { p.f0 = f0 as f64 } p });
+                    let h = self.horizon.max(f0) as f64;
+                    let prog = prog.map(|mut p| { if t_now.is_finite() { p.f0 = h + (p.f0 - t_now) * self.sr } else { p.f0 = f0 as f64 } p });
                     self.engine.command(Cmd::Motion { part, slot, prog })
                 }
             }
@@ -374,40 +388,42 @@ impl Render {
                 _ => {}
             }
         }
-        // The machine: advance to the end of this block; each sound lands on its own frame.
+        // The machine: advance to the lookahead past this block; each sound lands on its own frame. A block that finds
+        // the world locked just leaves more to do next time, and with lookahead to spare nothing is late.
         let dt = n as f64 / self.sr;
+        let end = f0 + n as u64;
+        let want = end + self.lookahead;
         let sh = self.sh.clone();
         let world = sh.world.try_lock();
         match world {
             Ok(mut w) if !w.clock.paused => {
                 let t0 = w.clock.sim_t;
-                let t1 = t0 + self.owed + dt;
-                self.owed = 0.;
-                let sr = self.sr;
+                let frames = want.saturating_sub(self.horizon);
+                let t1 = t0 + frames as f64 / self.sr;
                 // collect into a fixed scratch to keep the borrow of `w` apart from `self.engine`
                 let mut buf = std::mem::take(&mut SCRATCH.with(|s| s.take()));
-                w.advance(t1, &mut |e: Event| buf.push(e));
-                self.t_now = w.clock.sim_t;
-                let heard = (w.clock.sim_t - latency - dt).max(0.);
+                if frames > 0 { w.advance(t1, &mut |e: Event| buf.push(e)) }
+                self.sim_at_horizon = w.clock.sim_t;
+                let heard = (w.clock.sim_t - (want - end) as f64 / self.sr - latency - dt).max(0.);
                 self.sh.meters.heard.store(heard.to_bits(), Relaxed);
                 drop(w);
                 let span = t1 - t0;
+                let h = self.horizon;
                 for e in buf.drain(..) {
-                    // the block covers [t0, t1) of sim time over its n frames (more, if it is catching up)
                     let frac = if span > 0. { ((e.t - t0) / span).clamp(0., 1.) } else { 0. };
-                    let at = f0 + (frac * (n as f64 - 1.)).round() as u64;
-                    self.play(&e, at);
+                    let at = h + (frac * (frames.max(1) - 1) as f64).round() as u64;
+                    if at < f0 { self.sh.meters.late_notes.fetch_add(1, Relaxed); }
+                    self.play(&e, at.max(f0));
                     self.sh.meters.events.fetch_add(1, Relaxed);
                 }
-                let _ = sr;
                 SCRATCH.with(|s| s.set(buf));
+                self.horizon = want;
             }
-            Ok(w) => { let h = w.clock.view; self.t_now = w.clock.sim_t; drop(w); self.sh.meters.heard.store(h.to_bits(), Relaxed) }
+            Ok(w) => { let h = w.clock.view; self.sim_at_horizon = w.clock.sim_t; self.horizon = want; drop(w); self.sh.meters.heard.store(h.to_bits(), Relaxed) }
             Err(_) => {
-                self.owed += dt;
                 let m = &self.sh.meters;
                 m.lock_misses.fetch_add(1, Relaxed);
-                m.owed_max_us.fetch_max((self.owed * 1e6) as u32, Relaxed);
+                m.owed_max_us.fetch_max((want.saturating_sub(self.horizon) as f64 / self.sr * 1e6) as u32, Relaxed);
             }
         }
         self.engine.process(l, r);
