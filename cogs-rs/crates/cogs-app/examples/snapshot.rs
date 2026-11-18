@@ -169,6 +169,10 @@ fn main() {
                 frames.push(vec![Event::Text("__back".into())]);
                 frames.extend(std::iter::repeat_with(Vec::new).take(3));
             }
+            "undo" => {
+                frames.push(vec![Event::Text("__undo".into())]);
+                frames.extend(std::iter::repeat_with(Vec::new).take(3));
+            }
             // what the app does when a world is picked in the panel (ui.rs load)
             "load" => {
                 frames.push(vec![Event::Text(format!("__load{}", parts.next().unwrap()))]);
@@ -197,6 +201,12 @@ fn main() {
         if events.iter().any(|e| matches!(e, Event::Text(t) if t == "__back")) {
             events.clear();
             eprintln!("frame {k}: back -> {}", stage.back(&mut w));
+        }
+        if events.iter().any(|e| matches!(e, Event::Text(t) if t == "__undo")) {
+            events.clear();
+            let v0 = w.readers.iter().map(|r| r.voice.ver).max();
+            stage.undo(&mut w);
+            eprintln!("frame {k}: undo said {:?}; newest reader version {v0:?} -> {:?}", stage.edits.last_change, w.readers.iter().map(|r| r.voice.ver).max());
         }
         if let Some(i) = events.iter().find_map(|e| match e { Event::Text(t) => t.strip_prefix("__load").and_then(|n| n.parse::<usize>().ok()), _ => None }) {
             events.clear();
