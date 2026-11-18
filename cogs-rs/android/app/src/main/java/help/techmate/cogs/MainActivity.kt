@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.widget.ArrayAdapter
 import android.widget.LinearLayout
 import android.widget.ListView
@@ -31,6 +32,16 @@ class MainActivity : NativeActivity(), MidiHub.Listener {
     override fun onCreate(savedInstanceState: Bundle?) {
         System.loadLibrary("cogs")
         super.onCreate(savedInstanceState)
+        window.decorView.setOnApplyWindowInsetsListener { v, ins ->
+            if (Build.VERSION.SDK_INT >= 30) {
+                val i = ins.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+                Native.insets(i.top, i.bottom)
+            } else {
+                @Suppress("DEPRECATION")
+                Native.insets(ins.systemWindowInsetTop, ins.systemWindowInsetBottom)
+            }
+            v.onApplyWindowInsets(ins)
+        }
         hub = MidiHub(this, { NativeSink() }, this)
         hub.start()
         if (hub.savedAddress != null && hasBtPermissions() && hub.bluetoothOn) hub.scan(auto = true)

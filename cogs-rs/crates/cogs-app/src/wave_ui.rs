@@ -72,6 +72,8 @@ pub enum EditorOut {
 struct Drag { n0: f64, a0: f64, acc: f64, x0: f32, route: Option<usize>, fresh: bool }
 
 pub struct WaveEditor {
+    /// Room to leave under the sheet for the system's navigation bar, in points.
+    pub safe_bottom: f32,
     pub part: Part,
     p: WavePatch,
     dial: Vec<String>,
@@ -180,7 +182,7 @@ impl WaveEditor {
         let v = w.voice(part)?;
         if v.kind != VoiceKind::Wave { return None }
         let mut e = WaveEditor { part, p: WavePatch::init(), dial: Vec::new(), ver: 0, tab: 0, arm: None, pin: false, msg: String::new(), json: String::new(),
-            lib, open_routes: HashSet::new(), drag: None, say: None, dirty: false, redraw_fx: false };
+            lib, open_routes: HashSet::new(), drag: None, say: None, dirty: false, redraw_fx: false, safe_bottom: 0. };
         e.load(w);
         Some(e)
     }
@@ -222,10 +224,10 @@ impl WaveEditor {
         if gone { out.push(EditorOut::Close); return out }
         let now = ctx.input(|i| i.time);
         let scr = ctx.content_rect();
-        let (wd, ht) = ((scr.width() - 8.).min(560.), (scr.height() * 0.62).max(280.));
+        let (wd, ht) = ((scr.width() - 8.).min(560.), (scr.height() * 0.62).max(280.).min(scr.height() - self.safe_bottom - 12.));
         let frame = egui::Frame::new().fill(BG).corner_radius(16.).inner_margin(10.).stroke(Stroke::new(1., Color32::from_gray(48)));
         egui::Window::new("wave synth").id(egui::Id::new("wave-editor")).title_bar(false).resizable(false).collapsible(false).frame(frame)
-            .anchor(Align2::CENTER_BOTTOM, [0., -4.]).fixed_size([wd, ht]).show(ctx, |ui| {
+            .anchor(Align2::CENTER_BOTTOM, [0., -4. - self.safe_bottom]).fixed_size([wd, ht]).show(ctx, |ui| {
                 let v = ui.visuals_mut();
                 v.selection.bg_fill = HOT; v.selection.stroke = Stroke::new(1., Color32::BLACK);
                 v.widgets.inactive.weak_bg_fill = WELL; v.widgets.inactive.bg_fill = WELL;
@@ -290,7 +292,7 @@ impl WaveEditor {
     }
     /// The mod sources: tap one to arm it, then drag a knob to set how far it moves that knob.
     fn chips(&mut self, ui: &mut Ui) {
-        egui::ScrollArea::horizontal().id_salt("chips").show(ui, |ui| ui.horizontal(|ui| {
+        let o = egui::ScrollArea::horizontal().id_salt("chips").show(ui, |ui| ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.;
             if TABS[self.tab] == "MAIN" && self.chip(ui, "DIAL", FG, self.pin, false) { self.pin = !self.pin; self.arm = None }
             for s in 0..NS as u8 {
@@ -298,10 +300,19 @@ impl WaveEditor {
                 if self.chip(ui, &src_label(s), src_col(s), self.arm == Some(s), used) { self.arm = if self.arm == Some(s) { None } else { Some(s) }; self.pin = false }
             }
         }));
+        // more chips to the right: fade the row's edge into the sheet
+        let r = o.inner_rect;
+        if o.inner.response.rect.right() > r.right() + 1. {
+            for k in 0..8 {
+                let x = r.right() - 24. + 3. * k as f32;
+                ui.painter().rect_filled(Rect::from_min_max(pos2(x, r.top()), pos2(x + 3., r.bottom())), 0., BG.gamma_multiply((k + 1) as f32 / 8.));
+            }
+        }
         let hint = match (self.arm, self.pin) {
             (Some(s), _) => format!("{} armed: drag a knob to set its depth, double tap to remove", src_label(s)),
             (None, true) => "tap knobs to pin them to the part's dial".into(),
-            _ => "tap a source to modulate with it".into(),
+            _ if TABS[self.tab] == "MAIN" => "tap a source to modulate with it".into(),
+            _ => return,
         };
         ui.label(egui::RichText::new(hint).size(11.).color(if self.arm.is_some() || self.pin { FG } else { DIM }));
     }
@@ -319,7 +330,8 @@ impl WaveEditor {
     // ---------- the knob ----------
     fn knob(&mut self, ui: &mut Ui, i: usize, label: Option<String>) {
         let d = &wave_params()[i];
-        let (rect, resp) = ui.allocate_exact_size(vec2(62., 78.), Sense::click_and_drag());
+        let bare = label.as_deref() == Some("");
+        let (rect, resp) = ui.allocate_exact_size(vec2(62., if bare { 66. } else { 78. }), Sense::click_and_drag());
         let now = ui.input(|x| x.time);
         let n = wave_norm(d, self.p.values[i]).clamp(0., 1.);
         let routes: Vec<usize> = self.p.mods.iter().enumerate().filter(|(_, m)| m.dst as usize == i).map(|(j, _)| j).collect();
@@ -406,7 +418,7 @@ impl WaveEditor {
         p.text(pos2(rect.center().x, rect.top() + 58.), Align2::CENTER_CENTER, name, FontId::proportional(10.5), if pinned { HOT } else { DIM });
         let val = match armed { Some(j) => { let m = &self.p.mods[j]; format!("{} {}{}", src_label(m.src), if m.amt > 0. { "+" } else { "" }, (m.amt * 100.).round()) }
             None => value_text(d, self.p.values[i]) };
-        p.text(pos2(rect.center().x, rect.top() + 71.), Align2::CENTER_CENTER, val, FontId::proportional(11.), match armed { Some(j) => src_col(self.p.mods[j].src), None => FG });
+        p.text(pos2(rect.center().x, rect.top() + if bare { 59. } else { 71. }), Align2::CENTER_CENTER, val, FontId::proportional(11.), match armed { Some(j) => src_col(self.p.mods[j].src), None => FG });
     }
     fn k(&mut self, ui: &mut Ui, path: &str) { if let Some(i) = param_index(path) { self.knob(ui, i, None) } }
     fn group(&mut self, ui: &mut Ui, title: &str, paths: &[String]) {
@@ -636,33 +648,40 @@ impl WaveEditor {
     fn tab_matrix(&mut self, ui: &mut Ui) {
         let mut del = None;
         let n = self.p.mods.len();
-        if n == 0 { ui.label(egui::RichText::new("No routes yet. Arm a source above and drag a knob, or add one here.").size(12.).color(DIM)); }
+        if n == 0 { ui.label(egui::RichText::new("No routes yet. Arm a source on another tab and drag a knob, or add one here.").size(12.).color(DIM)); }
         for j in 0..n {
-            ui.push_id(("route", j), |ui| {
+            ui.push_id(("route", j), |ui| card(ui, &format!("route {}", j + 1), |ui| {
                 ui.horizontal(|ui| {
                     let m = &mut self.p.mods[j];
                     let srcs: Vec<String> = (0..NS as u8).map(src_label).collect();
                     let sr: Vec<&str> = srcs.iter().map(|s| s.as_str()).collect();
                     if Self::combo(ui, "src", "source", &sr, &mut m.src) { self.dirty = true }
-                    ui.label("to");
                     let cur = self.p.mods[j].dst as usize;
                     let mut pick = None;
                     ui.vertical(|ui| {
-                        ui.label(egui::RichText::new("to").size(11.).color(DIM));
+                        ui.label(egui::RichText::new("destination").size(11.).color(DIM));
                         egui::ComboBox::from_id_salt("dst").selected_text(long_label(&self.p, cur)).height(360.).show_ui(ui, |ui| {
                             for i in 0..NP { if ui.selectable_label(i == cur, long_label(&self.p, i)).clicked() { pick = Some(i) } }
                         });
                     });
                     if let Some(i) = pick { self.p.mods[j].dst = i as u16; self.dirty = true }
-                    let open = self.open_routes.contains(&j);
-                    if ibtn(ui, Ico::More, vec2(32., 32.), true, open).clicked() { if open { self.open_routes.remove(&j); } else { self.open_routes.insert(j); } }
-                    if ibtn(ui, Ico::Del, vec2(32., 32.), true, false).clicked() { del = Some(j) }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Max), |ui| {
+                        if ibtn(ui, Ico::Del, vec2(32., 32.), true, false).clicked() { del = Some(j) }
+                    });
                 });
+                ui.label(egui::RichText::new("amount").size(11.).color(DIM));
                 let m = &mut self.p.mods[j];
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().slider_width = (ui.available_width() - 60.).max(120.);
-                    if ui.add(egui::Slider::new(&mut m.amt, -1.0..=1.0).step_by(0.01).custom_formatter(|x, _| format!("{}", (x * 100.).round()))).changed() { self.dirty = true }
+                    ui.spacing_mut().slider_width = (ui.available_width() - 66.).max(120.);
+                    let s = egui::Slider::new(&mut m.amt, -1.0..=1.0).step_by(0.01)
+                        .custom_formatter(|x, _| format!("{:+}%", (x * 100.).round()))
+                        .custom_parser(|t| t.trim().trim_end_matches('%').parse::<f64>().ok().map(|v| v / 100.));
+                    if ui.add(s).changed() { self.dirty = true }
                 });
+                let open = self.open_routes.contains(&j);
+                if ui.add(egui::Button::new(if open { "fewer options" } else { "more options" }).min_size(vec2(0., 32.))).clicked() {
+                    if open { self.open_routes.remove(&j); } else { self.open_routes.insert(j); }
+                }
                 if self.open_routes.contains(&j) {
                     ui.horizontal_wrapped(|ui| {
                         let m = &mut self.p.mods[j];
@@ -676,8 +695,7 @@ impl WaveEditor {
                         if Self::curve(ui, &mut m.curve) { self.dirty = true }
                     });
                 }
-                ui.separator();
-            });
+            }));
         }
         if let Some(j) = del { self.p.mods.remove(j); self.open_routes.clear(); self.dirty = true }
         if ui.add(egui::Button::new("+ route").min_size(vec2(90., 36.))).clicked() {
@@ -701,55 +719,56 @@ impl WaveEditor {
         ch
     }
     fn tab_patch(&mut self, ui: &mut Ui, out: &mut Vec<EditorOut>) {
-        let now = ui.input(|x| x.time);
-        ui.horizontal(|ui| {
-            let mut name = self.p.name.clone();
-            if ui.add(egui::TextEdit::singleline(&mut name).desired_width(180.).char_limit(40).hint_text("patch name")).changed() { self.p.name = name; self.dirty = true }
-            if ui.add(egui::Button::new("save to library").min_size(vec2(0., 34.))).clicked() {
-                self.msg = match self.save_lib() { Ok(n) => format!("saved {n}"), Err(e) => format!("not saved: {e}") };
-            }
-        });
-        ui.label(egui::RichText::new("factory").size(12.).color(DIM));
-        ui.horizontal_wrapped(|ui| {
-            for n in WAVE_PRESET_NAMES {
-                if ui.add(egui::Button::new(n).min_size(vec2(0., 34.))).clicked() {
-                    if let Some(p) = WavePatch::preset(n) { self.p = p; self.dirty = true; self.msg = format!("loaded {n}"); out.push(EditorOut::Audition(self.part.id())) }
+        card(ui, "this patch", |ui| {
+            ui.horizontal(|ui| {
+                let mut name = self.p.name.clone();
+                if ui.add(egui::TextEdit::singleline(&mut name).desired_width((ui.available_width() - 130.).max(120.)).char_limit(40).hint_text("patch name")).changed() { self.p.name = name; self.dirty = true }
+                if ui.add(egui::Button::new("save to library").min_size(vec2(0., 34.))).clicked() {
+                    self.msg = match self.save_lib() { Ok(n) => format!("saved {n}"), Err(e) => format!("not saved: {e}") };
                 }
-            }
+            });
+            if !self.msg.is_empty() { ui.label(egui::RichText::new(&self.msg).size(12.).color(SEL)); }
+        });
+        card(ui, "factory", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for n in WAVE_PRESET_NAMES {
+                    if ui.add(egui::Button::new(n).min_size(vec2(0., 34.))).clicked() {
+                        if let Some(p) = WavePatch::preset(n) { self.p = p; self.dirty = true; self.msg = format!("loaded {n}"); out.push(EditorOut::Audition(self.part.id())) }
+                    }
+                }
+            });
         });
         let names = self.lib_names();
         if !names.is_empty() {
-            ui.label(egui::RichText::new("library").size(12.).color(DIM));
-            let mut del = None;
-            for n in &names {
-                ui.horizontal(|ui| {
-                    if ui.add(egui::Button::new(n.as_str()).min_size(vec2(160., 34.))).clicked() {
-                        if let Some(p) = self.lib_load(n) { self.p = p; self.dirty = true; self.msg = format!("loaded {n}"); out.push(EditorOut::Audition(self.part.id())) }
-                    }
-                    if ibtn(ui, Ico::Del, vec2(34., 34.), true, false).clicked() { del = Some(n.clone()) }
-                });
-            }
-            if let Some(n) = del { if let Some(d) = &self.lib { let _ = std::fs::remove_file(d.join(format!("{n}.json"))); self.msg = format!("deleted {n}") } }
-        }
-        ui.add_space(6.);
-        ui.label(egui::RichText::new("this patch as JSON").size(12.).color(DIM));
-        ui.horizontal(|ui| {
-            if ui.add(egui::Button::new("copy").min_size(vec2(0., 34.))).clicked() {
-                self.json = serde_json::to_string_pretty(&self.p.to_json()).unwrap_or_default();
-                ui.ctx().copy_text(self.json.clone()); self.msg = "copied to the clipboard".into();
-            }
-            if ui.add(egui::Button::new("import text").min_size(vec2(0., 34.))).clicked() {
-                match serde_json::from_str::<Value>(&self.json) {
-                    Ok(j) if j.is_object() => { self.p = WavePatch::from_json(&j); self.dirty = true; self.msg = format!("imported {}", self.p.name) }
-                    Ok(_) => self.msg = "import failed: not a patch object".into(),
-                    Err(e) => self.msg = format!("import failed: {e}"),
+            card(ui, "library", |ui| {
+                let mut del = None;
+                for n in &names {
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::Button::new(n.as_str()).min_size(vec2(160., 34.))).clicked() {
+                            if let Some(p) = self.lib_load(n) { self.p = p; self.dirty = true; self.msg = format!("loaded {n}"); out.push(EditorOut::Audition(self.part.id())) }
+                        }
+                        if ibtn(ui, Ico::Del, vec2(34., 34.), true, false).clicked() { del = Some(n.clone()) }
+                    });
                 }
-            }
-            if ui.add(egui::Button::new("init").min_size(vec2(0., 34.))).clicked() { self.p = WavePatch::init(); self.dirty = true; self.msg = "init".into() }
+                if let Some(n) = del { if let Some(d) = &self.lib { let _ = std::fs::remove_file(d.join(format!("{n}.json"))); self.msg = format!("deleted {n}") } }
+            });
+        }
+        egui::CollapsingHeader::new(egui::RichText::new("patch as text").size(12.).color(DIM)).id_salt("patch-json").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if ui.add(egui::Button::new("copy").min_size(vec2(0., 34.))).clicked() {
+                    self.json = serde_json::to_string_pretty(&self.p.to_json()).unwrap_or_default();
+                    ui.ctx().copy_text(self.json.clone()); self.msg = "copied to the clipboard".into();
+                }
+                if ui.add(egui::Button::new("import text").min_size(vec2(0., 34.))).clicked() {
+                    match serde_json::from_str::<Value>(&self.json) {
+                        Ok(j) if j.is_object() => { self.p = WavePatch::from_json(&j); self.dirty = true; self.msg = format!("imported {}", self.p.name) }
+                        Ok(_) => self.msg = "import failed: not a patch object".into(),
+                        Err(e) => self.msg = format!("import failed: {e}"),
+                    }
+                }
+            });
+            ui.add(egui::TextEdit::multiline(&mut self.json).hint_text("paste a patch JSON here").desired_rows(5).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
         });
-        ui.add(egui::TextEdit::multiline(&mut self.json).hint_text("paste a patch JSON here").desired_rows(5).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
-        if !self.msg.is_empty() { ui.label(egui::RichText::new(&self.msg).size(12.).color(SEL)); }
-        let _ = now;
     }
 
     // ---------- the library: one JSON file per patch ----------

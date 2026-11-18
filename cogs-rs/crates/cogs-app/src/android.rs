@@ -20,6 +20,13 @@ pub extern "system" fn Java_help_techmate_cogs_Native_status(mut env: JNIEnv, _c
     if let (Some(s), Ok(t)) = (STATUS.get(), env.get_string(&text)) { if let Ok(mut s) = s.lock() { *s = t.into() } }
 }
 
+/// The window's insets in pixels, from the activity, whenever they change.
+#[no_mangle]
+pub extern "system" fn Java_help_techmate_cogs_Native_insets(_env: JNIEnv, _c: JClass, top: jint, bottom: jint) {
+    ui::SAFE_PX[0].store(top.max(0) as u32, Relaxed);
+    ui::SAFE_PX[1].store(bottom.max(0) as u32, Relaxed);
+}
+
 fn open_audio(mut render: play::Render, sh: Arc<play::Shared>, sr: f32) -> Option<AudioStream> {
     let mut scratch = vec![0f32; 2 * 4096];
     let mut written: i64 = 0;
