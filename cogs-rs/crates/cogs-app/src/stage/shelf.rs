@@ -120,11 +120,11 @@ impl Stage {
     }
     pub(super) fn press(&mut self, w: &mut World, b: Btn) {
         match b {
-            Btn::Edit => {
-                if let Some(m) = self.editor_mode(w) {
-                    self.out.push(StageOut::OpenEditor(m));
-                }
-            }
+            Btn::Edit => match self.editor_mode(w) {
+                Some("notes") => self.open_notes(w),
+                Some(m) => self.out.push(StageOut::OpenEditor(m)),
+                None => {}
+            },
             Btn::Rec => self.out.push(StageOut::Record),
             Btn::Zero => self.zero_sel(w),
             Btn::Copy => {
@@ -164,7 +164,6 @@ impl Stage {
         self.draw_shelf(p);
         self.draw_glyph(p, w);
         self.draw_buttons(p, w);
-        self.draw_readout(p);
     }
     fn draw_shelf(&mut self, p: &egui::Painter) {
         let top = self.shelf_top();
@@ -258,7 +257,7 @@ impl Stage {
             }
         }
     }
-    fn draw_readout(&mut self, p: &egui::Painter) {
+    pub(super) fn draw_readout(&mut self, p: &egui::Painter) {
         let Some((text, until)) = &self.readout else { return };
         if self.now > *until {
             self.readout = None;

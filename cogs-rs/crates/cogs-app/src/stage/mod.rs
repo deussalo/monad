@@ -14,7 +14,9 @@ mod gesture;
 mod icon_data;
 pub mod icons;
 pub mod pen;
+pub mod roll;
 mod shelf;
+pub mod sheet;
 
 use cogs_sim::{Part, PartRef, World, TAU};
 use draw::*;
@@ -103,6 +105,12 @@ pub enum StageOut {
     Record,
     /// The seal was pressed: copy this share link (the HTML build opens it).
     Share(String),
+    /// Stop an audition (the roll's preview) `after` seconds from now.
+    AuditionOff { key: u32, after: f64 },
+    /// Save this cogs file (the panel's save file).
+    SaveFile { name: String, text: String },
+    /// Ask for a cogs file to open; hand its text to `Stage::open_text`.
+    OpenFile,
 }
 
 /// What the app tells the stage each frame.
@@ -240,6 +248,13 @@ pub struct Stage {
     seal_at: f64,
     /// A cam or probe waiting for the next tap to link it.
     linking: Option<Sel>,
+    pub sheet: Option<sheet::Sheet>,
+    pub roll: Option<roll::Roll>,
+    pub brush: sheet::Brush,
+    sheet_fingers: BTreeMap<u64, sheet::Owner>,
+    json: String,
+    file_msg: Option<String>,
+    snap_pop: bool,
 }
 
 impl Default for Stage {
@@ -256,12 +271,16 @@ impl Stage {
             scrap: false, snapped: false, caught: false, last_tap: None, dot_at: (0.0, 0.0), hover: None, shift: false,
             edits: edits::Edits::default(), out: Vec::new(), rect: Rect::NOTHING, cw: 0.0, ch: 0.0, safe_top: 0.0, safe_bot: 0.0, now: 0.0,
             io: StageIo::default(), shelf_x: 0.0, shelf_fling: None, icons: icons::Icons::default(), readout: None, readout_held: false,
-            mouse_down: false, seen_touch: false, started: false, trackpad: None, down_t: 0.0, clip: None, bezel_owner: None, bezel_at: 0.0, seal_at: -9.0, linking: None,
+            mouse_down: false, seen_touch: false, started: false, trackpad: None, down_t: 0.0, clip: None, bezel_owner: None, bezel_at: 0.0, seal_at: -9.0, linking: None, sheet: None, roll: None, brush: sheet::Brush::default(), sheet_fingers: BTreeMap::new(), json: String::new(), file_msg: None, snap_pop: false,
         }
     }
 
     /// Draw the stage into the ui's whole rect and take its input. Returns what the app should do.
     pub fn show(&mut self, ui: &mut egui::Ui, w: &mut World, io: &StageIo) -> Vec<StageOut> {
+        self.show_with(ui, w, io, &mut |_, _| {})
+    }
+    /// As `show`, with the app's own rows for the panel (worlds, keyboard, audio readouts): `extra` draws them.
+    pub fn show_with(&mut self, ui: &mut egui::Ui, w: &mut World, io: &StageIo, extra: &mut dyn FnMut(&mut egui::Ui, &mut World)) -> Vec<StageOut> {
         let rect = ui.max_rect();
         let resp = ui.allocate_rect(rect, egui::Sense::click_and_drag());
         let _ = resp;
@@ -271,6 +290,9 @@ impl Stage {
         self.safe_top = io.safe_top as f64;
         self.safe_bot = io.safe_bottom as f64;
         self.io = *io;
+        if self.sheet_open() {
+            self.io.busy = true;
+        }
         self.now = ui.input(|i| i.time);
         if !self.started {
             self.started = true;
@@ -284,6 +306,8 @@ impl Stage {
         self.tick(w);
         let painter = ui.painter_at(rect);
         self.draw(&painter, w);
+        self.show_sheet(ui, w, extra);
+        self.draw_readout(&painter);
         // a pending change settles into an undo step once things are quiet and no finger is down
         if let Some(t) = self.edits.pending {
             if self.fingers.is_empty() && !self.mouse_down && self.now - t >= edits::EDITS_QUIET && self.edits.commit(w) {

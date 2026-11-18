@@ -101,6 +101,9 @@ impl Stage {
                     self.seen_touch = true;
                     let id = id.0;
                     let s = local(pos);
+                    if self.route_sheet(w, id, s, phase) {
+                        continue;
+                    }
                     match phase {
                         TouchPhase::Start => self.down(w, id, s, true, mods),
                         TouchPhase::Move => self.moved(w, id, s),
@@ -111,12 +114,20 @@ impl Stage {
                 Event::PointerMoved(p) if !self.seen_touch => {
                     let s = local(p);
                     self.hover = Some(s);
+                    if self.mouse_down && self.route_sheet(w, MOUSE, s, TouchPhase::Move) {
+                        continue;
+                    }
                     if self.mouse_down {
                         self.moved(w, MOUSE, s);
                     }
                 }
                 Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers } if !self.seen_touch => {
                     let s = local(pos);
+                    let phase = if pressed { TouchPhase::Start } else { TouchPhase::End };
+                    if (pressed && self.rect.contains(pos) || !pressed) && self.route_sheet(w, MOUSE, s, phase) {
+                        self.mouse_down = pressed;
+                        continue;
+                    }
                     if pressed && self.rect.contains(pos) {
                         self.mouse_down = true;
                         self.down(w, MOUSE, s, false, modifiers);
@@ -146,6 +157,31 @@ impl Stage {
         }
     }
 
+    /// Fingers that land on an open sheet are the sheet's until they lift. True: the event was the sheet's.
+    fn route_sheet(&mut self, w: &mut World, id: u64, s: (f64, f64), phase: TouchPhase) -> bool {
+        match phase {
+            TouchPhase::Start => {
+                let Some(o) = self.sheet_hit(w, s) else { return false };
+                self.sheet_fingers.insert(id, o);
+                self.sheet_down(w, id, s, o);
+                true
+            }
+            TouchPhase::Move => match self.sheet_fingers.get(&id).copied() {
+                Some(o) => {
+                    self.sheet_move(w, id, s, o);
+                    true
+                }
+                None => false,
+            },
+            TouchPhase::End | TouchPhase::Cancel => match self.sheet_fingers.remove(&id) {
+                Some(o) => {
+                    self.sheet_up(w, id, phase == TouchPhase::Cancel, o);
+                    true
+                }
+                None => false,
+            },
+        }
+    }
     fn down(&mut self, w: &mut World, id: u64, s: (f64, f64), touch: bool, mods: egui::Modifiers) {
         self.fingers.insert(id, Finger { pos: s, touch });
         self.down_t = self.now;
@@ -1305,7 +1341,7 @@ impl Stage {
             }
             3 => {
                 self.gesture = None;
-                self.out.push(StageOut::TogglePanel);
+                self.toggle_panel();
                 self.buzz(15);
             }
             4 => {

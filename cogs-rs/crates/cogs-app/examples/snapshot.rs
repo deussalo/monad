@@ -95,6 +95,17 @@ fn main() {
         });
     }
 
+    match arg(&args, "--open") {
+        Some("notes") => stage.open_notes(&w),
+        Some("panel") => stage.toggle_panel(),
+        _ => {}
+    }
+    if args.iter().any(|a| a == "--vel") {
+        if let Some(r) = &mut stage.roll {
+            r.vel = true;
+        }
+    }
+
     // scripted touches: each op becomes frames of touch events
     let mut frames: Vec<Vec<Event>> = vec![vec![]; 2];
     let touch = |id: u64, phase, x: f32, y: f32| Event::Touch { device_id: TouchDeviceId(0), id: TouchId(id), phase, pos: pos2(x, y), force: None };
