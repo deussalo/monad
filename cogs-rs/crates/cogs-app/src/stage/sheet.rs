@@ -50,7 +50,61 @@ impl Default for Brush {
 }
 
 const GRAB_H: f64 = 28.0;
-const HEAD_H: f64 = 52.0;
+/// The notes sheet's two rows of tools.
+const HEAD_H: f64 = 96.0;
+const CHIPS_H: f64 = 40.0;
+
+/// The notes sheet's popovers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Pop {
+    Key,
+    Octave,
+    Range,
+    Steps,
+    Revs,
+    Snap,
+    Brush,
+    Euclid,
+    More,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Tool {
+    Lane,
+    Brush,
+    Euclid,
+    ShiftL,
+    ShiftR,
+    Rec,
+    More,
+    Dup,
+    Copy,
+    Paste,
+    Delete,
+    Undo,
+    Redo,
+    Close,
+}
+fn nearest_rev(revs: f64) -> &'static str {
+    REVS.iter().copied().fold(REVS[0], |a, b| if (frac(b) - revs).abs() < (frac(a) - revs).abs() { b } else { a })
+}
+/// "1/2" as "½", "-1/3" as "−⅓", whole numbers as they are.
+fn pretty_frac(s: &str) -> String {
+    let neg = s.starts_with('-');
+    let body = s.trim_start_matches('-');
+    let f = match body {
+        "1/2" => "½",
+        "1/3" => "⅓",
+        "2/3" => "⅔",
+        "1/4" => "¼",
+        "3/4" => "¾",
+        "1/6" => "⅙",
+        "1/8" => "⅛",
+        "4/3" => "1⅓",
+        "3/2" => "1½",
+        b => b,
+    };
+    format!("{}{}", if neg { "−" } else { "" }, f)
+}
 const REVS: [&str; 21] = ["-2", "-1", "-1/2", "-1/3", "-1/4", "0", "1/8", "1/6", "1/4", "1/3", "1/2", "2/3", "3/4", "1", "4/3", "3/2", "2", "3", "4", "6", "8"];
 fn frac(s: &str) -> f64 {
     let mut it = s.split('/');
@@ -124,12 +178,12 @@ impl Stage {
         }
         let top = self.sheet_top()? + 8.0;
         let r = self.roll.as_ref()?;
-        let g = r.geo(w, self.cw - 16.0, 0.86 * self.ch - 190.0)?;
+        let g = r.geo(w, self.cw - 16.0, self.notes_layout().0)?;
         Some(Rect::from_min_size(pos2(8.0, top as f32), g.rect.size()))
     }
     fn roll_geo(&self, w: &World) -> Option<Geo> {
         let b = self.roll_box(w)?;
-        let mut g = self.roll.as_ref()?.geo(w, self.cw - 16.0, 0.86 * self.ch - 190.0)?;
+        let mut g = self.roll.as_ref()?.geo(w, self.cw - 16.0, self.notes_layout().0)?;
         g.rect = b;
         Some(g)
     }
@@ -137,6 +191,11 @@ impl Stage {
     pub(super) fn sheet_hit(&self, w: &World, s: (f64, f64)) -> Option<Owner> {
         let sh = self.sheet.as_ref()?;
         let top = self.sheet_top()?;
+        if let Some(r) = self.pop_rect {
+            if r.translate(-self.rect.min.to_vec2()).contains(pos2(s.0 as f32, s.1 as f32)) {
+                return Some(Owner::Widget);
+            }
+        }
         if s.1 < top {
             return if sh.min { None } else { Some(Owner::Scrim) };
         }
@@ -299,250 +358,480 @@ impl Stage {
         }
     }
 
+    /// The notes sheet's layout: the grid's box height, the chip row's top and the toolbar's top (stage coordinates).
+    fn notes_layout(&self) -> (f64, f64, f64) {
+        let top = self.sheet_top().unwrap_or(0.0);
+        let strip = self.ch - self.strip_h(SheetKind::Notes);
+        let chips = strip - CHIPS_H - 4.0;
+        let grid_h = (chips - 6.0 - (top + 8.0)).max(80.0);
+        (grid_h, chips, strip + GRAB_H)
+    }
+
     fn show_notes(&mut self, ui: &mut egui::Ui, w: &mut World, top: f64, min: bool) {
         let strip = self.ch - self.strip_h(SheetKind::Notes);
-        let head_y = if min { top + GRAB_H } else { strip + GRAB_H };
+        let bar_y = if min { top + GRAB_H } else { strip + GRAB_H };
+        let mut changed = false;
         if !min {
-            // the roll
             if let (Some(g), Some(r)) = (self.roll_geo(w), &self.roll) {
                 let mut g2 = g;
                 g2.rect = g.rect.translate(self.rect.min.to_vec2());
                 r.draw(ui.painter(), w, &g2, self.now);
-                let below = (g.rect.max.y as f64) + 8.0;
-                let area = Rect::from_min_max(self.scr((8.0, below)), self.scr((self.cw - 8.0, strip)));
-                let mut cui = ui.new_child(egui::UiBuilder::new().max_rect(area));
-                egui::ScrollArea::vertical().id_salt("notes-tools").max_height(area.height()).show(&mut cui, |ui| {
-                    ui.set_width(area.width());
-                    self.notes_tools(ui, w);
-                });
+                ui.painter().rect_stroke(g2.rect, 6.0, Stroke::new(1.0, LINE), egui::StrokeKind::Outside);
             }
+            let (_, chips_y, _) = self.notes_layout();
+            changed |= self.notes_chips(ui, w, chips_y);
             ui.painter().line_segment([self.scr((0.0, strip)), self.scr((self.cw, strip))], Stroke::new(1.0, LINE));
         }
-        // the head row: snap, velocity, duplicate, copy, paste, delete; undo, redo, close
-        let row = Rect::from_min_size(self.scr((8.0, head_y)), vec2((self.cw - 16.0) as f32, 44.0));
-        let mut x = row.min.x;
-        let has = self.roll.as_ref().map_or(false, |r| r.has_sel());
-        let clip = self.roll.as_ref().map_or(false, |r| !r.clip.is_empty());
-        // snap: just the division; tap it to choose another
-        let snap = self.roll.as_ref().map_or(5, |r| r.snap);
-        let sr = Rect::from_min_size(pos2(x, row.min.y), vec2(52.0, 44.0));
-        let resp = ui.interact(sr, ui.scope_id().with("snap"), egui::Sense::click());
-        ui.painter().text(sr.center(), Align2::CENTER_CENTER, SNAPS[snap].3, FontId::monospace(15.0), HOT);
-        if resp.clicked() {
-            self.snap_pop = !self.snap_pop;
+        changed |= self.notes_toolbar(ui, w, bar_y);
+        changed |= self.notes_popover(ui, w);
+        let ghost = if self.pop.map(|p| p.0) == Some(Pop::Euclid) { Some((self.brush.eu_ring, self.brush.eu_k as i64, self.brush.eu_rot as i64)) } else { None };
+        if let Some(r) = &mut self.roll {
+            r.ghost = ghost;
         }
-        if self.snap_pop {
-            // the choices, in a list over the sheet, from the snap upward
-            let h = SNAPS.len() as f32 * 34.0 + 8.0;
-            let at = pos2(sr.min.x, sr.min.y - h - 4.0);
-            egui::Area::new(ui.scope_id().with("snap-list")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
-                style(ui);
-                egui::Frame::popup(ui.style()).fill(PAD).show(ui, |ui| {
-                    ui.set_width(150.0);
-                    for (i, s) in SNAPS.iter().enumerate() {
-                        if ui.add_sized([150.0, 30.0], egui::Button::selectable(i == snap, s.0)).clicked() {
-                            if let Some(r) = &mut self.roll {
-                                r.snap = i;
-                            }
-                            self.snap_pop = false;
-                        }
-                    }
-                });
-            });
-        }
-        x += 52.0;
-        let iw = (((row.width() - 52.0 - 132.0) / 5.0).min(44.0)).max(28.0);
-        let vel = self.roll.as_ref().map_or(false, |r| r.vel);
-        let icons: [(&str, bool, bool, u8); 5] = [("Velocity", true, vel, 0), ("CardStackPlus", has, false, 1), ("Copy", has, false, 2), ("Clipboard", clip, false, 3), ("Trash", has, false, 4)];
-        let mut act = None;
-        for (name, enabled, on, k) in icons {
-            let r = Rect::from_min_size(pos2(x, row.min.y), vec2(iw, 44.0));
-            x += iw;
-            let resp = ui.interact(r, ui.scope_id().with(("head", k)), egui::Sense::click());
-            let tint = if on { HOT } else if enabled { FG } else { alpha(FAINT, 1.0) };
-            self.icons.paint(ui.painter(), name, false, Rect::from_center_size(r.center(), vec2(20.0, 20.0)), tint);
-            if resp.clicked() && enabled {
-                act = Some(k);
-            }
-        }
-        let right = row.max.x;
-        let tools: [(&str, bool, u8); 3] = [("Reset", false, 5), ("Reset", true, 6), ("Cross2", false, 7)];
-        for (j, (name, flip, k)) in tools.iter().enumerate() {
-            let r = Rect::from_min_size(pos2(right - 44.0 * (3 - j) as f32, row.min.y), vec2(44.0, 44.0));
-            let resp = ui.interact(r, ui.scope_id().with(("head", *k)), egui::Sense::click());
-            let enabled = match k {
-                5 => self.edits.can_undo(),
-                6 => self.edits.can_redo(),
-                _ => true,
-            };
-            self.icons.paint(ui.painter(), name, *flip, Rect::from_center_size(r.center(), vec2(20.0, 20.0)), alpha(FG, if enabled { 1.0 } else { 0.3 }));
-            if resp.clicked() {
-                act = Some(*k);
-            }
-        }
-        if let Some(k) = act {
-            self.buzz(6);
-            let mut changed = false;
-            if let Some(r) = &mut self.roll {
-                match k {
-                    0 => r.vel = !r.vel,
-                    1 => changed = r.duplicate(w),
-                    2 => {
-                        r.copy_sel(w);
-                    }
-                    3 => changed = r.paste(w),
-                    4 => changed = r.delete_sel(w),
-                    _ => {}
-                }
-            }
-            match k {
-                5 => self.undo(w),
-                6 => self.redo(w),
-                7 => self.sheet = None,
-                _ => {}
-            }
-            if changed {
-                self.changed(w, false);
-            }
-        }
-    }
-
-    /// Under the roll: the disc's tuning as chips, recording, the roll's tools.
-    fn notes_tools(&mut self, ui: &mut egui::Ui, w: &mut World) {
-        let Some(Sel::Cog(id)) = self.sel else { return };
-        let k = |key| Key::Track(id, key);
-        let mut changed = false;
-        ui.horizontal(|ui| {
-            chip(ui, "root", |ui| {
-                let cur = get(w, &k("root")).n() as usize;
-                egui::ComboBox::from_id_salt("root").width(44.0).selected_text(NOTE_NAMES[cur % 12]).show_ui(ui, |ui| {
-                    for (i, n) in NOTE_NAMES.iter().enumerate() {
-                        if ui.selectable_label(i == cur, *n).clicked() {
-                            set(w, &k("root"), Val::N(i as f64));
-                            changed = true;
-                        }
-                    }
-                });
-            });
-            for (key, lo, hi) in [("octave", 1.0, 7.0), ("range", 1.0, 3.0)] {
-                chip(ui, key, |ui| {
-                    if let Some(v) = stepper(ui, get(w, &k(key)).n(), lo, hi) {
-                        set(w, &k(key), Val::N(v));
-                        changed = true;
-                    }
-                });
-            }
-        });
-        ui.horizontal(|ui| {
-            chip(ui, "scale", |ui| {
-                let Val::S(cur) = get(w, &k("scale")) else { return };
-                egui::ComboBox::from_id_salt("scale").width(96.0).selected_text(cur.clone()).show_ui(ui, |ui| {
-                    for (n, _) in SCALES.iter() {
-                        if ui.selectable_label(*n == cur, *n).clicked() {
-                            set(w, &k("scale"), Val::S((*n).into()));
-                            changed = true;
-                        }
-                    }
-                });
-            });
-            chip(ui, "steps", |ui| {
-                if let Some(v) = stepper(ui, get(w, &k("div")).n(), 1.0, 96.0) {
-                    set(w, &k("div"), Val::N(v));
-                    changed = true;
-                }
-            });
-            ui.vertical(|ui| {
-                ui.add_space(14.0);
-                let rec = ui.add_sized([86.0, 44.0], egui::Button::new(RichText::new(if self.io.recording { "stop" } else { "record" }).color(if self.io.recording { BG } else { HOT }))
-                    .fill(if self.io.recording { HOT } else { PAD }));
-                if rec.clicked() {
-                    self.out.push(StageOut::Record);
-                }
-            });
-        });
-        ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            if let Some(ci) = w.cog_ix(id) {
-                let m = w.cogs[ci].driver.or(if w.cogs[ci].motor.is_some() { Some(ci) } else { None });
-                if w.s.bpm != 0.0 && m.is_some() {
-                    chip(ui, "revs/bar", |ui| {
-                        let revs = w.rpm(ci) * w.s.beats / w.s.bpm;
-                        let cur = REVS.iter().copied().fold(REVS[0], |a, b| if (frac(b) - revs).abs() < (frac(a) - revs).abs() { b } else { a });
-                        egui::ComboBox::from_id_salt("revs").width(64.0).selected_text(cur).show_ui(ui, |ui| {
-                            for r in REVS {
-                                if ui.selectable_label(r == cur, r).clicked() {
-                                    let rpm = frac(r) * w.s.bpm / w.s.beats;
-                                    w.drive(ci, rpm);
-                                    changed = true;
-                                }
-                            }
-                        });
-                    });
-                }
-            }
-            if ui.add_sized([90.0, 44.0], egui::Button::new("shift <")).clicked() {
-                if let Some(r) = &mut self.roll {
-                    r.shift(w, -1.0);
-                }
-                changed = true;
-            }
-            if ui.add_sized([90.0, 44.0], egui::Button::new("shift >")).clicked() {
-                if let Some(r) = &mut self.roll {
-                    r.shift(w, 1.0);
-                }
-                changed = true;
-            }
-        });
-        ui.add_space(6.0);
-        egui::Grid::new("roll-tools").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-            for (label, v, lo, hi, step) in [("brush p", &mut self.brush.p, 0.0, 1.0, 0.01), ("brush vel", &mut self.brush.v, 0.0, 1.0, 0.01),
-                ("euclid ring", &mut self.brush.eu_ring, 0.0, 35.0, 1.0), ("euclid k", &mut self.brush.eu_k, 0.0, 96.0, 1.0), ("euclid rot", &mut self.brush.eu_rot, 0.0, 95.0, 1.0)]
-            {
-                ui.label(label);
-                ui.add(egui::Slider::new(v, lo..=hi).step_by(step));
-                ui.end_row();
-            }
-        });
-        ui.horizontal_wrapped(|ui| {
-            if ui.add_sized([110.0, 44.0], egui::Button::new("euclid fill")).clicked() {
-                let b = (self.brush.eu_ring, self.brush.eu_k as i64, self.brush.eu_rot as i64, self.brush.p, self.brush.v);
-                if let Some(r) = &mut self.roll {
-                    r.euclid(w, b.0, b.1, b.2, b.3, b.4);
-                }
-                changed = true;
-            }
-            let readers: Vec<u32> = w.cog(id).map(|c| {
-                w.readers.iter().filter(|r| r.on == Some(c.id)).map(|r| r.id).collect()
-            }).unwrap_or_default();
-            for rid in readers {
-                if ui.add_sized([130.0, 44.0], egui::Button::new(format!("reader {rid} patch"))).clicked() {
-                    self.select(Some(Sel::Reader(rid)));
-                    self.sheet = None;
-                    self.out.push(StageOut::OpenEditor("patch"));
-                }
-            }
-            if ui.add_sized([100.0, 44.0], egui::Button::new("clear pins")).clicked() {
-                if let Some(t) = w.cog_mut(id).and_then(|c| c.track.as_mut()) {
-                    t.dots.clear();
-                }
-                if let Some(r) = &mut self.roll {
-                    r.sel.clear();
-                }
-                changed = true;
-            }
-            if ui.add_sized([100.0, 44.0], egui::Button::new("drop track")).clicked() {
-                if let Some(c) = w.cog_mut(id) {
-                    c.track = None;
-                }
-                self.sheet = None;
-                changed = true;
-            }
-        });
         if changed {
             self.changed(w, true);
         }
     }
 
+    /// One row of chips under the grid: the disc's tuning, each opening its own small popover.
+    fn notes_chips(&mut self, ui: &mut egui::Ui, w: &World, y: f64) -> bool {
+        let Some(Sel::Cog(id)) = self.sel else { return false };
+        let Some(ci) = w.cog_ix(id) else { return false };
+        let c = &w.cogs[ci];
+        let Some(t) = c.track.as_ref() else { return false };
+        let mut chips: Vec<(Pop, String)> = vec![
+            (Pop::Key, format!("{} {}", NOTE_NAMES[(t.root as usize) % 12], SCALES[t.scale].0)),
+            (Pop::Octave, format!("oct {}", t.octave)),
+            (Pop::Range, format!("×{}", t.range)),
+            (Pop::Steps, format!("{} steps", t.div)),
+        ];
+        let train = c.driver.is_some() || c.motor.is_some();
+        if w.s.bpm != 0.0 && train {
+            let revs = w.rpm(ci) * w.s.beats / w.s.bpm;
+            chips.push((Pop::Revs, format!("{} rev", pretty_frac(nearest_rev(revs)))));
+        }
+        let font = FontId::proportional(14.0);
+        let mut x = 8.0f32;
+        for (pop, text) in chips {
+            let tw = ui.painter().layout_no_wrap(text.clone(), font.clone(), FG).size().x;
+            let r = Rect::from_min_size(self.scr((x as f64, y)), vec2(tw + 22.0, CHIPS_H as f32));
+            x += tw + 22.0 + 6.0;
+            let open = self.pop.map(|p| p.0) == Some(pop);
+            let resp = ui.interact(r, ui.scope_id().with(("chip", pop as u8)), egui::Sense::click());
+            ui.painter().rect_filled(r, 20.0, if open { LINE } else { PAD });
+            if open {
+                ui.painter().rect_stroke(r, 20.0, Stroke::new(1.0, HOT), egui::StrokeKind::Inside);
+            }
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, text, font.clone(), FG);
+            if resp.clicked() {
+                self.toggle_pop(pop, r);
+            }
+        }
+        false
+    }
+
+    /// The two rows of tools under the thumb: the roll's tools, then edits and the sheet's own.
+    fn notes_toolbar(&mut self, ui: &mut egui::Ui, w: &mut World, y: f64) -> bool {
+        let mut changed = false;
+        let left = 8.0;
+        let width = self.cw - 16.0;
+        let has = self.roll.as_ref().map_or(false, |r| r.has_sel());
+        let clip = self.roll.as_ref().map_or(false, |r| !r.clip.is_empty());
+        let vel = self.roll.as_ref().map_or(false, |r| r.vel);
+        let snap = self.roll.as_ref().map_or(5, |r| r.snap);
+        // row one: snap · lane · brush · euclid · shift ◀ ▶ · record · more
+        let n = 7.0;
+        let snap_w = 56.0;
+        let bw = ((width - snap_w) / n).clamp(40.0, 56.0);
+        let o = self.rect.min;
+        let at = |i: f64, row: f64| Rect::from_min_size(pos2(o.x + (left + snap_w + i * bw) as f32, o.y + (y + row * 48.0) as f32), vec2(bw as f32, 44.0));
+        let sr = Rect::from_min_size(self.scr((left, y)), vec2(snap_w as f32, 44.0));
+        let resp = ui.interact(sr, ui.scope_id().with("snap"), egui::Sense::click());
+        let open = self.pop.map(|p| p.0) == Some(Pop::Snap);
+        if open {
+            ui.painter().rect_filled(sr.shrink(2.0), 8.0, LINE);
+        }
+        ui.painter().text(sr.center() - vec2(0.0, 6.0), Align2::CENTER_CENTER, SNAPS[snap].3, FontId::proportional(15.0), HOT);
+        ui.painter().text(sr.center() + vec2(0.0, 11.0), Align2::CENTER_CENTER, "snap", FontId::proportional(10.0), DIM);
+        if resp.clicked() {
+            self.toggle_pop(Pop::Snap, sr);
+        }
+        let tools: [(Tool, bool); 7] = [(Tool::Lane, vel), (Tool::Brush, self.pop.map(|p| p.0) == Some(Pop::Brush)), (Tool::Euclid, self.pop.map(|p| p.0) == Some(Pop::Euclid)),
+            (Tool::ShiftL, false), (Tool::ShiftR, false), (Tool::Rec, self.io.recording), (Tool::More, self.pop.map(|p| p.0) == Some(Pop::More))];
+        for (i, (tool, on)) in tools.iter().enumerate() {
+            let r = at(i as f64, 0.0);
+            let resp = ui.interact(r, ui.scope_id().with(("tool", i)), egui::Sense::click());
+            if *on {
+                ui.painter().rect_filled(r.shrink(3.0), 8.0, LINE);
+            }
+            self.paint_tool(ui.painter(), *tool, r.translate(vec2(0.0, -6.0)), *on, true);
+            let cap = match tool {
+                Tool::Lane => "lane",
+                Tool::Brush => "brush",
+                Tool::Euclid => "euclid",
+                Tool::ShiftL => "earlier",
+                Tool::ShiftR => "later",
+                Tool::Rec => "record",
+                _ => "more",
+            };
+            ui.painter().text(r.center() + vec2(0.0, 13.0), Align2::CENTER_CENTER, cap, FontId::proportional(10.0), if *on { HOT } else { DIM });
+            if resp.clicked() {
+                self.buzz(6);
+                match tool {
+                    Tool::Lane => {
+                        if let Some(rl) = &mut self.roll {
+                            rl.vel = !rl.vel;
+                        }
+                    }
+                    Tool::Brush => self.toggle_pop(Pop::Brush, r),
+                    Tool::Euclid => self.toggle_pop(Pop::Euclid, r),
+                    Tool::More => self.toggle_pop(Pop::More, r),
+                    Tool::ShiftL | Tool::ShiftR => {
+                        if let Some(rl) = &mut self.roll {
+                            rl.shift(w, if *tool == Tool::ShiftL { -1.0 } else { 1.0 });
+                        }
+                        changed = true;
+                    }
+                    Tool::Rec => self.out.push(StageOut::Record),
+                    _ => {}
+                }
+            }
+        }
+        // row two: duplicate · copy · paste · delete … undo · redo · close
+        let row2: [(Tool, bool); 4] = [(Tool::Dup, has), (Tool::Copy, has), (Tool::Paste, clip), (Tool::Delete, has)];
+        let bw2 = (width / 7.0).clamp(40.0, 52.0);
+        for (i, (tool, enabled)) in row2.iter().enumerate() {
+            let r = Rect::from_min_size(self.scr((left + i as f64 * bw2, y + 48.0)), vec2(bw2 as f32, 44.0));
+            let resp = ui.interact(r, ui.scope_id().with(("edit", i)), egui::Sense::click());
+            self.paint_tool(ui.painter(), *tool, r, false, *enabled);
+            if resp.clicked() && *enabled {
+                self.buzz(6);
+                if let Some(rl) = &mut self.roll {
+                    changed |= match tool {
+                        Tool::Dup => rl.duplicate(w),
+                        Tool::Copy => {
+                            rl.copy_sel(w);
+                            false
+                        }
+                        Tool::Paste => rl.paste(w),
+                        _ => rl.delete_sel(w),
+                    };
+                }
+            }
+        }
+        let right: [(Tool, bool); 3] = [(Tool::Undo, self.edits.can_undo()), (Tool::Redo, self.edits.can_redo()), (Tool::Close, true)];
+        for (j, (tool, enabled)) in right.iter().enumerate() {
+            let r = Rect::from_min_size(self.scr((left + width - bw2 * (3 - j) as f64, y + 48.0)), vec2(bw2 as f32, 44.0));
+            let resp = ui.interact(r, ui.scope_id().with(("right", j)), egui::Sense::click());
+            self.paint_tool(ui.painter(), *tool, r, false, *enabled);
+            if resp.clicked() && *enabled {
+                self.buzz(6);
+                match tool {
+                    Tool::Undo => self.undo(w),
+                    Tool::Redo => self.redo(w),
+                    _ => {
+                        self.sheet = None;
+                        self.pop = None;
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    fn paint_tool(&mut self, p: &egui::Painter, tool: Tool, r: Rect, on: bool, enabled: bool) {
+        let ink = if !enabled { alpha(FAINT, 1.0) } else if on { HOT } else { FG };
+        let c = r.center();
+        let ir = Rect::from_center_size(c, vec2(20.0, 20.0));
+        let stroke = Stroke::new(1.6, ink);
+        match tool {
+            Tool::Lane => self.icons.paint(p, "Velocity", false, ir, ink),
+            Tool::Brush => {
+                // a pin, part full: the brush's odds and accent
+                p.circle_stroke(c, 8.0, stroke);
+                p.add(egui::Shape::convex_polygon(
+                    std::iter::once(c).chain((0..=12).map(|k| {
+                        let a = -std::f32::consts::FRAC_PI_2 + k as f32 / 12.0 * std::f32::consts::PI * 1.4;
+                        c + vec2(a.cos(), a.sin()) * 8.0
+                    })).collect(),
+                    ink,
+                    Stroke::NONE,
+                ));
+            }
+            Tool::Euclid => {
+                // pulses spread round a ring
+                p.circle_stroke(c, 8.5, Stroke::new(1.0, alpha(ink, 0.6)));
+                for k in 0..8 {
+                    let a = -std::f32::consts::FRAC_PI_2 + k as f32 / 8.0 * std::f32::consts::TAU;
+                    let q = c + vec2(a.cos(), a.sin()) * 8.5;
+                    p.circle_filled(q, if k % 3 == 0 { 2.6 } else { 1.2 }, ink);
+                }
+            }
+            Tool::ShiftL | Tool::ShiftR => {
+                let s = if tool == Tool::ShiftL { -1.0 } else { 1.0 };
+                p.add(egui::Shape::convex_polygon(vec![c + vec2(6.0 * s, 0.0), c + vec2(-4.0 * s, -6.5), c + vec2(-4.0 * s, 6.5)], ink, Stroke::NONE));
+                p.line_segment([c + vec2(-7.0 * s, -6.5), c + vec2(-7.0 * s, 6.5)], stroke);
+            }
+            Tool::Rec => {
+                p.circle_filled(c, 7.0, if enabled { BAD } else { ink });
+                if on {
+                    p.circle_stroke(c, 10.5, Stroke::new(1.5, BAD));
+                }
+            }
+            Tool::More => {
+                for k in [-6.0, 0.0, 6.0] {
+                    p.circle_filled(c + vec2(k, 0.0), 2.0, ink);
+                }
+            }
+            Tool::Dup => self.icons.paint(p, "CardStackPlus", false, ir, ink),
+            Tool::Copy => self.icons.paint(p, "Copy", false, ir, ink),
+            Tool::Paste => self.icons.paint(p, "Clipboard", false, ir, ink),
+            Tool::Delete => self.icons.paint(p, "Trash", false, ir, ink),
+            Tool::Undo => self.icons.paint(p, "Reset", false, ir, ink),
+            Tool::Redo => self.icons.paint(p, "Reset", true, ir, ink),
+            Tool::Close => self.icons.paint(p, "Cross2", false, ir, ink),
+        }
+    }
+
+    fn toggle_pop(&mut self, pop: Pop, anchor: Rect) {
+        self.pop = if self.pop.map(|p| p.0) == Some(pop) { None } else { Some((pop, anchor)) };
+        self.pop_rect = None;
+    }
+
+    /// The open popover, next to what opened it. A tap anywhere else closes it.
+    fn notes_popover(&mut self, ui: &mut egui::Ui, w: &mut World) -> bool {
+        let Some((pop, anchor)) = self.pop else {
+            self.pop_rect = None;
+            return false;
+        };
+        let Some(Sel::Cog(id)) = self.sel else { return false };
+        let Some(ci) = w.cog_ix(id) else { return false };
+        let mut changed = false;
+        let mut close = false;
+        let width: f32 = match pop {
+            Pop::Key => 300.0,
+            Pop::Revs => 260.0,
+            Pop::Euclid => 300.0,
+            Pop::Brush => 280.0,
+            _ => 220.0,
+        };
+        let est_h = self.pop_rect.map(|r| r.height()).unwrap_or(220.0);
+        let x = anchor.min.x.min(self.rect.max.x - width - 12.0).max(self.rect.min.x + 6.0);
+        let y = anchor.min.y - est_h - 8.0;
+        let area = egui::Area::new(ui.scope_id().with("notes-pop")).fixed_pos(pos2(x, y.max(self.rect.min.y + 4.0))).order(egui::Order::Foreground);
+        let k = |key| Key::Track(id, key);
+        let resp = area.show(ui.ctx(), |ui| {
+            style(ui);
+            egui::Frame::popup(ui.style()).fill(PAD).corner_radius(12.0).inner_margin(10.0).show(ui, |ui| {
+                ui.set_width(width - 20.0);
+                match pop {
+                    Pop::Key => {
+                        title(ui, "root");
+                        let cur = get(w, &k("root")).n() as usize;
+                        egui::Grid::new("roots").spacing([4.0, 4.0]).show(ui, |ui| {
+                            for (i, nn) in NOTE_NAMES.iter().enumerate() {
+                                if pick(ui, nn, i == cur, 42.0) {
+                                    set(w, &k("root"), Val::N(i as f64));
+                                    changed = true;
+                                }
+                                if i % 6 == 5 {
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                        title(ui, "scale");
+                        let Val::S(cur) = get(w, &k("scale")) else { return };
+                        ui.horizontal_wrapped(|ui| {
+                            for (sname, _) in SCALES.iter() {
+                                if pick(ui, sname, *sname == cur, 0.0) {
+                                    set(w, &k("scale"), Val::S((*sname).into()));
+                                    changed = true;
+                                }
+                            }
+                        });
+                    }
+                    Pop::Octave => {
+                        title(ui, "octave");
+                        if let Some(v) = stepper(ui, get(w, &k("octave")).n(), 1.0, 7.0) {
+                            set(w, &k("octave"), Val::N(v));
+                            changed = true;
+                        }
+                    }
+                    Pop::Range => {
+                        title(ui, "octaves on the disc");
+                        let cur = get(w, &k("range")).n();
+                        ui.horizontal(|ui| {
+                            for r in [1.0, 2.0, 3.0] {
+                                if pick(ui, &format!("×{r}"), cur == r, 56.0) {
+                                    set(w, &k("range"), Val::N(r));
+                                    changed = true;
+                                }
+                            }
+                        });
+                    }
+                    Pop::Steps => {
+                        title(ui, "steps per turn");
+                        let cur = get(w, &k("div")).n();
+                        if let Some(v) = stepper(ui, cur, 1.0, 96.0) {
+                            set(w, &k("div"), Val::N(v));
+                            changed = true;
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            for n in [8.0, 12.0, 16.0, 24.0, 32.0, 48.0] {
+                                if pick(ui, &format!("{n}"), cur == n, 42.0) {
+                                    set(w, &k("div"), Val::N(n));
+                                    changed = true;
+                                }
+                            }
+                        });
+                    }
+                    Pop::Revs => {
+                        title(ui, "turns per bar");
+                        let revs = w.rpm(ci) * w.s.beats / w.s.bpm.max(1.0);
+                        let cur = nearest_rev(revs);
+                        egui::Grid::new("revs").spacing([4.0, 4.0]).show(ui, |ui| {
+                            for (i, r) in REVS.iter().enumerate() {
+                                if pick(ui, &pretty_frac(r), *r == cur, 52.0) {
+                                    let rpm = frac(r) * w.s.bpm / w.s.beats;
+                                    w.drive(ci, rpm);
+                                    changed = true;
+                                }
+                                if i % 4 == 3 {
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                    }
+                    Pop::Snap => {
+                        title(ui, "snap");
+                        let snap = self.roll.as_ref().map_or(5, |r| r.snap);
+                        egui::Grid::new("snaps").spacing([4.0, 4.0]).show(ui, |ui| {
+                            for (i, s) in SNAPS.iter().enumerate() {
+                                if pick(ui, s.3, i == snap, 64.0) {
+                                    if let Some(r) = &mut self.roll {
+                                        r.snap = i;
+                                    }
+                                    close = true;
+                                }
+                                if i % 3 == 2 {
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                    }
+                    Pop::Brush => {
+                        title(ui, "brush: new pins, and the selected ones");
+                        ui.spacing_mut().slider_width = width - 120.0;
+                        let (p0, v0) = (self.brush.p, self.brush.v);
+                        ui.horizontal(|ui| {
+                            ui.add_sized([70.0, 30.0], egui::Label::new("odds"));
+                            ui.add(egui::Slider::new(&mut self.brush.p, 0.0..=1.0).step_by(0.01));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.add_sized([70.0, 30.0], egui::Label::new("velocity"));
+                            ui.add(egui::Slider::new(&mut self.brush.v, 0.0..=1.0).step_by(0.01));
+                        });
+                        if (self.brush.p, self.brush.v) != (p0, v0) {
+                            let (bp, bv) = (self.brush.p, self.brush.v);
+                            if let (Some(r), Some(t)) = (&self.roll, w.cogs[ci].track.as_mut()) {
+                                for &i in &r.sel {
+                                    if let Some(d) = t.dots.get_mut(i) {
+                                        if bp != p0 { d.p = bp; }
+                                        if bv != v0 { d.v = bv; }
+                                    }
+                                }
+                            }
+                            changed = true;
+                        }
+                    }
+                    Pop::Euclid => {
+                        let t = w.cogs[ci].track.as_ref().unwrap();
+                        let (rings, div) = (t.rings() as f64, t.div);
+                        title(ui, "spread pulses evenly over a ring");
+                        self.brush.eu_ring = self.brush.eu_ring.min(rings - 1.0);
+                        self.brush.eu_k = self.brush.eu_k.min(div);
+                        let note = note_name(t.ring_note(self.brush.eu_ring as i64) as i64);
+                        egui::Grid::new("eu").spacing([8.0, 4.0]).show(ui, |ui| {
+                            ui.label("ring");
+                            if let Some(v) = stepper_label(ui, self.brush.eu_ring, 0.0, rings - 1.0, &note) {
+                                self.brush.eu_ring = v;
+                            }
+                            ui.end_row();
+                            ui.label("pulses");
+                            if let Some(v) = stepper(ui, self.brush.eu_k, 0.0, div) {
+                                self.brush.eu_k = v;
+                            }
+                            ui.end_row();
+                            ui.label("rotate");
+                            if let Some(v) = stepper(ui, self.brush.eu_rot, 0.0, div - 1.0) {
+                                self.brush.eu_rot = v;
+                            }
+                            ui.end_row();
+                        });
+                        // the preview: one cell per step, the pulses lit
+                        let n = div as i64;
+                        let (kk, rot) = (self.brush.eu_k as i64, self.brush.eu_rot as i64);
+                        let (rr, _) = ui.allocate_exact_size(vec2(width - 20.0, 22.0), egui::Sense::hover());
+                        let cell = rr.width() / n.max(1) as f32;
+                        for j in 0..n {
+                            let on = kk > 0 && ((j + rot) * kk).rem_euclid(n.max(1)) < kk;
+                            let cr = Rect::from_min_size(pos2(rr.min.x + j as f32 * cell, rr.min.y), vec2((cell - 1.0).max(1.0), 22.0));
+                            ui.painter().rect_filled(cr, 2.0, if on { HOT } else { LINE });
+                        }
+                        ui.add_space(6.0);
+                        if ui.add_sized([width - 20.0, 40.0], egui::Button::new(RichText::new("fill the ring").color(BG)).fill(HOT)).clicked() {
+                            let b = (self.brush.eu_ring, self.brush.eu_k as i64, self.brush.eu_rot as i64, self.brush.p, self.brush.v);
+                            if let Some(r) = &mut self.roll {
+                                r.euclid(w, b.0, b.1, b.2, b.3, b.4);
+                            }
+                            changed = true;
+                        }
+                    }
+                    Pop::More => {
+                        let readers: Vec<u32> = w.readers.iter().filter(|r| r.on == Some(id)).map(|r| r.id).collect();
+                        for rid in readers {
+                            if ui.add_sized([width - 20.0, 40.0], egui::Button::new(format!("edit reader {rid}'s patch"))).clicked() {
+                                self.select(Some(Sel::Reader(rid)));
+                                self.sheet = None;
+                                self.out.push(StageOut::OpenEditor("patch"));
+                                close = true;
+                            }
+                        }
+                        if ui.add_sized([width - 20.0, 40.0], egui::Button::new("clear all pins")).clicked() {
+                            if let Some(t) = w.cogs[ci].track.as_mut() {
+                                t.dots.clear();
+                            }
+                            if let Some(r) = &mut self.roll {
+                                r.sel.clear();
+                            }
+                            changed = true;
+                            close = true;
+                        }
+                        if ui.add_sized([width - 20.0, 40.0], egui::Button::new(RichText::new("drop the track").color(BAD))).clicked() {
+                            w.cogs[ci].track = None;
+                            self.sheet = None;
+                            changed = true;
+                            close = true;
+                        }
+                    }
+                }
+            });
+        });
+        let r = resp.response.rect;
+        self.pop_rect = Some(r);
+        // a press outside the popover and its opener closes it
+        let pressed = ui.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None });
+        if let Some(p) = pressed {
+            if !r.contains(p) && !anchor.contains(p) {
+                close = true;
+            }
+        }
+        if close {
+            self.pop = None;
+            self.pop_rect = None;
+        }
+        changed
+    }
     // ---------- the panel ----------
     fn show_panel(&mut self, ui: &mut egui::Ui, w: &mut World, top: f64, min: bool, extra: &mut dyn FnMut(&mut egui::Ui, &mut World)) {
         if min {
@@ -1101,9 +1390,36 @@ pub(super) fn style(ui: &mut egui::Ui) {
     s.spacing.interact_size = vec2(44.0, 22.0);
     s.spacing.slider_width = 150.0;
     s.spacing.button_padding = vec2(10.0, 6.0);
-    for (_, f) in s.text_styles.iter_mut() {
-        f.family = egui::FontFamily::Monospace;
-    }
+    // the sheets read in the proportional face, at a few steady sizes
+    use egui::TextStyle as T;
+    s.text_styles.insert(T::Body, FontId::proportional(14.0));
+    s.text_styles.insert(T::Button, FontId::proportional(14.0));
+    s.text_styles.insert(T::Small, FontId::proportional(11.0));
+    s.text_styles.insert(T::Heading, FontId::proportional(17.0));
+}
+/// A popover's title.
+fn title(ui: &mut egui::Ui, t: &str) {
+    ui.label(RichText::new(t).size(12.0).color(DIM));
+    ui.add_space(2.0);
+}
+/// A choice button, lit when chosen; min width w (0: fit).
+fn pick(ui: &mut egui::Ui, text: &str, on: bool, w: f32) -> bool {
+    let b = egui::Button::new(RichText::new(text).color(if on { BG } else { FG })).fill(if on { HOT } else { LINE }).min_size(vec2(w.max(40.0), 40.0));
+    ui.add(b).clicked()
+}
+/// A stepper showing a label instead of the number.
+fn stepper_label(ui: &mut egui::Ui, v: f64, lo: f64, hi: f64, label: &str) -> Option<f64> {
+    let mut out = None;
+    ui.horizontal(|ui| {
+        if ui.add_sized([40.0, 40.0], egui::Button::new("−")).clicked() && v > lo {
+            out = Some(v - 1.0);
+        }
+        ui.add_sized([48.0, 40.0], egui::Label::new(RichText::new(label).size(15.0)));
+        if ui.add_sized([40.0, 40.0], egui::Button::new("+")).clicked() && v < hi {
+            out = Some(v + 1.0);
+        }
+    });
+    out
 }
 fn legend(ui: &mut egui::Ui, t: &str) {
     ui.add_space(8.0);

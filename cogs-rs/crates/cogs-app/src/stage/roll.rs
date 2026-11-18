@@ -100,6 +100,8 @@ pub struct Roll {
     preview: Option<(u32, f64)>,
     /// A finger on the piano keys.
     keys: Option<u64>,
+    /// The Euclid popover's pattern, ghosted on its ring: (ring, pulses, rotation).
+    pub ghost: Option<(f64, i64, i64)>,
 }
 
 impl Roll {
@@ -107,7 +109,7 @@ impl Roll {
         Roll {
             cog, zoom: 1.0, sx: 0.0, sy: 0.0, sel: Vec::new(), snap: 5, vel: false, clip: Vec::new(), status: None, anchor: None,
             pen_len: HashMap::new(), press: None, marquee: None, grabbed: None, touches: BTreeMap::new(), two: None, pan: None, hold: None,
-            last_tap: None, second: None, lane_on: false, preview: None, keys: None,
+            last_tap: None, second: None, lane_on: false, preview: None, keys: None, ghost: None,
         }
     }
     /// A new disc: the same roll settings, a fresh selection.
@@ -120,15 +122,18 @@ impl Roll {
             self.sy = 0.0;
         }
     }
+    /// The strip's geometry in a box rect_w wide and max_h tall: the rows fill the box at zoom 1.
     pub fn geo(&self, w: &World, rect_w: f64, max_h: f64) -> Option<Geo> {
         let c = w.cog(self.cog)?;
         let t = c.track.as_ref()?;
-        let row = (ROW0 * self.zoom).round().max(8.0);
+        let lane = if self.vel { LANE_H } else { 0.0 };
+        let base = if max_h.is_finite() { ((max_h - lane) / t.rings().max(1) as f64).floor().clamp(24.0, 140.0) } else { ROW0 };
+        let row = (base * self.zoom).round().max(8.0);
         let div = t.div.max(1.0);
         let cw = ((MIN_CELL.max(((rect_w - LABEL) / div).floor())) * self.zoom).round().max(4.0);
         let rings = t.rings();
-        let h = row * rings as f64 + if self.vel { LANE_H } else { 0.0 };
-        Some(Geo { rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(rect_w as f32, h.min(max_h) as f32)), row, cw, div, rings, lane: self.vel })
+        let h = if max_h.is_finite() { max_h } else { row * rings as f64 + lane };
+        Some(Geo { rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(rect_w as f32, h as f32)), row, cw, div, rings, lane: self.vel })
     }
     fn clamp_scroll(&mut self, g: &Geo) {
         let bw = g.rect.width() as f64;
@@ -761,7 +766,7 @@ impl Roll {
         let (col, row, d0, z0) = (t.col, t.row, t.d, t.z);
         let _ = t.mid0;
         self.zoom = (z0 * d / d0).clamp(0.4, 3.0);
-        let Some(g2) = self.geo(w, g.rect.width() as f64, f64::INFINITY) else { return };
+        let Some(g2) = self.geo(w, g.rect.width() as f64, g.rect.height() as f64) else { return };
         self.sx = LABEL + col * g2.cw - mid.0;
         self.sy = row * g2.row - mid.1;
         let mut g3 = *g;
@@ -881,6 +886,16 @@ impl Roll {
                 }
             }
         }
+        if let Some((ring, k, rot)) = self.ghost {
+            let n = g.div as i64;
+            let y = oy + (rings as f64 - 1.0 - ring) * rh;
+            for j in 0..n {
+                if k > 0 && ((j + rot) * k).rem_euclid(n.max(1)) < k {
+                    let x = ox + j as f64 * g.cw;
+                    p.rect_stroke(Rect::from_min_max(xy(x + 2.0, y + 2.0), xy(x + g.cw - 2.0, y + rh - 2.0)), 3.0, Stroke::new(1.5, alpha(HOT, 0.8)), egui::StrokeKind::Inside);
+                }
+            }
+        }
         for (ri, u) in Roll::playheads(w, ci) {
             let x = ox + u * gw;
             p.line_segment([xy(x, oy), xy(x, oy + g.h())], Stroke::new(2.0, pen.hot(w.readers[ri].flash, READ)));
@@ -899,7 +914,7 @@ impl Roll {
             let y = oy + row as f64 * rh;
             let black = [1, 3, 6, 8, 10].contains(&note.rem_euclid(12));
             kp.rect_filled(Rect::from_min_size(xy(r.min.x as f64, y), vec2(LABEL as f32, rh as f32)), 0.0, if black { BG } else { PAD });
-            kp.text(xy(r.min.x as f64 + 2.0, y + rh / 2.0), Align2::LEFT_CENTER, note_name(note), FontId::monospace(10.0), FG);
+            kp.text(xy(r.min.x as f64 + 4.0, y + rh / 2.0), Align2::LEFT_CENTER, note_name(note), FontId::proportional(11.0), if black { DIM } else { FG });
             kp.rect_filled(Rect::from_min_size(xy(r.min.x as f64, y + rh - 1.0), vec2(LABEL as f32, 1.0)), 0.0, FAINT);
         }
         let _ = now;
@@ -936,7 +951,7 @@ impl Roll {
         }
         let tag = Rect::from_min_size(lane.min, vec2(LABEL as f32, LANE_H as f32));
         p.rect_filled(tag, 0.0, BG);
-        p.text(tag.center(), Align2::CENTER_CENTER, "vel", FontId::monospace(11.0), DIM);
+        p.text(tag.center(), Align2::CENTER_CENTER, "vel", FontId::proportional(11.0), DIM);
     }
 }
 

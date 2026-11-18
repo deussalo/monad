@@ -5,7 +5,7 @@
 use super::draw::*;
 use super::*;
 use cogs_sim::{Part, VoiceKind, SCALES};
-use egui::{vec2, Stroke};
+use egui::{vec2, Align2, FontId, Stroke};
 use serde_json::{json, Value};
 
 pub const BEZEL_W: f64 = 19.0;
@@ -68,6 +68,8 @@ pub enum Fmt {
 pub enum Act {
     Link(Sel),
     Share,
+    /// Open the part's synth patch editor.
+    Patch,
 }
 
 #[derive(Clone, Debug)]
@@ -156,6 +158,14 @@ pub struct Bezel {
     pub r: f64,
     pub sectors: Vec<Sector>,
     pub owner: Option<Sel>,
+    /// Half the ring's width.
+    pub bw: f64,
+    /// Sectors say what they are in words, with their values.
+    pub labels: bool,
+    /// The middle says whose bezel it is.
+    pub hub: Option<(String, String)>,
+    /// A compact bezel beside its part: the point on the part its leader runs to.
+    pub leader: Option<(f64, f64)>,
 }
 
 // ---------- reading and writing ----------
@@ -511,7 +521,7 @@ impl Stage {
         }
         let ring = |me: &Stage, at: (f64, f64), size: f64, sectors: Vec<Sector>, owner: Sel| {
             let c = me.to_screen(w, at.0, at.1);
-            Bezel { cx: c.0, cy: c.1, r: (size + 46.0).clamp(92.0, 132.0), sectors, owner: Some(owner) }
+            Bezel { cx: c.0, cy: c.1, r: (size + 46.0).clamp(92.0, 132.0), sectors, owner: Some(owner), bw: BEZEL_W, labels: false, hub: None, leader: None }
         };
         let z = w.s.zoom;
         let b = match self.sel {
@@ -520,18 +530,30 @@ impl Stage {
                     None
                 } else {
                     let (t, bt) = (self.safe_top, self.shelf_top());
-                    Some(Bezel { cx: self.cw / 2.0, cy: (t + bt) / 2.0, r: self.cw.min(bt - t) / 2.0 - 44.0, sectors: room_sectors(), owner: None })
+                    Some(Bezel { cx: self.cw / 2.0, cy: (t + bt) / 2.0, r: self.cw.min(bt - t) / 2.0 - 44.0, sectors: room_sectors(), owner: None, bw: BEZEL_W, labels: false, hub: None, leader: None })
                 }
             }
             Some(s @ Sel::Pad(i)) => w.pads.iter().find(|o| o.id == i).map(|o| ring(self, (o.x, o.y), o.r * z, voice_sectors(w, Part::Pad(i), true), s)),
             Some(s @ Sel::Reader(i)) => w.readers.iter().find(|o| o.id == i).map(|r| {
-                let mut sec = voice_sectors(w, Part::Reader(i), false);
+                let p = Part::Reader(i);
+                let wave = r.voice.kind == VoiceKind::Wave;
+                let mut sec = Vec::new();
+                if wave {
+                    sec.push(Sector::action("patch", "edit patch".into(), Act::Patch));
+                    sec.push(Sector::num("level", "volume", Key::Voice(p, "level"), 0.0, 1.5, 0.01));
+                    sec.push(Sector::num("vel", "vel sense", Key::Voice(p, "velSense"), 0.0, 1.0, 0.01));
+                    sec.push(Sector::choice("kind", "voice", Key::VoiceKind(p), strs(&KINDS), Fmt::Kind));
+                } else {
+                    sec = voice_sectors(w, p, false);
+                }
                 if r.tines != 0.0 {
-                    sec.push(Sector::num("comb", "comb tines", Key::Reader(i, "tines"), 1.0, 36.0, 1.0));
+                    sec.push(Sector::num("comb", "tines", Key::Reader(i, "tines"), 1.0, 36.0, 1.0));
                     sec.push(Sector::num("fork", "comb note", Key::Reader(i, "combBase"), 12.0, 108.0, 1.0));
                     sec.push(Sector::choice("scale", "comb scale", Key::Reader(i, "combScale"), strs(&SCALES.map(|s| s.0)), Fmt::Plain));
                 }
-                ring(self, ((r.x1 + r.x2) / 2.0, (r.y1 + r.y2) / 2.0), (r.x2 - r.x1).hypot(r.y2 - r.y1) * z / 2.0, sec, s)
+                let name = r.voice.raw.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()).unwrap_or_else(|| kind_label(r.voice.kind.name()));
+                let what = if r.tines != 0.0 { "comb" } else { "reader" };
+                self.beside(w, ((r.x1, r.y1), (r.x2, r.y2)), sec, s, (format!("{what} {i}"), name))
             }),
             Some(s @ Sel::String(i)) => w.strings.iter().find(|o| o.id == i).map(|o| {
                 let k = |key| Key::Str(i, key);
@@ -545,7 +567,7 @@ impl Stage {
                     Sector::num("level", "level", k("level"), 0.0, 1.5, 0.01),
                     Sector::num("vel", "velocity sense", k("velSense"), 0.0, 1.0, 0.01),
                 ];
-                ring(self, ((o.x1 + o.x2) / 2.0, (o.y1 + o.y2) / 2.0), o.len() * z / 2.0, sec, s)
+                self.beside(w, ((o.x1, o.y1), (o.x2, o.y2)), sec, s, (format!("{} {i}", o.kind), note_name(o.midi().round() as i64)))
             }),
             Some(s @ Sel::Cam(i)) => w.cams.iter().find(|o| o.id == i).map(|m| {
                 let k = |key| Key::Cam(i, key);
@@ -640,7 +662,7 @@ impl Stage {
                 let (t, bt) = (self.safe_top, self.shelf_top());
                 let r = (c.radius() * z + 40.0).max(92.0).min(self.cw.min(bt - t) / 2.0 - BEZEL_W - 8.0);
                 let sc = self.to_screen(w, c.x, c.y);
-                Bezel { cx: sc.0, cy: sc.1, r, sectors: sec, owner: Some(s) }
+                Bezel { cx: sc.0, cy: sc.1, r, sectors: sec, owner: Some(s), bw: BEZEL_W, labels: false, hub: None, leader: None }
             }),
             _ => None,
         };
@@ -651,9 +673,60 @@ impl Stage {
         }
         b
     }
+    /// A compact bezel beside a long part (a reader, a string): the spot near it, on screen, that covers the fewest
+    /// other parts, joined to it by a leader.
+    fn beside(&self, w: &World, seg: ((f64, f64), (f64, f64)), sectors: Vec<Sector>, owner: Sel, hub: (String, String)) -> Bezel {
+        const R: f64 = 58.0;
+        const BW: f64 = 26.0;
+        let a = self.to_screen(w, seg.0 .0, seg.0 .1);
+        let b = self.to_screen(w, seg.1 .0, seg.1 .1);
+        let mid = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+        let len = dist(a, b).max(1.0);
+        let (ux, uy) = ((b.0 - a.0) / len, (b.1 - a.1) / len);
+        let out = R + BW + 10.0;
+        let mut cand = Vec::new();
+        for t in [-1.0, 1.0] {
+            // past either end, and to either side of the middle and of each end
+            cand.push((mid.0 + ux * t * (len / 2.0 + out), mid.1 + uy * t * (len / 2.0 + out)));
+            cand.push((mid.0 - uy * t * out, mid.1 + ux * t * out));
+            for e in [a, b] {
+                cand.push((e.0 - uy * t * out, e.1 + ux * t * out));
+            }
+        }
+        for k in 0..12 {
+            let ang = k as f64 * TAU / 12.0;
+            cand.push((mid.0 + ang.cos() * (out + 30.0), mid.1 + ang.sin() * (out + 30.0)));
+        }
+        let (t, bt) = (self.safe_top, self.shelf_top() - 110.0);
+        let rr = R + BW;
+        let z = w.s.zoom;
+        let cost = |c: (f64, f64)| {
+            let mut k = 0.0;
+            // off the open stage
+            let m = rr + 6.0;
+            k += 8.0 * ((m - c.0).max(0.0) + (c.0 - (self.cw - m)).max(0.0) + (t + m - c.1).max(0.0) + (c.1 - (bt - m)).max(0.0));
+            for cg in &w.cogs {
+                let s = self.to_screen(w, cg.x, cg.y);
+                k += (rr + cg.radius() * z - dist(c, s)).max(0.0).min(2.0 * rr);
+            }
+            for p in &w.pads {
+                let s = self.to_screen(w, p.x, p.y);
+                k += 2.0 * (rr + p.r * z - dist(c, s)).max(0.0);
+            }
+            for p in &w.pits {
+                let s = self.to_screen(w, p.x, p.y);
+                k += (rr + p.w / 2.0 * z - dist(c, s)).max(0.0).min(2.0 * rr);
+            }
+            // its own part, under the ring
+            k += 3.0 * (rr + 8.0 - super::seg_dist(c, a.0, a.1, b.0, b.1)).max(0.0);
+            k + 0.05 * dist(c, mid)
+        };
+        let best = cand.into_iter().min_by(|p, q| cost(*p).partial_cmp(&cost(*q)).unwrap()).unwrap_or(mid);
+        Bezel { cx: best.0, cy: best.1, r: R, sectors, owner: Some(owner), bw: BW, labels: true, hub: Some(hub), leader: Some(mid) }
+    }
     pub(super) fn bezel_hit(b: &Bezel, s: (f64, f64)) -> Option<usize> {
         let d = dist(s, (b.cx, b.cy));
-        if (d - b.r).abs() > BEZEL_W + 6.0 || b.sectors.is_empty() {
+        if (d - b.r).abs() > b.bw + 6.0 || b.sectors.is_empty() {
             return None;
         }
         let a = cogs_sim::wrap((s.1 - b.cy).atan2(s.0 - b.cx) + std::f64::consts::FRAC_PI_2);
@@ -662,7 +735,10 @@ impl Stage {
     /// Keep a new bezel on screen: slide the camera, never zoom.
     pub(super) fn reveal(&mut self, w: &World) {
         let Some(b) = self.active_bezel(w) else { return };
-        let m = b.r + BEZEL_W + 8.0;
+        if b.leader.is_some() {
+            return;
+        }
+        let m = b.r + b.bw + 8.0;
         let dx = if b.cx < m { b.cx - m } else if b.cx > self.cw - m { b.cx - (self.cw - m) } else { 0.0 };
         let (t, bt) = (self.safe_top, self.shelf_top());
         let dy = if b.cy < t + m { b.cy - t - m } else if b.cy > bt - m { b.cy - (bt - m) } else { 0.0 };
@@ -715,6 +791,10 @@ impl Stage {
                     self.say(format!("{} {}: {say}", o.name(), super::shelf::sel_id(*o)), true);
                 }
                 Act::Share => self.share(w),
+                Act::Patch => {
+                    self.buzz(10);
+                    self.out.push(StageOut::OpenEditor("patch"));
+                }
             }
         } else if let (Some(opts), Some(key)) = (&p.options, &p.key) {
             let cur = get(w, key);
@@ -748,7 +828,25 @@ impl Stage {
         let e = 1.0 - (1.0 - k).powi(4);
         let r = b.r * (0.7 + 0.3 * e);
         let ea = e as f32;
-        let at = |a: f64, rr: f64| self.scr((b.cx + a.cos() * rr, b.cy + a.sin() * rr));
+        let o = self.rect.min;
+        let at = |a: f64, rr: f64| pos2(o.x + (b.cx + a.cos() * rr) as f32, o.y + (b.cy + a.sin() * rr) as f32);
+        if let Some(l) = b.leader {
+            // the leader, from the ring's edge to the part
+            let (dx, dy) = (l.0 - b.cx, l.1 - b.cy);
+            let dd = (dx * dx + dy * dy).sqrt().max(1.0);
+            let from = (b.cx + dx / dd * (r + b.bw), b.cy + dy / dd * (r + b.bw));
+            if dd > r + b.bw {
+                p.extend(egui::Shape::dashed_line(&[self.scr(from), self.scr(l)], Stroke::new(1.0, alpha(SEL, 0.7 * ea)), 3.0, 3.0));
+                p.circle_filled(self.scr(l), 2.5, alpha(SEL, ea));
+            }
+            // a disc behind the ring, so it reads over the machine
+            p.circle_filled(self.scr((b.cx, b.cy)), (r + b.bw + 1.0) as f32, alpha(BG, 0.92 * ea));
+            if let Some((who, what)) = &b.hub {
+                p.text(self.scr((b.cx, b.cy - 7.0)), Align2::CENTER_CENTER, who, FontId::proportional(11.0), alpha(DIM, ea));
+                let what: String = if what.chars().count() > 14 { what.chars().take(13).collect::<String>() + "…" } else { what.clone() };
+                p.text(self.scr((b.cx, b.cy + 8.0)), Align2::CENTER_CENTER, what, FontId::proportional(12.0), alpha(FG, ea));
+            }
+        }
         let active_i = match &self.gesture {
             Some(Active { g: super::gesture::Gesture::Bezel { i, .. }, .. }) => Some(*i),
             _ => None,
@@ -759,15 +857,16 @@ impl Stage {
             let am = (a0 + a1) / 2.0;
             let active = active_i == Some(i);
             // the wedge
-            let m = ((a1 - a0) * (r + BEZEL_W) / 4.0).ceil().max(4.0) as usize;
+            let m = ((a1 - a0) * (r + b.bw) / 4.0).ceil().max(4.0) as usize;
             let mut mesh = egui::epaint::Mesh::default();
-            let fill = alpha(if active { PAD } else { BG }, ea);
+            let patch = matches!(sec.action, Some(Act::Patch));
+            let fill = alpha(if active || patch { PAD } else { BG }, ea);
             let mut outline = Vec::new();
             for j in 0..=m {
                 let a = a0 + (a1 - a0) * j as f64 / m as f64;
-                mesh.colored_vertex(at(a, r - BEZEL_W), fill);
-                mesh.colored_vertex(at(a, r + BEZEL_W), fill);
-                outline.push(at(a, r + BEZEL_W));
+                mesh.colored_vertex(at(a, r - b.bw), fill);
+                mesh.colored_vertex(at(a, r + b.bw), fill);
+                outline.push(at(a, r + b.bw));
             }
             for j in 0..m as u32 {
                 let q = 2 * j;
@@ -776,10 +875,10 @@ impl Stage {
             }
             p.add(egui::Shape::mesh(mesh));
             for j in (0..=m).rev() {
-                outline.push(at(a0 + (a1 - a0) * j as f64 / m as f64, r - BEZEL_W));
+                outline.push(at(a0 + (a1 - a0) * j as f64 / m as f64, r - b.bw));
             }
-            p.add(egui::Shape::closed_line(outline, Stroke::new(1.0, alpha(FAINT, ea))));
-            let rv = r + BEZEL_W - 5.0;
+            p.add(egui::Shape::closed_line(outline, Stroke::new(if patch { 1.5 } else { 1.0 }, alpha(if patch { HOT } else { FAINT }, ea))));
+            let rv = r + b.bw - 5.0;
             let val = sec.key.as_ref().map(|k| get(w, k));
             let mut ink = if sec.toggle { if val.as_ref().map_or(0.0, |v| v.n()) != 0.0 { HOT } else { DIM } } else if active { HOT } else { FG };
             if sec.action.is_some() && matches!(sec.action, Some(Act::Share)) && self.now - self.seal_at < 0.9 {
@@ -804,6 +903,24 @@ impl Stage {
                 arc(a0 + 0.08, a1 - 0.08, 1.0, alpha(DIM, ea));
                 arc(a0 + 0.08, ae.max(a0 + 0.081), 2.0, alpha(FG, ea));
                 p.circle_filled(at(ae, rv), 2.6, alpha(HOT, ea));
+            }
+            if b.labels {
+                // words: the label, and the value under it (an action: its glyph and its name)
+                let c = at(am, r - 2.0);
+                if patch {
+                    self.icons.paint(p, "MixerVertical", false, Rect::from_center_size(c - vec2(0.0, 7.0), vec2(16.0, 16.0)), alpha(HOT, ea));
+                    p.text(c + vec2(0.0, 10.0), Align2::CENTER_CENTER, "patch", FontId::proportional(11.0), alpha(HOT, ea));
+                    continue;
+                }
+                let label: String = sec.label.chars().take(10).collect();
+                p.text(c - vec2(0.0, 7.0), Align2::CENTER_CENTER, label, FontId::proportional(10.0), alpha(DIM, ea));
+                if let Some(v) = &val {
+                    let text: String = sec.format(v).chars().take(9).collect();
+                    p.text(c + vec2(0.0, 7.0), Align2::CENTER_CENTER, text, FontId::proportional(12.5), alpha(if active { HOT } else { FG }, ea));
+                } else {
+                    p.text(c + vec2(0.0, 7.0), Align2::CENTER_CENTER, "tap", FontId::proportional(12.0), alpha(FG, ea));
+                }
+                continue;
             }
             // the icon
             let c = at(am, r - 4.0);
