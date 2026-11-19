@@ -91,6 +91,9 @@ impl Geo {
     }
 }
 
+/// The keys the roll's previews sound under: clear of a part's own (id × 128 + note) and of the synth editor's.
+pub const PREVIEW_KEYS: u32 = 0x7000_0000;
+
 pub struct Roll {
     pub cog: u32,
     /// Zoom across (time) and down (rows), each within its bounds.
@@ -116,6 +119,8 @@ pub struct Roll {
     second: Option<usize>,
     lane_on: bool,
     preview: Option<(u32, f64)>,
+    /// Counts previews, so each sounds under a key of its own (see `play`).
+    preview_n: u32,
     /// A finger on the piano keys.
     keys: Option<u64>,
     /// The Euclid popover's pattern, ghosted on its ring: (ring, pulses, rotation).
@@ -127,7 +132,7 @@ impl Roll {
         Roll {
             cog, zx: 1.0, zy: 1.0, sx: 0.0, sy: 0.0, sel: Vec::new(), snap: 5, vel: false, clip: Vec::new(), status: None, anchor: None,
             pen_len: HashMap::new(), press: None, marquee: None, grabbed: None, touches: BTreeMap::new(), two: None, pan: None, hold: None,
-            last_tap: None, second: None, lane_on: false, preview: None, keys: None, ghost: None,
+            last_tap: None, second: None, lane_on: false, preview: None, preview_n: 0, keys: None, ghost: None,
         }
     }
     /// A new disc: the same roll settings, a fresh selection.
@@ -270,9 +275,12 @@ impl Roll {
         let Some(c) = w.cog(self.cog) else { return };
         let t = c.track.as_ref().unwrap();
         let reader = w.readers.iter().find(|r| super::seg_dist((c.x, c.y), r.x1, r.y1, r.x2, r.y2) < c.radius()).map(|r| Part::Reader(r.id));
-        let key = c.id * 128 + 127;
-        if self.preview.is_some() {
-            out.push(StageOut::AuditionOff { key, after: 0.0 });
+        // a key of its own each time: the app lets go of the last preview after sending this one, and under one key
+        // that release cut the new pitch off as it began, so a drag across rows was all but silent
+        self.preview_n = self.preview_n.wrapping_add(1);
+        let key = PREVIEW_KEYS | (self.preview_n & 0x00ff_ffff);
+        if let Some((last, _)) = self.preview {
+            out.push(StageOut::AuditionOff { key: last, after: 0.0 });
         }
         out.push(StageOut::Audition { part: reader, midi: t.ring_note(ring as i64), key });
         self.preview = Some((key, now));
