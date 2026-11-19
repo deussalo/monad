@@ -32,7 +32,7 @@ pub fn cam_shape(name: &str) -> Vec<f64> {
 }
 pub fn new_cam(id: u32) -> Cam {
     Cam {
-        id, cog: 0, ang: 0.0, phase: 0.0, shape: "sine".into(), prof: cam_shape("sine"), to: None, macro_: 1, lo: 0.0, hi: 1.0, ver: 0,
+        id, cog: 0, ang: 0.0, phase: 0.0, shape: "sine".into(), prof: cam_shape("sine"), to: None, macro_: 1, more: Vec::new(), lo: 0.0, hi: 1.0, ver: 0,
         cog_ix: 0, to_ix: None,
     }
 }
@@ -149,22 +149,17 @@ impl World {
     /// Every macro a cam or probe turns on a synth (wave) part, as programs (motion.js postMotions: the first for a
     /// part's slot wins, cams before probes).
     pub fn motions<'a>(&'a self, out: &mut impl FnMut(Motion<'a>)) {
-        let mut seen: [(Part, u8); 32] = [(Part::Pad(0), 255); 32];
-        let mut n_seen = 0;
+        let mut seen: Vec<(Part, u8)> = Vec::new();
         let mut take = |m: &Motion| {
-            if seen[..n_seen].iter().any(|s| s.0 == m.target && s.1 == m.slot) {
+            if seen.iter().any(|s| s.0 == m.target && s.1 == m.slot) {
                 return false;
             }
-            if n_seen < seen.len() {
-                seen[n_seen] = (m.target, m.slot);
-                n_seen += 1;
-            }
+            seen.push((m.target, m.slot));
             true
         };
         for m in &self.cams {
-            let Some(ri) = m.to_ix else { continue };
-            let rd = &self.readers[ri];
-            if rd.voice.kind != VoiceKind::Wave {
+            let first = m.to_ix.map(|ri| (Part::Reader(self.readers[ri].id), m.macro_));
+            if first.is_none() && m.more.is_empty() {
                 continue;
             }
             let c = &self.cogs[m.cog_ix];
@@ -173,18 +168,25 @@ impl World {
             } else {
                 (self.clock.sim_t, m.u(c.th), -c.w / TAU)
             };
-            let mo = Motion {
-                target: Part::Reader(rd.id), slot: (m.macro_ - 1).clamp(0, 7) as u8, from: MotionFrom::Cam(m.id), table: &m.prof, value: 0.0,
-                step: m.stepped(), t0, ph0, rate, lo: m.lo, hi: m.hi, glide: 0.0, sig: m.ver as u64,
-            };
-            if take(&mo) {
-                out(mo);
+            for (target, mac) in first.into_iter().chain(m.more.iter().map(|l| (l.to, l.macro_))) {
+                if self.voice(target).map(|v| v.kind) != Some(VoiceKind::Wave) {
+                    continue;
+                }
+                let mo = Motion {
+                    target, slot: (mac - 1).clamp(0, 7) as u8, from: MotionFrom::Cam(m.id), table: &m.prof, value: 0.0,
+                    step: m.stepped(), t0, ph0, rate, lo: m.lo, hi: m.hi, glide: 0.0, sig: m.ver as u64,
+                };
+                if take(&mo) {
+                    out(mo);
+                }
             }
         }
         for pr in &self.probes {
-            if let Some(mo) = self.probe_program(pr) {
-                if take(&mo) {
-                    out(mo);
+            for (target, mac) in pr.to.map(|t| (t, pr.macro_)).into_iter().chain(pr.more.iter().map(|l| (l.to, l.macro_))) {
+                if let Some(mo) = self.probe_program_to(pr, target, mac) {
+                    if take(&mo) {
+                        out(mo);
+                    }
                 }
             }
         }

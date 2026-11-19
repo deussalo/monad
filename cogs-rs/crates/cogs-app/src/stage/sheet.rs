@@ -66,8 +66,8 @@ const BALLS_ROW: f64 = 80.0;
 const BALLS_LOW: i32 = 48;
 const BALLS_HIGH: i32 = 83;
 /// The toolbars' small words, and what a tool that can't act now looks like: dimmed, still legible.
-const CAPTION: Color32 = Color32::from_rgb(0x9a, 0x9a, 0x9a);
-const DISABLED: Color32 = Color32::from_rgb(0x5c, 0x5c, 0x5c);
+const CAPTION: Color32 = super::pen::CAPTION;
+const DISABLED: Color32 = super::pen::RAISE;
 
 /// The notes sheet's popovers.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -931,9 +931,9 @@ impl Stage {
                     let on = notes.contains(&m);
                     let fill = if on { HOT } else if resp.is_pointer_button_down_on() { LINE } else { PAD };
                     ui.painter().rect_filled(r, 6.0, fill);
-                    ui.painter().text(r.center(), Align2::CENTER_CENTER, note_name(m as i64), FontId::proportional(11.0), if on { Color32::BLACK } else { DIM });
+                    ui.painter().text(r.center(), Align2::CENTER_CENTER, note_name(m as i64), FontId::proportional(11.0), if on { super::pen::INK } else { DIM });
                     if balls.contains(&m) {
-                        ui.painter().circle_filled(r.right_top() + vec2(-6.0, 6.0), 2.5, if on { Color32::BLACK } else { FG });
+                        ui.painter().circle_filled(r.right_top() + vec2(-6.0, 6.0), 2.5, if on { super::pen::INK } else { FG });
                     }
                     if resp.clicked() {
                         tapped = Some(m);
@@ -1322,25 +1322,7 @@ impl Stage {
                 for (key, l) in [("phase", "phase"), ("lo", "low"), ("hi", "high")] {
                     ch |= key_row(ui, l, &k(key), w, 0.0, 1.0, 0.01);
                 }
-                ch |= key_row(ui, "macro", &k("macro"), w, 1.0, 8.0, 1.0);
-                let synths: Vec<u32> = w.readers.iter().filter(|r| r.voice.kind == VoiceKind::Wave).map(|r| r.id).collect();
-                let cur = w.cams.iter().find(|m| m.id == id).and_then(|m| m.to);
-                ui.label("turns");
-                egui::ComboBox::from_id_salt("cam-to").selected_text(cur.map(|r| format!("reader {r}")).unwrap_or("nothing".into())).show_ui(ui, |ui| {
-                    if ui.selectable_label(cur.is_none(), "nothing").clicked() {
-                        if let Some(m) = w.cams.iter_mut().find(|m| m.id == id) {
-                            m.to = None;
-                        }
-                        st = true;
-                    }
-                    for r in synths {
-                        if ui.selectable_label(cur == Some(r), format!("reader {r}")).clicked() {
-                            w.link_cam(id, r);
-                            st = true;
-                        }
-                    }
-                });
-                ui.end_row();
+                st |= link_rows(ui, w, cogs_sim::MotionFrom::Cam(id), false);
                 if let Some(m) = w.cams.iter().find(|m| m.id == id) {
                     ro_row(ui, "travel", format!("{}%", (w.cam_lift(m) * 100.0).round()));
                 }
@@ -1373,12 +1355,13 @@ impl Stage {
                 });
                 ui.end_row();
                 match cur.and_then(|t| w.voice(t)).map(|v| v.kind) {
-                    Some(VoiceKind::Wave) => ch |= key_row(ui, "macro", &k("macro"), w, 1.0, 8.0, 1.0),
+                    Some(VoiceKind::Wave) => st |= link_rows(ui, w, cogs_sim::MotionFrom::Probe(id), false),
                     Some(kind) => {
                         let defs: Vec<&str> = cogs_sim::voice::probe_defs(kind).iter().map(|d| d.0).collect();
                         ch |= choice_row_s(ui, "param", &k("param"), w, &defs);
+                        st |= link_rows(ui, w, cogs_sim::MotionFrom::Probe(id), true);
                     }
-                    None => {}
+                    None => st |= link_rows(ui, w, cogs_sim::MotionFrom::Probe(id), true),
                 }
                 ch |= key_row(ui, "low", &k("lo"), w, 0.0, 1.0, 0.01);
                 ch |= key_row(ui, "high", &k("hi"), w, 0.0, 1.0, 0.01);
@@ -1528,7 +1511,13 @@ pub(super) fn style(ui: &mut egui::Ui) {
     s.visuals = egui::Visuals::dark();
     s.visuals.panel_fill = BG;
     s.visuals.window_fill = PAD;
-    s.visuals.extreme_bg_color = Color32::BLACK;
+    s.visuals.extreme_bg_color = super::pen::DEEP;
+    s.visuals.faint_bg_color = super::pen::FAINT;
+    s.visuals.code_bg_color = super::pen::DEEP;
+    s.visuals.hyperlink_color = super::pen::SEL;
+    s.visuals.warn_fg_color = super::pen::ORANGE;
+    s.visuals.error_fg_color = super::pen::BAD;
+    s.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, super::pen::LINE);
     s.visuals.override_text_color = Some(FG);
     for wv in [&mut s.visuals.widgets.inactive, &mut s.visuals.widgets.hovered, &mut s.visuals.widgets.active, &mut s.visuals.widgets.noninteractive] {
         wv.corner_radius = egui::CornerRadius::same(8);
@@ -1600,6 +1589,65 @@ fn stepper(ui: &mut egui::Ui, v: f64, lo: f64, hi: f64) -> Option<f64> {
 }
 fn setting(x: f64) -> String {
     bezel::setting_text(x)
+}
+fn part_name(p: Part) -> String {
+    match p {
+        Part::Reader(i) => format!("reader {i}"),
+        Part::Pad(i) => format!("pad {i}"),
+        Part::Pit(i) => format!("sphere {i}"),
+        Part::String(i) => format!("string {i}"),
+    }
+}
+/// A cam's or probe's synth macros, a row each (its synth, which macro, a cross to take it away), then a picker to
+/// add one more, up to MACRO_LINKS. `skip_first`: its first link is a knob of another voice, shown elsewhere.
+fn link_rows(ui: &mut egui::Ui, w: &mut World, from: cogs_sim::MotionFrom, skip_first: bool) -> bool {
+    use cogs_sim::MotionFrom;
+    let links: Vec<(Part, i64)> = match from {
+        MotionFrom::Cam(id) => w.cams.iter().find(|m| m.id == id).map(|m| m.to.map(|r| (Part::Reader(r), m.macro_)).into_iter().chain(m.more.iter().map(|l| (l.to, l.macro_))).collect()),
+        MotionFrom::Probe(id) => w.probes.iter().find(|p| p.id == id).map(|p| p.to.map(|t| (t, p.macro_)).into_iter().chain(p.more.iter().map(|l| (l.to, l.macro_))).collect()),
+    }.unwrap_or_default();
+    // the first link's place in `links`, when it is shown: a cam with none has no first entry at all
+    let has_first = match from {
+        MotionFrom::Cam(id) => w.cams.iter().any(|m| m.id == id && m.to.is_some()),
+        MotionFrom::Probe(id) => w.probes.iter().any(|p| p.id == id && p.to.is_some()),
+    };
+    let mut ch = false;
+    let (mut drop, mut set) = (None, None);
+    for (k, &(to, mac)) in links.iter().enumerate() {
+        let i = if has_first { k } else { k + 1 };
+        if i == 0 && skip_first { continue }
+        ui.label(if k == 0 && !skip_first { "turns".to_string() } else { String::new() });
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(part_name(to)).color(HOT));
+            let b = |ui: &mut egui::Ui, s: &str, on: bool| ui.add_enabled(on, egui::Button::new(s).min_size(vec2(36.0, 32.0))).clicked();
+            if b(ui, "−", mac > 1) { set = Some((i, mac - 1)) }
+            ui.label(format!("macro {mac}"));
+            if b(ui, "+", mac < 8) { set = Some((i, mac + 1)) }
+            if b(ui, "×", true) { drop = Some(i) }
+        });
+        ui.end_row();
+    }
+    if let Some((i, m)) = set { w.set_link_macro(from, i, m); w.solve(); ch = true }
+    if let Some(i) = drop { w.remove_macro_link(from, i); ch = true }
+    let n = links.len();
+    ui.label(if n == 0 { "turns" } else { "" });
+    if n >= cogs_sim::MACRO_LINKS {
+        ui.label(RichText::new(format!("{} macros: the most", cogs_sim::MACRO_LINKS)).color(CAPTION));
+    } else {
+        let cams = matches!(from, MotionFrom::Cam(_));
+        let synths: Vec<Part> = w.readers.iter().filter(|o| o.voice.kind == VoiceKind::Wave).map(|o| Part::Reader(o.id))
+            .chain(w.pads.iter().filter(|o| !cams && o.voice.kind == VoiceKind::Wave).map(|o| Part::Pad(o.id)))
+            .chain(w.pits.iter().filter(|o| !cams && o.voice.kind == VoiceKind::Wave).map(|o| Part::Pit(o.id))).collect();
+        let mut add = None;
+        egui::ComboBox::from_id_salt(("link-add", format!("{from:?}"))).selected_text(if n == 0 { "nothing: add a synth" } else { "+ another macro" }).show_ui(ui, |ui| {
+            for t in synths {
+                if ui.selectable_label(false, part_name(t)).clicked() { add = Some(t) }
+            }
+        });
+        if let Some(t) = add { if w.add_macro_link(from, t).is_ok() { ch = true } }
+    }
+    ui.end_row();
+    ch
 }
 fn num_row(ui: &mut egui::Ui, label: &str, v: f64, lo: f64, hi: f64, step: f64) -> Option<f64> {
     ui.label(label);

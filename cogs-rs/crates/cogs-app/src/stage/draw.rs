@@ -285,9 +285,9 @@ pub fn draw_pit_sel(pen: &Pen, x: f64, y: f64, w: f64) {
 // ---------- the FX field ----------
 pub fn field_color(mode: &str) -> u32 {
     match mode {
-        "reverb" => 0xa98be0,
-        "dist" => 0xe66a4a,
-        _ => 0x5aa9e6,
+        "reverb" => 0xb48ead,
+        "dist" => 0xd08770,
+        _ => 0x81a1c1,
     }
 }
 pub fn field_glyph(pen: &Pen, mode: &str, x: f64, y: f64, s: f64, w: f32, col: Color32) {
@@ -407,7 +407,10 @@ pub fn draw_probe(pen: &Pen, w: &World, pr: &cogs_sim::Probe) {
     pen.circle(q.0, q.1, 3.2 * px, 1.0, SEL);
     pen.line(q.0 - 5.0 * px, q.1, q.0 + 5.0 * px, q.1, 1.0, SEL);
     pen.line(q.0, q.1 - 5.0 * px, q.0, q.1 + 5.0 * px, 1.0, SEL);
-    if let Some(t) = pr.to {
+    let mut drawn: Vec<Part> = Vec::new();
+    for t in pr.to.into_iter().chain(pr.more.iter().map(|l| l.to)) {
+        if drawn.contains(&t) { continue }
+        drawn.push(t);
         if let Some(b) = part_point(w, t) {
             pen.dashed(q.0, q.1, b.0, b.1, 1.0, alpha(SEL, 0.6), 2.0, 3.0, 0.0);
             pen.fill(b.0, b.1, 2.0 * px, SEL);
@@ -479,13 +482,17 @@ pub fn draw_world(pen: &Pen, w: &World, marks: &Marks, windows: impl Fn(u32, u32
         draw_cam(pen, m, &w.cogs[m.cog_ix], w.render_th(m.cog_ix));
     }
     for m in &w.cams {
-        let Some(ri) = m.to_ix else { continue };
-        let rd = &w.readers[ri];
         let a = cam_tip(m, &w.cogs[m.cog_ix], w.render_th(m.cog_ix));
-        let b = ((rd.x1 + rd.x2) / 2.0, (rd.y1 + rd.y2) / 2.0);
-        let live = rd.voice.kind == VoiceKind::Wave;
-        pen.dashed(a.0, a.1, b.0, b.1, 1.0, alpha(SEL, if live { 0.7 } else { 0.3 }), 2.0, 3.0, 0.0);
-        pen.fill(b.0, b.1, 2.0 * pen.px(), SEL);
+        // one line to each part it turns, however many of its macros
+        let mut drawn: Vec<Part> = Vec::new();
+        for t in m.to.map(Part::Reader).into_iter().chain(m.more.iter().map(|l| l.to)) {
+            if drawn.contains(&t) { continue }
+            drawn.push(t);
+            let Some(b) = part_point(w, t) else { continue };
+            let live = w.voice(t).map(|v| v.kind) == Some(VoiceKind::Wave);
+            pen.dashed(a.0, a.1, b.0, b.1, 1.0, alpha(SEL, if live { 0.7 } else { 0.3 }), 2.0, 3.0, 0.0);
+            pen.fill(b.0, b.1, 2.0 * pen.px(), SEL);
+        }
     }
     let big = w.s.zoom >= 1.2;
     for p in &w.pits {
@@ -564,10 +571,10 @@ pub fn draw_part_icon(pen: &Pen, kind: &str) {
             pen.dashed(q.0, q.1, 16.0, q.1, 1.0, SEL, 2.0, 3.0, 0.0);
         }
         "field" => {
-            pen.radial(0.0, 0.0, 22.0, &[(0.0, hex_a(0x5aa9e6, 0.45)), (0.5, hex_a(0x5aa9e6, 0.25)), (1.0, hex_a(0x5aa9e6, 0.0))]);
+            pen.radial(0.0, 0.0, 22.0, &[(0.0, hex_a(0x81a1c1, 0.45)), (0.5, hex_a(0x81a1c1, 0.25)), (1.0, hex_a(0x81a1c1, 0.0))]);
             let w = (1.2 * pen.s) as f32;
-            pen.circle(0.0, 0.0, 7.0, w, hex_a(0x5aa9e6, 1.0));
-            field_glyph(pen, "delay", 0.0, 0.0, 5.0, w, hex_a(0x5aa9e6, 1.0));
+            pen.circle(0.0, 0.0, 7.0, w, hex_a(0x81a1c1, 1.0));
+            field_glyph(pen, "delay", 0.0, 0.0, 5.0, w, hex_a(0x81a1c1, 1.0));
         }
         "pad" => draw_pad(pen, 0.0, 0.0, 11.0, VoiceKind::Kick, f64::NEG_INFINITY, 0.0, 500.0),
         "belt" => {

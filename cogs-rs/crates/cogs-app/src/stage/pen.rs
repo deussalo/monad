@@ -1,19 +1,33 @@
-//! The palette (base.css) and a pen: an egui painter with the stage's world→screen transform, drawing as the JS
+//! The palette, hardcoded to Nord (nordtheme.com), and a pen an egui painter with the stage's world→screen transform, drawing as the JS
 //! canvas does (widths in screen px, lengths in world units).
 
 use egui::{epaint::Mesh, pos2, Color32, Painter, Pos2, Shape, Stroke, Vec2};
 use std::f64::consts::TAU;
 
-pub const BG: Color32 = Color32::from_rgb(0x11, 0x11, 0x11);
-pub const FG: Color32 = Color32::from_rgb(0xdd, 0xdd, 0xdd);
-pub const DIM: Color32 = Color32::from_rgb(0x66, 0x66, 0x66);
-pub const FAINT: Color32 = Color32::from_rgb(0x2a, 0x2a, 0x2a);
-pub const LINE: Color32 = Color32::from_rgb(0x33, 0x33, 0x33);
-pub const HOT: Color32 = Color32::from_rgb(0xff, 0xcc, 0x44);
-pub const SEL: Color32 = Color32::from_rgb(0x44, 0xcc, 0xff);
-pub const BAD: Color32 = Color32::from_rgb(0xff, 0x44, 0x44);
-pub const READ: Color32 = Color32::from_rgb(0x66, 0xcc, 0xff);
-pub const PAD: Color32 = Color32::from_rgb(0x22, 0x22, 0x22);
+pub const BG: Color32 = Color32::from_rgb(0x2e, 0x34, 0x40); // nord0
+pub const FG: Color32 = Color32::from_rgb(0xd8, 0xde, 0xe9); // nord4
+pub const DIM: Color32 = Color32::from_rgb(0x61, 0x6e, 0x88); // nord3, brightened
+pub const FAINT: Color32 = Color32::from_rgb(0x36, 0x3c, 0x4a); // between nord0 and nord1
+pub const LINE: Color32 = Color32::from_rgb(0x43, 0x4c, 0x5e); // nord2
+pub const HOT: Color32 = Color32::from_rgb(0xeb, 0xcb, 0x8b); // nord13
+pub const SEL: Color32 = Color32::from_rgb(0x88, 0xc0, 0xd0); // nord8
+pub const BAD: Color32 = Color32::from_rgb(0xbf, 0x61, 0x6a); // nord11
+pub const READ: Color32 = Color32::from_rgb(0x8f, 0xbc, 0xbb); // nord7
+pub const PAD: Color32 = Color32::from_rgb(0x3b, 0x42, 0x52); // nord1
+/// The darkest well: text fields, graph backgrounds (nord0, darker).
+pub const DEEP: Color32 = Color32::from_rgb(0x24, 0x29, 0x33);
+/// Captions and quiet labels: between nord3 and nord4.
+pub const CAPTION: Color32 = Color32::from_rgb(0x8f, 0x9b, 0xb3);
+/// Raised and pressed fills: nord3 and a step above it.
+pub const RAISE: Color32 = Color32::from_rgb(0x4c, 0x56, 0x6a);
+pub const RAISE2: Color32 = Color32::from_rgb(0x5a, 0x65, 0x7c);
+/// Text on an accent fill: nord0.
+pub const INK: Color32 = BG;
+pub const ORANGE: Color32 = Color32::from_rgb(0xd0, 0x87, 0x70); // nord12
+pub const GREEN: Color32 = Color32::from_rgb(0xa3, 0xbe, 0x8c); // nord14
+pub const PURPLE: Color32 = Color32::from_rgb(0xb4, 0x8e, 0xad); // nord15
+pub const BLUE: Color32 = Color32::from_rgb(0x81, 0xa1, 0xc1); // nord9
+pub const DEEPBLUE: Color32 = Color32::from_rgb(0x5e, 0x81, 0xac); // nord10
 
 /// A colour at alpha a (premultiplied, as egui keeps them).
 #[inline]

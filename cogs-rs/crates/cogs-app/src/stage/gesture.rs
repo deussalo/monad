@@ -1677,14 +1677,21 @@ impl Stage {
                 }
             }
         }
-        let ok = match (m, best) {
-            (Sel::Cam(c), Some((_, Part::Reader(r)))) => {
-                let ok = w.link_cam(c, r);
-                if !ok {
-                    self.say("link: that reader is not a synth".into(), false);
-                }
-                ok
+        // a synth takes one more macro link (a cam or probe turns up to 64); a probe on any other voice drives a knob
+        let mut add = |w: &mut World, from: cogs_sim::MotionFrom, o: Part| match w.add_macro_link(from, o) {
+            Ok(slot) => {
+                let n = match from {
+                    cogs_sim::MotionFrom::Cam(id) => w.cams.iter().find(|m| m.id == id).map_or(0, |m| m.to.is_some() as usize + m.more.len()),
+                    cogs_sim::MotionFrom::Probe(id) => w.probes.iter().find(|p| p.id == id).map_or(0, |p| p.to.is_some() as usize + p.more.len()),
+                };
+                self.say(format!("link: macro {slot}{}", if n > 1 { format!(" · {n} macros") } else { String::new() }), false);
+                true
             }
+            Err(why) => { self.say(format!("link: {why}"), false); false }
+        };
+        let ok = match (m, best) {
+            (Sel::Cam(c), Some((_, o @ Part::Reader(_)))) => add(w, cogs_sim::MotionFrom::Cam(c), o),
+            (Sel::Probe(pr), Some((_, o))) if w.voice(o).map(|v| v.kind) == Some(cogs_sim::VoiceKind::Wave) => add(w, cogs_sim::MotionFrom::Probe(pr), o),
             (Sel::Probe(pr), Some((_, o))) => w.link_probe(pr, o),
             _ => false,
         };

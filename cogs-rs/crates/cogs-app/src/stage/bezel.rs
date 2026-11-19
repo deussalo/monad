@@ -987,7 +987,7 @@ impl Stage {
                     _ => (sec.label.clone(), String::new()),
                 };
                 let size = if label.chars().count() > 9 { 10.0 } else { 11.0 };
-                p.text(c - vec2(0.0, 7.0), Align2::CENTER_CENTER, label, FontId::proportional(size), alpha(Color32::from_gray(0x9a), ea));
+                p.text(c - vec2(0.0, 7.0), Align2::CENTER_CENTER, label, FontId::proportional(size), alpha(super::pen::CAPTION, ea));
                 let n = value.chars().count();
                 let value: String = if n > 10 { value.chars().take(9).collect::<String>() + "…" } else { value };
                 p.text(c + vec2(0.0, 7.0), Align2::CENTER_CENTER, value, FontId::proportional(if n > 7 { 11.5 } else { 13.0 }), alpha(if active { HOT } else { FG }, ea));

@@ -404,6 +404,8 @@ pub struct Cam {
     pub to: Option<u32>,
     /// 1-based macro slot.
     pub macro_: i64,
+    /// The macros it turns beside its first (`to`, `macro_`): up to MACRO_LINKS in all.
+    pub more: Vec<MacroLink>,
     pub lo: f64,
     pub hi: f64,
     /// Bumped when its profile changes.
@@ -477,6 +479,15 @@ impl Axis {
         }
     }
 }
+/// How many macros one cam or probe may turn, its first link included.
+pub const MACRO_LINKS: usize = 64;
+/// One more macro a cam or probe turns: a synth part and its 1-based macro slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MacroLink {
+    pub to: Part,
+    pub macro_: i64,
+}
+
 /// A voiced part: what a probe drives, and which voice an event plays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Part {
@@ -504,6 +515,8 @@ pub struct Probe {
     pub axis: Axis,
     pub to: Option<Part>,
     pub macro_: i64,
+    /// The synth macros it turns beside its first (`to`, `macro_`): up to MACRO_LINKS in all.
+    pub more: Vec<MacroLink>,
     pub param: Option<String>,
     pub lo: f64,
     pub hi: f64,

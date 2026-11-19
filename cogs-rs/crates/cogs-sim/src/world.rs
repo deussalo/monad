@@ -324,6 +324,7 @@ impl World {
                 _ => crate::motion::cam_shape(if crate::motion::shape_known(&o.shape) { &o.shape } else { "sine" }),
             };
             o.macro_ = clamp(to_int32(js_num(m.get("macro"))) as f64, 1.0, WAVE_MACROS as f64) as i64;
+            o.more = crate::probe::links_in(m.get("more"));
             let to = js_num(m.get("to"));
             o.to = readers.iter().find(|r| r.id as f64 == to).map(|r| r.id);
             cams.push(o);
@@ -499,7 +500,7 @@ impl World {
         let strings: Vec<Value> = self.strings.iter().map(|s| json!({"id":s.id,"x1":num(s.x1),"y1":num(s.y1),"x2":num(s.x2),"y2":num(s.y2),"kind":s.kind,
             "f200":num(s.f200),"quant":s.quant,"decay":num(s.decay),"damp":num(s.damp),"hard":num(s.hard),"level":num(s.level),"velSense":num(s.vel_sense)})).collect();
         let cams: Vec<Value> = self.cams.iter().map(|m| json!({"id":m.id,"cog":m.cog,"ang":num(m.ang),"phase":num(m.phase),"shape":m.shape,
-            "prof":m.prof.iter().map(|x| num(*x)).collect::<Vec<_>>(),"to":m.to,"macro":m.macro_,"lo":num(m.lo),"hi":num(m.hi)})).collect();
+            "prof":m.prof.iter().map(|x| num(*x)).collect::<Vec<_>>(),"to":m.to,"macro":m.macro_,"more":crate::probe::links_out(&m.more),"lo":num(m.lo),"hi":num(m.hi)})).collect();
         let pits: Vec<Value> = self.pits.iter().map(crate::pit::pit_out).collect();
         let probes: Vec<Value> = self.probes.iter().filter(|p| self.probe_alive(p)).map(|p| crate::probe::probe_out(p)).collect();
         let fields: Vec<Value> = self.fields.iter().map(crate::field::field_out).collect();
@@ -589,6 +590,22 @@ impl World {
             }
         }
         self.probes = probes;
+        // further macro links to parts that have gone come loose
+        let gone = |w: &World, l: &MacroLink| !w.part_exists(l.to);
+        for k in 0..self.cams.len() {
+            if self.cams[k].more.iter().any(|l| gone(self, l)) {
+                let mut more = std::mem::take(&mut self.cams[k].more);
+                more.retain(|l| !gone(self, l));
+                self.cams[k].more = more;
+            }
+        }
+        for k in 0..self.probes.len() {
+            if self.probes[k].more.iter().any(|l| gone(self, l)) {
+                let mut more = std::mem::take(&mut self.probes[k].more);
+                more.retain(|l| !gone(self, l));
+                self.probes[k].more = more;
+            }
+        }
     }
 }
 

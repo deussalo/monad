@@ -20,16 +20,16 @@ use std::path::PathBuf;
 const TABS: [&str; 9] = ["MAIN", "A", "B", "C", "VOICE", "MOD", "FX", "MATRIX", "PATCH"];
 const QUICK: [&str; 6] = ["osc1.cut", "osc1.res", "osc1.a", "osc1.r", "osc1.detune", "vol"];
 const DIAL_MAX: usize = 8;
-const HOT: Color32 = Color32::from_rgb(0xff, 0x9a, 0x3c);
-const SEL: Color32 = Color32::from_rgb(0x5a, 0xa8, 0xff);
-const LINE: Color32 = Color32::from_rgb(0x44, 0x48, 0x50);
-const FG: Color32 = Color32::from_rgb(0xe8, 0xe8, 0xe8);
-const DIM: Color32 = Color32::from_rgb(0x90, 0x94, 0x9a);
-const BG: Color32 = Color32::from_rgb(0x16, 0x17, 0x1a);
-const CARD: Color32 = Color32::from_rgb(0x20, 0x22, 0x26);
-const WELL: Color32 = Color32::from_rgb(0x2a, 0x2c, 0x32);
-const ENVC: Color32 = Color32::from_rgb(0x6c, 0xd0, 0x8a);
-const ODD: Color32 = Color32::from_rgb(0xc0, 0x8c, 0xff);
+const HOT: Color32 = crate::stage::pen::ORANGE;
+const SEL: Color32 = crate::stage::pen::BLUE;
+const LINE: Color32 = crate::stage::pen::RAISE;
+const FG: Color32 = Color32::from_rgb(0xe5, 0xe9, 0xf0); // nord5
+const DIM: Color32 = crate::stage::pen::CAPTION;
+const BG: Color32 = crate::stage::pen::BG;
+const CARD: Color32 = crate::stage::pen::PAD;
+const WELL: Color32 = crate::stage::pen::LINE;
+const ENVC: Color32 = crate::stage::pen::GREEN;
+const ODD: Color32 = crate::stage::pen::PURPLE;
 const TAB_NAMES: [&str; 9] = ["Main", "A", "B", "C", "Global", "Mod", "FX", "Matrix", "Patch"];
 /// A source's colour by kind: envelopes green, LFOs blue, macros orange, the rest violet.
 fn src_col(s: u8) -> Color32 {
@@ -243,15 +243,15 @@ impl WaveEditor {
         let now = ctx.input(|i| i.time);
         let scr = ctx.content_rect();
         let (wd, ht) = ((scr.width() - 8.).min(560.), (scr.height() * 0.62).max(280.).min(scr.height() - self.safe_bottom - 12.));
-        let frame = egui::Frame::new().fill(BG).corner_radius(16.).inner_margin(10.).stroke(Stroke::new(1., Color32::from_gray(48)));
+        let frame = egui::Frame::new().fill(BG).corner_radius(16.).inner_margin(10.).stroke(Stroke::new(1., crate::stage::pen::RAISE));
         egui::Window::new("wave synth").id(egui::Id::new("wave-editor")).title_bar(false).resizable(false).collapsible(false).frame(frame)
             .anchor(Align2::CENTER_BOTTOM, [0., -4. - self.safe_bottom]).fixed_size([wd, ht]).show(ctx, |ui| {
                 let v = ui.visuals_mut();
-                v.selection.bg_fill = HOT; v.selection.stroke = Stroke::new(1., Color32::BLACK);
+                v.selection.bg_fill = HOT; v.selection.stroke = Stroke::new(1., crate::stage::pen::INK);
                 v.widgets.inactive.weak_bg_fill = WELL; v.widgets.inactive.bg_fill = WELL;
-                v.widgets.hovered.weak_bg_fill = Color32::from_gray(58); v.widgets.active.weak_bg_fill = Color32::from_gray(70);
+                v.widgets.hovered.weak_bg_fill = crate::stage::pen::RAISE; v.widgets.active.weak_bg_fill = crate::stage::pen::RAISE2;
                 for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] { w.corner_radius = 8.into(); w.bg_stroke = Stroke::NONE; }
-                v.extreme_bg_color = Color32::from_rgb(0x10, 0x11, 0x13);
+                v.extreme_bg_color = crate::stage::pen::DEEP;
                 ui.spacing_mut().item_spacing = vec2(6., 8.);
                 ui.spacing_mut().button_padding = vec2(10., 6.);
                 self.top(ui, now, &mut out);
@@ -289,7 +289,7 @@ impl WaveEditor {
             let w = (ui.available_width() - 36. - 6. - 60. - 6. - 36. - 12.).max(60.);
             ui.add_sized([w, 34.], egui::Label::new(egui::RichText::new(name).size(16.).color(if said.is_some() { SEL } else { FG }).strong()).truncate());
             if ibtn(ui, Ico::Next, vec2(36., 34.), true, false).clicked() { self.browse(1); out.push(EditorOut::Audition(self.part.id())) }
-            if ui.add(egui::Button::new(egui::RichText::new("play").color(Color32::BLACK).strong()).fill(HOT).min_size(vec2(60., 34.))).clicked() { out.push(EditorOut::Audition(self.part.id())) }
+            if ui.add(egui::Button::new(egui::RichText::new("play").color(crate::stage::pen::INK).strong()).fill(HOT).min_size(vec2(60., 34.))).clicked() { out.push(EditorOut::Audition(self.part.id())) }
             if ibtn(ui, Ico::Close, vec2(36., 34.), true, false).clicked() { out.push(EditorOut::Close) }
         });
     }
@@ -303,7 +303,7 @@ impl WaveEditor {
             ui.spacing_mut().button_padding = vec2(2., 4.);
             for (i, t) in TAB_NAMES.iter().enumerate() {
                 let on = i == self.tab;
-                let txt = egui::RichText::new(*t).size(12.5).color(if on { Color32::BLACK } else { FG });
+                let txt = egui::RichText::new(*t).size(12.5).color(if on { crate::stage::pen::INK } else { FG });
                 if ui.add_sized([w, 32.], egui::Button::new(txt).selected(on)).clicked() { self.tab = i; self.drag = None }
             }
         });
@@ -341,7 +341,7 @@ impl WaveEditor {
         let (rect, r) = ui.allocate_exact_size(vec2(tw + 18., 30.), Sense::click());
         let p = ui.painter();
         if on { p.rect_filled(rect, 15., col); } else { p.rect_stroke(rect, 15., Stroke::new(1., col.gamma_multiply(0.7)), egui::StrokeKind::Inside); }
-        p.text(rect.center(), Align2::CENTER_CENTER, text, font, if on { Color32::BLACK } else { col });
+        p.text(rect.center(), Align2::CENTER_CENTER, text, font, if on { crate::stage::pen::INK } else { col });
         if used && !on { p.circle_filled(pos2(rect.right() - 6., rect.top() + 6.), 2.5, col); }
         r.clicked()
     }
@@ -451,7 +451,7 @@ impl WaveEditor {
         let ring = match self.arm { Some(s) => src_col(s), None if self.pin => FG, None => LINE };
         p.circle_filled(c, 17., WELL);
         if self.pin || self.arm.is_some() { p.circle_stroke(c, 26., Stroke::new(1., ring.gamma_multiply(0.35))); }
-        if resp.is_pointer_button_down_on() { p.circle_filled(c, 17., Color32::from_gray(52)); }
+        if resp.is_pointer_button_down_on() { p.circle_filled(c, 17., crate::stage::pen::RAISE); }
         p.add(Shape::line(arc(c, 22., a0, a0 + sw), Stroke::new(4., LINE)));
         let z = if d.min < 0. && d.max > 0. { wave_norm(d, 0.) as f32 } else { 0. };
         p.add(Shape::line(arc(c, 22., a0 + sw * z.min(n), a0 + sw * z.max(n) + 0.001), Stroke::new(4., HOT)));
@@ -519,7 +519,7 @@ impl WaveEditor {
         let tr = Rect::from_min_size(pos2(rect.left(), rect.center().y - 10.), vec2(36., 20.));
         let p = ui.painter();
         p.rect_filled(tr, 10., if *v { HOT } else { WELL });
-        p.circle_filled(pos2(if *v { tr.right() - 10. } else { tr.left() + 10. }, tr.center().y), 7., if *v { Color32::BLACK } else { DIM });
+        p.circle_filled(pos2(if *v { tr.right() - 10. } else { tr.left() + 10. }, tr.center().y), 7., if *v { crate::stage::pen::INK } else { DIM });
         p.text(pos2(tr.right() + 8., rect.center().y), Align2::LEFT_CENTER, label, font, if *v { FG } else { DIM });
         if r.clicked() { *v = !*v; true } else { false }
     }
@@ -625,7 +625,7 @@ impl WaveEditor {
         let p = ui.painter();
         for k in 0..WAVE_HARMS {
             let x = rect.left() + k as f32 * bw;
-            p.rect_filled(Rect::from_min_max(pos2(x + 1., rect.top()), pos2(x + bw - 1., rect.bottom())), 0., Color32::from_gray(34));
+            p.rect_filled(Rect::from_min_max(pos2(x + 1., rect.top()), pos2(x + bw - 1., rect.bottom())), 0., CARD);
             let h = self.p.osc[i].harm[k] as f32 * (rect.height() - 4.);
             p.rect_filled(Rect::from_min_max(pos2(x + 1., rect.bottom() - h), pos2(x + bw - 1., rect.bottom())), 0., HOT);
         }
@@ -689,7 +689,7 @@ impl WaveEditor {
         }
         let v = self.p.values;
         let p = ui.painter();
-        p.rect_filled(rect, 8., Color32::from_rgb(0x18, 0x1a, 0x1e));
+        p.rect_filled(rect, 8., crate::stage::pen::DEEP);
         for f in [100., 1000., 10000.] { let x = xf(f); p.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1., LINE.gamma_multiply(0.5))); }
         p.line_segment([pos2(rect.left(), yd(0.)), pos2(rect.right(), yd(0.))], Stroke::new(1., LINE));
         let pts: Vec<Pos2> = (0..=120).map(|k| { let x = rect.left() + rect.width() * k as f32 / 120.; pos2(x, yd(cogs_dsp::wave::eq_db(&v, fx(x), 48000.) as f32)) }).collect();
@@ -699,7 +699,7 @@ impl WaveEditor {
             let held = self.eq_grab == Some(b);
             p.circle_filled(c, if held { 12. } else { 9. }, if held { HOT } else { WELL });
             p.circle_stroke(c, if held { 12. } else { 9. }, Stroke::new(1.5, HOT));
-            p.text(c, Align2::CENTER_CENTER, BANDS[b].2, FontId::proportional(10.), if held { Color32::BLACK } else { FG });
+            p.text(c, Align2::CENTER_CENTER, BANDS[b].2, FontId::proportional(10.), if held { crate::stage::pen::INK } else { FG });
         }
         self.knobs(ui, &["low", "lowf", "high", "highf", "m1", "m1f", "m1q", "m2", "m2f", "m2q"].map(|k| format!("eq.{k}")));
     }

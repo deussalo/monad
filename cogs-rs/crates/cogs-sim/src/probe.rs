@@ -11,12 +11,39 @@ use serde_json::{json, Map, Value};
 
 pub fn new_probe(id: u32) -> Probe {
     Probe {
-        id, host: None, on: 0, ball: 0, r: 0.0, a: 0.0, axis: Axis::Y, to: None, macro_: 1, param: None, lo: 0.0, hi: 1.0, on_ix: None,
+        id, host: None, on: 0, ball: 0, r: 0.0, a: 0.0, axis: Axis::Y, to: None, macro_: 1, more: Vec::new(), param: None, lo: 0.0, hi: 1.0, on_ix: None,
         tab: Vec::new(), key: [f64::NAN; 13], tbox: [0.0; 4],
     }
 }
 
-fn target_key(p: Part) -> String {
+/// A cam's or probe's further links, as saved: [{"to":"reader:3","macro":2}, ...].
+pub fn links_out(more: &[MacroLink]) -> Value {
+    Value::Array(more.iter().map(|l| json!({"to":target_key(l.to),"macro":l.macro_})).collect())
+}
+/// Read back what `links_out` wrote; parts that are gone are dropped later, by `relink`.
+pub fn links_in(v: Option<&Value>) -> Vec<MacroLink> {
+    let mut out = Vec::new();
+    for l in v.and_then(|v| v.as_array()).map(|a| a.as_slice()).unwrap_or(&[]) {
+        let Some(to) = l.get("to").and_then(|t| t.as_str()).and_then(parse_key) else { continue };
+        let m = to_int32(js_num(l.get("macro")));
+        let l = MacroLink { to, macro_: clamp(if m == 0 { 1.0 } else { m as f64 }, 1.0, WAVE_MACROS as f64) as i64 };
+        if out.len() < MACRO_LINKS - 1 && !out.contains(&l) {
+            out.push(l);
+        }
+    }
+    out
+}
+fn parse_key(s: &str) -> Option<Part> {
+    let (k, i) = s.split_once(':')?;
+    let i: u32 = i.trim().parse().ok()?;
+    match k {
+        "reader" => Some(Part::Reader(i)),
+        "pad" => Some(Part::Pad(i)),
+        "pit" => Some(Part::Pit(i)),
+        _ => None,
+    }
+}
+pub fn target_key(p: Part) -> String {
     match p {
         Part::Reader(i) => format!("reader:{i}"),
         Part::Pad(i) => format!("pad:{i}"),
@@ -26,7 +53,7 @@ fn target_key(p: Part) -> String {
 }
 pub fn probe_out(p: &Probe) -> Value {
     json!({"id":p.id,"host":p.host.map(|h| h.name()),"on":p.on,"ball":p.ball,"r":num(p.r),"a":num(p.a),"axis":p.axis.name(),
-        "to":p.to.map(target_key),"macro":p.macro_,"param":p.param,"lo":num(p.lo),"hi":num(p.hi)})
+        "to":p.to.map(target_key),"macro":p.macro_,"more":links_out(&p.more),"param":p.param,"lo":num(p.lo),"hi":num(p.hi)})
 }
 /// probesIn: one whose host is missing is dropped, a link to a missing part comes loose.
 pub fn probes_in(j: &Map<String, Value>, next: &World) -> Vec<Probe> {
@@ -88,6 +115,7 @@ pub fn probes_in(j: &Map<String, Value>, next: &World) -> Vec<Probe> {
         pr.to = to;
         let m = to_int32(js_num(p.get("macro")));
         pr.macro_ = clamp(if m == 0 { 1.0 } else { m as f64 }, 1.0, WAVE_MACROS as f64) as i64;
+        pr.more = links_in(p.get("more"));
         pr.param = p.get("param").and_then(|x| x.as_str()).map(|s| s.to_string());
         pr.lo = clamp(or0("lo"), 0.0, 1.0);
         pr.hi = clamp(if matches!(p.get("hi"), None | Some(Value::Null)) { 1.0 } else { js_num(p.get("hi")) }, 0.0, 1.0);
@@ -290,14 +318,17 @@ impl World {
         }
     }
 
-    /// probeProgram: what a probe on a synth part sends its macro.
+    /// probeProgram: what a probe on a synth part sends its (first) macro.
     pub fn probe_program<'a>(&'a self, pr: &'a Probe) -> Option<Motion<'a>> {
-        let to = pr.to?;
+        self.probe_program_to(pr, pr.to?, pr.macro_)
+    }
+    /// What a probe sends one macro (1-based) of a synth part it is linked to.
+    pub fn probe_program_to<'a>(&'a self, pr: &'a Probe, to: Part, mac: i64) -> Option<Motion<'a>> {
         let v = self.voice(to)?;
         if v.kind != VoiceKind::Wave || !self.probe_alive(pr) {
             return None;
         }
-        let slot = (pr.macro_ - 1).clamp(0, 7) as u8;
+        let slot = (mac - 1).clamp(0, 7) as u8;
         if pr.host == Some(Host::Ball) {
             let y = to_fixed(self.probe_now(pr), 3);
             return Some(Motion {

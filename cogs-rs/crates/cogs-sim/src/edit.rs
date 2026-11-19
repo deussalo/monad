@@ -255,21 +255,29 @@ impl World {
     }
 
     /// The macro slot (1-based) a cam or probe linking to voice v takes: its first free one (no routes, knob at 0),
-    /// else the first no other cam or probe uses.
+    /// else the first no other cam or probe link uses.
     fn free_macro(&self, target: Part, except: crate::motion::MotionFrom) -> i64 {
+        self.pick_macro(target, Some(except)).unwrap_or(1)
+    }
+    /// As free_macro, counting every link to target but `skip`'s first one (the link being replaced); None when all
+    /// eight are taken.
+    fn pick_macro(&self, target: Part, skip: Option<crate::motion::MotionFrom>) -> Option<i64> {
         use crate::motion::MotionFrom;
         let mut used = [false; 9];
+        let mut mark = |m: i64| used[m.clamp(1, 8) as usize] = true;
         for m in &self.cams {
-            if m.to_ix.map(|i| Part::Reader(self.readers[i].id)) == Some(target) && except != MotionFrom::Cam(m.id) {
-                used[m.macro_.clamp(1, 8) as usize] = true;
+            if m.to.map(Part::Reader) == Some(target) && skip != Some(MotionFrom::Cam(m.id)) {
+                mark(m.macro_);
             }
+            for l in m.more.iter().filter(|l| l.to == target) { mark(l.macro_); }
         }
         for p in &self.probes {
-            if p.to == Some(target) && except != MotionFrom::Probe(p.id) {
-                used[p.macro_.clamp(1, 8) as usize] = true;
+            if p.to == Some(target) && skip != Some(MotionFrom::Probe(p.id)) {
+                mark(p.macro_);
             }
+            for l in p.more.iter().filter(|l| l.to == target) { mark(l.macro_); }
         }
-        let v = self.voice(target).unwrap();
+        let v = self.voice(target)?;
         let mac = v.raw.get("macro").and_then(|m| m.as_array());
         let mods = v.raw.get("mods").and_then(|m| m.as_array());
         for i in 0..8usize {
@@ -279,10 +287,99 @@ impl World {
                 r.get("src").and_then(|s| s.as_str()) == Some(&name) || r.get("aux").and_then(|s| s.as_str()) == Some(&name)
             }));
             if !used[i + 1] && !knob && !routed {
-                return i as i64 + 1;
+                return Some(i as i64 + 1);
             }
         }
-        (1..=8).find(|&i| !used[i as usize]).unwrap_or(1)
+        (1..=8).find(|&i| !used[i as usize])
+    }
+    /// Link a cam or probe to one more synth macro, on target's first free one: its first link if it has none.
+    /// Ok(the 1-based slot), or Err(why not).
+    pub fn add_macro_link(&mut self, from: crate::motion::MotionFrom, target: Part) -> Result<i64, &'static str> {
+        use crate::motion::MotionFrom;
+        if self.voice(target).map(|v| v.kind) != Some(VoiceKind::Wave) {
+            return Err("that part is not a synth");
+        }
+        let (first, n) = match from {
+            MotionFrom::Cam(id) => match self.cams.iter().find(|m| m.id == id) {
+                Some(m) => (m.to.map(Part::Reader), m.more.len()),
+                None => return Err("no such cam"),
+            },
+            MotionFrom::Probe(id) => match self.probes.iter().find(|p| p.id == id) {
+                Some(p) => (p.to.filter(|&t| self.voice(t).map(|v| v.kind) == Some(VoiceKind::Wave)), p.more.len()),
+                None => return Err("no such probe"),
+            },
+        };
+        if first.is_none() {
+            let ok = match (from, target) {
+                (MotionFrom::Cam(id), Part::Reader(r)) => self.link_cam(id, r),
+                (MotionFrom::Probe(id), t) => self.link_probe(id, t),
+                _ => false,
+            };
+            if !ok { return Err("that part can't take this link") }
+            return Ok(match from {
+                MotionFrom::Cam(id) => self.cams.iter().find(|m| m.id == id).map_or(1, |m| m.macro_),
+                MotionFrom::Probe(id) => self.probes.iter().find(|p| p.id == id).map_or(1, |p| p.macro_),
+            });
+        }
+        if n + 1 >= MACRO_LINKS {
+            return Err("it already turns 64 macros");
+        }
+        let Some(slot) = self.pick_macro(target, None) else { return Err("all 8 macros of that synth are taken") };
+        let l = MacroLink { to: target, macro_: slot };
+        match from {
+            MotionFrom::Cam(id) => if let Some(m) = self.cams.iter_mut().find(|m| m.id == id) { m.more.push(l) },
+            MotionFrom::Probe(id) => if let Some(p) = self.probes.iter_mut().find(|p| p.id == id) { p.more.push(l) },
+        }
+        self.solve();
+        Ok(slot)
+    }
+    /// Take away link i of a cam or probe (0: its first; the next becomes first where it can).
+    pub fn remove_macro_link(&mut self, from: crate::motion::MotionFrom, i: usize) {
+        use crate::motion::MotionFrom;
+        match from {
+            MotionFrom::Cam(id) => {
+                let Some(m) = self.cams.iter_mut().find(|m| m.id == id) else { return };
+                if i == 0 {
+                    m.to = None;
+                    m.to_ix = None;
+                    if let Some(k) = m.more.iter().position(|l| matches!(l.to, Part::Reader(_))) {
+                        let l = m.more.remove(k);
+                        m.to = Some(l.to.id());
+                        m.macro_ = l.macro_;
+                    }
+                } else if i - 1 < m.more.len() {
+                    m.more.remove(i - 1);
+                }
+            }
+            MotionFrom::Probe(id) => {
+                let Some(p) = self.probes.iter_mut().find(|p| p.id == id) else { return };
+                if i == 0 {
+                    p.to = None;
+                    if !p.more.is_empty() {
+                        let l = p.more.remove(0);
+                        p.to = Some(l.to);
+                        p.macro_ = l.macro_;
+                    }
+                } else if i - 1 < p.more.len() {
+                    p.more.remove(i - 1);
+                }
+            }
+        }
+        self.relink();
+        self.solve();
+    }
+    /// Set the 1-based macro slot of link i (0: the first).
+    pub fn set_link_macro(&mut self, from: crate::motion::MotionFrom, i: usize, slot: i64) {
+        use crate::motion::MotionFrom;
+        let slot = slot.clamp(1, WAVE_MACROS as i64);
+        match from {
+            MotionFrom::Cam(id) => if let Some(m) = self.cams.iter_mut().find(|m| m.id == id) {
+                if i == 0 { m.macro_ = slot } else if let Some(l) = m.more.get_mut(i - 1) { l.macro_ = slot }
+            },
+            MotionFrom::Probe(id) => if let Some(p) = self.probes.iter_mut().find(|p| p.id == id) {
+                if i == 0 { p.macro_ = slot } else if let Some(l) = p.more.get_mut(i - 1) { l.macro_ = slot }
+            },
+        }
     }
     /// linkCam: link a cam to a synth reader, on its first free macro. False if the reader is not a synth.
     pub fn link_cam(&mut self, cam: u32, reader: u32) -> bool {

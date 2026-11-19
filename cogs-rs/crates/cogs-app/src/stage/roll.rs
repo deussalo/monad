@@ -911,7 +911,7 @@ impl Roll {
             let px = ox + Roll::roll_u(c, d.a) * gw + 1.5;
             let on = self.sel.contains(&i);
             let wd = (d.len * g.cw - 3.0).max(2.0);
-            let base_col = if on { SEL } else { lerp_col(Color32::from_gray(0x55), FG, d.v as f32) };
+            let base_col = if on { SEL } else { lerp_col(super::pen::RAISE, FG, d.v as f32) };
             let col = pen.hot(d.flash, base_col);
             let fill = if d.p < 1.0 { alpha(col, (0.25 + 0.5 * d.p) as f32) } else { col };
             let right = ox + gw;
@@ -976,7 +976,7 @@ impl Roll {
             let y = oy + row as f64 * rh;
             let black = [1, 3, 6, 8, 10].contains(&note.rem_euclid(12));
             kp.rect_filled(Rect::from_min_size(xy(r.min.x as f64, y), vec2(LABEL as f32, rh as f32)), 0.0, if black { BG } else { PAD });
-            kp.text(xy(r.min.x as f64 + 5.0, y + rh / 2.0), Align2::LEFT_CENTER, note_name(note), FontId::proportional(12.0), if black { Color32::from_gray(0x9a) } else { FG });
+            kp.text(xy(r.min.x as f64 + 5.0, y + rh / 2.0), Align2::LEFT_CENTER, note_name(note), FontId::proportional(12.0), if black { super::pen::CAPTION } else { FG });
             kp.rect_filled(Rect::from_min_size(xy(r.min.x as f64, y + rh - 1.0), vec2(LABEL as f32, 1.0)), 0.0, FAINT);
         }
         let _ = now;
@@ -1000,13 +1000,13 @@ impl Roll {
         let ly = r.max.y as f64 - LEGEND_H / 2.0;
         let lx = r.min.x as f64 + 8.0;
         let font = FontId::proportional(11.0);
-        let cap = Color32::from_gray(0x9a);
+        let cap = super::pen::CAPTION;
         let mut x = lx;
         for (sw, word) in [(0u8, "velocity: brightness"), (1, "chance: dashed"), (2, "sounding: gold")] {
             let s = Rect::from_center_size(xy(x + 6.0, ly), vec2(12.0, 9.0));
             match sw {
                 0 => {
-                    base.rect_filled(Rect::from_min_max(s.min, pos2(s.center().x, s.max.y)), 2.0, Color32::from_gray(0x66));
+                    base.rect_filled(Rect::from_min_max(s.min, pos2(s.center().x, s.max.y)), 2.0, super::pen::DIM);
                     base.rect_filled(Rect::from_min_max(pos2(s.center().x, s.min.y), s.max), 2.0, FG);
                 }
                 1 => {
